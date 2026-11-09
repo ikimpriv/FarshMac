@@ -70,12 +70,6 @@ go run ./cmd/farshmac -left "$HOME" -right /tmp
 
 Local builds automatically reuse the `FarshMac Local Development` code-signing identity if installed; otherwise they use ad-hoc signing. Run `./scripts/setup-local-signing.sh` once to create that identity in login Keychain without an Apple Developer account. macOS may request Keychain approval. This provides stable local signing, but the app is **not notarized**. For local permission behavior, signing, and release packaging, see [Publishing](docs/PUBLISHING.md). Optional Full Disk Access must be enabled by the user in macOS System Settings; the app cannot grant it to itself.
 
-## Upgrading from Far Go
-
-The application is now **FarshMac**, with executable `farshmac`, Go module `farshmac`, and bundle identifier `local.farshmac.app`. Settings, connection profiles, folder shortcuts, and window sessions fall back to the previous `~/Library/Application Support/Far Go` files when the corresponding FarshMac file does not exist. New saves go to `~/Library/Application Support/FarshMac`; old files are left untouched.
-
-Because the application identity changed, macOS may require granting Full Disk Access to FarshMac again. Build/signing environment variables now use the `FARSHMAC_` prefix.
-
 ## Keyboard essentials
 
 | Key | Action |

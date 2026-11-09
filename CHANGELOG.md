@@ -13,7 +13,7 @@
 
 - Rename the application, executable, Go module, native bridge, build artifacts, and CI configuration to FarshMac.
 - Translate all project documentation to English, retaining historical version notes and limitations.
-- Read previous Far Go settings, connection profiles, and window sessions when no corresponding FarshMac configuration exists; preserve the original files.
+- Import settings, connection profiles, and window sessions from earlier development builds when no current configuration exists; preserve the original files.
 - Use the new `local.farshmac.app` bundle identifier and `FARSHMAC_` environment-variable prefix. macOS privacy permissions may need to be granted again.
 
 ## 0.18.7
