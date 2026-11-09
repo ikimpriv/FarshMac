@@ -1,6 +1,6 @@
 module farshmac
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.20.0
@@ -9,7 +9,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/pkg/sftp v1.13.12
 	golang.org/x/crypto v0.54.0
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.43.0
 )
 
 require (
