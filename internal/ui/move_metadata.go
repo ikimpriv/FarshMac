@@ -3,7 +3,6 @@ package ui
 import (
 	"farshmac/internal/fsops"
 	"fmt"
-	"path/filepath"
 )
 
 // Called by the transfer worker; only queued closures touch the UI.
@@ -13,11 +12,16 @@ func (a *App) moveMetadataQuestions(o *fsops.Operation) {
 
 func (a *App) metadataQuestions(o *fsops.Operation, move bool) {
 	allowAll := false
+	skipAll := false
 	o.MetadataFailure = func(src, dst string, err error) error {
 		o.Questions.Lock()
 		defer o.Questions.Unlock()
 		if cancelled := o.Check(); cancelled != nil {
 			return cancelled
+		}
+		if skipAll {
+			o.SkipItem(src)
+			return fsops.ErrSkipped
 		}
 		if allowAll {
 			return nil
@@ -34,7 +38,8 @@ func (a *App) metadataQuestions(o *fsops.Operation, move bool) {
 			if move {
 				verb, question = "Move", "with changed metadata and remove the source?"
 			}
-			a.confirm("Cannot preserve metadata", fmt.Sprintf("%s %s %s %s", verb, tail(filepath.Base(src), 32), question, tail(err.Error(), 100)), []string{verb + " anyway", "For all", "Cancel"}, func(i int) { answer <- i })
+			a.confirm("Cannot preserve metadata", fmt.Sprintf("%s %s\n%s\nTo: %s\n\n%s", verb, question, src, dst, err.Error()), []string{verb + " anyway", "For all", "Retry", "Skip", "Skip all", "Cancel"}, func(i int) { answer <- i })
+			a.Form.OperationQuestion = true
 		}:
 		}
 		select {
@@ -44,6 +49,14 @@ func (a *App) metadataQuestions(o *fsops.Operation, move bool) {
 			if choice == 0 || choice == 1 {
 				allowAll = choice == 1
 				return o.Check()
+			}
+			if choice == 2 {
+				return fsops.ErrRetryMetadata
+			}
+			if choice == 3 || choice == 4 {
+				skipAll = choice == 4
+				o.SkipItem(src)
+				return fsops.ErrSkipped
 			}
 			return fsops.ErrCancelled
 		}

@@ -296,7 +296,8 @@ func TestCompletionQuotesAndDialogSelection(t *testing.T) {
 	a.Cols = 60
 	a.Rows = 15
 	a.confirm("Overwrite", "File exists", []string{"Overwrite", "All", "Skip", "Skip all", "Cancel"}, func(i int) { a.Status = string(rune('0' + i)) })
-	x, y, w, h := a.confirmationBounds()
+	x, _, w, h := a.confirmationBounds()
+	_, _, buttonsY, _ := a.confirmationLayout()
 	if h > 13 {
 		t.Fatal("confirmation too tall")
 	}
@@ -307,7 +308,7 @@ func TestCompletionQuotesAndDialogSelection(t *testing.T) {
 		}
 	}
 	last := layout[len(layout)-1]
-	a.formClick(Message{X: x + last.X, Y: y + 6 + last.Y})
+	a.formClick(Message{X: x + last.X, Y: buttonsY + last.Y})
 	if a.Status != "4" || a.Form != nil {
 		t.Fatal("wrapped Cancel button")
 	}

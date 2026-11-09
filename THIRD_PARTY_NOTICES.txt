@@ -139,7 +139,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-Far Manager icon (Far.ico, converted to FarshMac.icns; reference SVG)
+Far Manager icon (Far.ico, converted to FarshMac.icns; reference SVG),
+and file-operation dialog labels and interaction design adapted from
+far/copy.cpp, far/delete.cpp, and far/farlang.templ.m4
 https://github.com/FarGroup/FarManager/tree/b16f95d4d1986871b240e2dd319afc1ce3f396fb
 
 BSD 3-Clause License

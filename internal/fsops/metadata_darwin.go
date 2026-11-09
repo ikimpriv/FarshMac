@@ -55,6 +55,7 @@ static int preserve_metadata(const char *src, const char *dst, uintptr_t ctx, in
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime/cgo"
@@ -135,15 +136,21 @@ func (o *Operation) preserveMetadata(src, dst string) error {
 	if copyMetadata == nil {
 		copyMetadata = preserveMetadata
 	}
-	err := copyMetadata(src, dst, o)
-	if err == nil {
-		return nil
+	for {
+		err := copyMetadata(src, dst, o)
+		if err == nil {
+			return nil
+		}
+		if cancelled := o.Check(); cancelled != nil {
+			return cancelled
+		}
+		if o.MetadataFailure == nil {
+			return err
+		}
+		result := o.MetadataFailure(src, dst, err)
+		if errors.Is(result, ErrRetryMetadata) {
+			continue
+		}
+		return result
 	}
-	if cancelled := o.Check(); cancelled != nil {
-		return cancelled
-	}
-	if o.MetadataFailure != nil {
-		return o.MetadataFailure(src, dst, err)
-	}
-	return err
 }

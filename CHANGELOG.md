@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Adapt Far Manager file-operation dialogs: source/destination size and date, Overwrite / Skip / Rename / Append, Remember choice, and read-only confirmations.
+- Add Retry / Skip / Skip all / Cancel for transfer and deletion failures, including individual children of folders and archive-operation failures.
+- Add same-server FTP/SFTP move conflict handling and directory merging.
+- Stage append output before replacement; retry source deletion separately after a committed move.
+- Show full multiline errors with PageUp/PageDown scrolling and count skipped items.
+
+- Merge into the prefilled existing destination folder instead of accidentally nesting another folder during copy/move. An explicit trailing slash still selects a destination container.
+- Keep local file-operation errors visible in a confirmation dialog, including permission failures.
+- Cancel safely when a local overwrite has no conflict handler.
+- Add collision, partial-merge, permission-denial, and FTP/SFTP overwrite regression tests.
+
 ## 0.19.1 — First public preview
 
 - Publish the project as FarshMac, inspired by Far Manager, with documented installation, contribution, and security-reporting workflows.

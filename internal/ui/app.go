@@ -1009,12 +1009,20 @@ func (a *App) function(n int) {
 				return
 			}
 			path := expand(s, base)
-			if err := os.MkdirAll(path, 0755); err != nil {
-				a.error(err)
-				return
+			var create func()
+			create = func() {
+				if err := os.MkdirAll(path, 0755); err != nil {
+					a.confirm("Error", "Cannot create folder\n"+path+"\n\n"+err.Error(), []string{"Retry", "Cancel"}, func(i int) {
+						if i == 0 {
+							create()
+						}
+					})
+					return
+				}
+				a.refresh()
+				a.focusCreatedDirectory(index, path)
 			}
-			a.refresh()
-			a.focusCreatedDirectory(index, path)
+			create()
 		})
 
 	case 8:

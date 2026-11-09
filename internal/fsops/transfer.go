@@ -17,6 +17,13 @@ type Conflict func(src, dst string) int
 
 func Transfer(src, dst string, move bool, conflict Conflict, ops ...*Operation) error {
 	o := operation(ops)
+	label := "copy"
+	if move {
+		label = "move"
+	}
+	return IgnoreSkipped(o.Attempt(label, src, dst, func() error { return transfer(src, dst, move, conflict, o) }))
+}
+func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error {
 	if move {
 		if o == nil {
 			o = NewOperation("Move")
@@ -99,16 +106,25 @@ func Transfer(src, dst string, move bool, conflict Conflict, ops ...*Operation) 
 				return e
 			}
 			if len(remaining) == 0 {
-				return os.Remove(src)
+				return o.Attempt("delete source", src, "", func() error { return os.Remove(src) })
 			}
 		}
 		return nil
 	}
-	switch conflict(src, dst) {
-	case 1:
-		o.CompleteTree(src)
+	resolution := o.Resolve(Collision{src, dst, si, di}, conflict)
+	switch resolution.Action {
+	case Skip:
+		o.SkipItem(src)
 		return nil
-	case 2:
+	case Rename:
+		if resolution.Destination == "" || resolution.Destination == dst {
+			return fmt.Errorf("choose a different destination name")
+		}
+		return transfer(src, resolution.Destination, move, conflict, o)
+	case Append:
+		return appendFile(src, dst, si, di, move, o)
+	case Replace:
+	default:
 		return ErrCancelled
 	}
 	if si.IsDir() || di.IsDir() {
@@ -154,7 +170,7 @@ func Transfer(src, dst string, move bool, conflict Conflict, ops ...*Operation) 
 	}
 	o.relocateHardlinks(tmp, dst)
 	if move {
-		return os.Remove(src)
+		return o.Attempt("delete source", src, "", func() error { return os.Remove(src) })
 	}
 	return nil
 }
@@ -171,7 +187,7 @@ func moveAcrossVolumes(src, dst string, o *Operation) error {
 	if err := Copy(src, dst, o); err != nil {
 		return err
 	}
-	return Remove(src, o)
+	return o.Attempt("delete source", src, "", func() error { return Remove(src, o) })
 }
 
 func readOne(path string) ([]os.DirEntry, error) {

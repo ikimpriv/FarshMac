@@ -11,7 +11,7 @@ A native macOS file manager written in Go, inspired by the keyboard-driven workf
 
 **Version 0.19.1 · macOS 12+ · Apple Silicon and Intel**
 
-[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[Changelog](CHANGELOG.md) · [File operations](docs/FILE_OPERATIONS.md) · [Contributing](CONTRIBUTING.md)
 
 FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an independent implementation, not the official Far Manager or a source-compatible port. Far Group does not endorse this project.
 

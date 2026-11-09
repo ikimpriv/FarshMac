@@ -12,19 +12,21 @@ type Field struct {
 	Secret          bool
 }
 type Form struct {
-	Scroll        int
-	CheckColumns  int
-	Primary       string
-	Title         string
-	Message       string
-	Buttons       bool
-	Cancel        func()
-	Fields        []Field
-	Focus, Cursor int
-	Selected      bool
-	Submit        func([]Field)
-	Choice        []string
-	Select        func(int)
+	Remember, RememberChecked bool
+	OperationQuestion         bool
+	Scroll                    int
+	CheckColumns              int
+	Primary                   string
+	Title                     string
+	Message                   string
+	Buttons                   bool
+	Cancel                    func()
+	Fields                    []Field
+	Focus, Cursor             int
+	Selected                  bool
+	Submit                    func([]Field)
+	Choice                    []string
+	Select                    func(int)
 }
 
 func (a *App) form(title string, fields []Field, submit func([]Field)) {
@@ -56,6 +58,25 @@ func (a *App) formKey(m Message) {
 	count := len(f.Fields) + 2
 	if len(f.Choice) > 0 {
 		count = len(f.Choice)
+		if f.Remember {
+			count++
+		}
+	}
+	if f.Buttons && (m.Key == "PageDown" || m.Key == "PageUp") {
+		delta := 3
+		if m.Key == "PageUp" {
+			delta = -3
+		}
+		f.Scroll = max(0, f.Scroll+delta)
+		return
+	}
+	if f.Remember && (m.Key == " " || m.Key == "Enter") && f.Focus == len(f.Choice) {
+		f.RememberChecked = !f.RememberChecked
+		return
+	}
+	if f.Remember && m.Alt && strings.EqualFold(m.Key, "m") {
+		f.RememberChecked = !f.RememberChecked
+		return
 	}
 	if m.Alt && utf8.RuneCountInString(m.Key) == 1 {
 		pressed := unicode.ToLower([]rune(m.Key)[0])
@@ -399,35 +420,75 @@ func (a *App) drawForm(g *Grid) {
 		g.Set(box.X+box.W-3, box.Top, "▲", Black, Gray)
 	}
 }
-func (a *App) confirmationBounds() (int, int, int, int) {
-	w := min(88, a.Cols-4)
-	buttons := buttonLayout(a.Form.Choice, w)
+func (a *App) confirmationLayout() (modalRect, []string, int, int) {
+	f := a.Form
+	w := max(12, min(88, a.Cols-4))
+	var lines []string
+	for _, line := range strings.Split(f.Message, "\n") {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			lines = append(lines, "")
+		}
+		for len(runes) > 0 {
+			n := min(len(runes), max(1, w-8))
+			lines = append(lines, string(runes[:n]))
+			runes = runes[n:]
+		}
+	}
+	buttons := buttonLayout(f.Choice, w)
 	extra := 0
 	if len(buttons) > 0 {
 		extra = buttons[len(buttons)-1].Y
 	}
-	r := modalBounds(a.Cols, a.Rows, w, 10+extra)
+	remember := 0
+	if f.Remember {
+		remember = 2
+	}
+	r := modalBounds(a.Cols, a.Rows, w, max(10, len(lines)+7+extra+remember))
+	by := r.Y + r.H - 4 - extra
+	ry := by - 2
+	available := max(1, by-1-remember-(r.Y+2))
+	f.Scroll = max(0, min(f.Scroll, max(0, len(lines)-available)))
+	end := min(len(lines), f.Scroll+available)
+	return r, lines[f.Scroll:end], by, ry
+}
+func (a *App) confirmationBounds() (int, int, int, int) {
+	r, _, _, _ := a.confirmationLayout()
 	return r.X, r.Y, r.W, r.H
 }
 func (a *App) drawConfirmation(g *Grid) {
 	f := a.Form
-	x, y, w, h := a.confirmationBounds()
-	r := modalRect{x, y, w, h}
+	r, lines, by, ry := a.confirmationLayout()
 	drawModal(g, r, f.Title)
-	message := []rune(f.Message)
-	for line := 0; line < 3 && line*(w-8) < len(message); line++ {
-		at := line * (w - 8)
-		g.Text(x+4, y+2+line, string(message[at:min(len(message), at+w-8)]), Black, Gray, w-8)
+	for i, line := range lines {
+		g.Text(r.X+4, r.Y+2+i, line, Black, Gray, r.W-8)
 	}
-	modalRule(g, r, y+5)
-	drawModalButtons(g, r, y+6, f.Choice, f.Focus, f.mnemonics())
+	if f.Remember {
+		mark := "[ ] "
+		if f.RememberChecked {
+			mark = "[x] "
+		}
+		bg := uint32(Gray)
+		if f.Focus == len(f.Choice) {
+			bg = Cyan
+		}
+		modalLabel(g, r.X+4, ry, mark+"Remember choice", 'm', bg, r.W-8)
+	}
+	modalRule(g, r, by-1)
+	drawModalButtons(g, r, by, f.Choice, f.Focus, f.mnemonics())
 }
 func (a *App) formClick(m Message) {
 	f := a.Form
 	if f.Buttons {
-		x, y, w, _ := a.confirmationBounds()
+		r, _, by, ry := a.confirmationLayout()
+		x, w := r.X, r.W
+		if f.Remember && m.Y == ry && m.X >= x+4 && m.X < x+w-4 {
+			f.Focus = len(f.Choice)
+			f.RememberChecked = !f.RememberChecked
+			return
+		}
 		for i, pos := range buttonLayout(f.Choice, w) {
-			if m.Y == y+6+pos.Y && m.X >= x+pos.X && m.X < x+pos.X+pos.W {
+			if m.Y == by+pos.Y && m.X >= x+pos.X && m.X < x+pos.X+pos.W {
 				f.Focus = i
 				a.formKey(Message{Key: "Enter"})
 				return

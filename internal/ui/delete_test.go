@@ -98,6 +98,13 @@ func TestTrashFailureNeverFallsBackAndCancelStopsBatch(t *testing.T) {
 			return nil
 		}
 		a.key(Message{Key: "F8"})
+		if !cancel {
+			waitOperationQuestion(t, a, "Error")
+			if !strings.Contains(a.Form.Message, "Trash unavailable") {
+				t.Fatal(a.Form.Message)
+			}
+			a.key(Message{Key: "Escape"})
+		}
 		waitWork(t, a)
 		if calls != 1 {
 			t.Fatal("batch continued after failure/cancellation")
@@ -109,9 +116,7 @@ func TestTrashFailureNeverFallsBackAndCancelStopsBatch(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(root, "a")); err != nil {
 				t.Fatal("failed trash permanently removed file")
 			}
-			if !strings.Contains(a.Status, "Trash unavailable") {
-				t.Fatal("failure hidden", a.Status)
-			}
+
 		}
 	}
 }

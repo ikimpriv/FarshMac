@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func (a *App) transferDialog(move bool) {
@@ -80,62 +81,36 @@ func (a *App) transferDialog(move bool) {
 			if move {
 				o.Streaming() // Same-volume rename must not enumerate the tree first.
 			}
-			destination, err := targetEndpoint.Open(o.Context())
+			var destination remotefs.FS
+			err := o.Attempt("open destination", dst, "", func() error { var e error; destination, e = targetEndpoint.Open(o.Context()); return e })
 			if err != nil {
 				return err
 			}
-			info, err := destination.Lstat(dst)
+			var info os.FileInfo
+			err = o.Attempt("read destination", dst, "", func() error {
+				var e error
+				info, e = destination.Lstat(dst)
+				if os.IsNotExist(e) {
+					return nil
+				}
+				return e
+			})
+			exists := info != nil
 			destination.Close()
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			isDir := err == nil && info.IsDir()
+			isDir := err == nil && exists && info.IsDir()
 			if len(paths) > 1 && !isDir {
 				return fmt.Errorf("destination must be an existing directory")
 			}
-			all := -1
-			conflict := func(src, dst string) int {
-				o.Questions.Lock()
-				defer o.Questions.Unlock()
-				if !ask {
-					return 0
-				}
-				if all >= 0 {
-					return all
-				}
-				answer := make(chan int, 1)
-				a.jobs <- func() {
-					if o.Check() != nil {
-						return
-					}
-					a.confirm("Overwrite", filepath.Base(dst)+" already exists. Replace it?", []string{"Overwrite", "All", "Skip", "Skip all", "Cancel"}, func(i int) { answer <- i })
-				}
-				var choice int
-				select {
-				case <-o.Context().Done():
-					return 2
-				case choice = <-answer:
-				}
-				switch choice {
-				case 0:
-					return 0
-				case 1:
-					all = 0
-					return 0
-				case 2:
-					return 1
-				case 3:
-					all = 1
-					return 1
-				default:
-					return 2
-				}
-			}
+			a.collisionQuestions(o, ask)
+			var conflict fsops.Conflict
 			if !move {
 				pairs := make([]remotefs.Pair, 0, len(paths))
 				for _, src := range paths {
 					target := dst
-					if isDir {
+					if transferIntoDirectory(s, dst, dest, len(paths), isDir) {
 						target = filepath.Join(dst, filepath.Base(src))
 					}
 					pairs = append(pairs, remotefs.Pair{Source: src, Destination: target})
@@ -144,7 +119,7 @@ func (a *App) transferDialog(move bool) {
 			}
 			for _, src := range paths {
 				target := dst
-				if isDir {
+				if transferIntoDirectory(s, dst, dest, len(paths), isDir) {
 					target = filepath.Join(dst, filepath.Base(src))
 				}
 				if err := fsops.Transfer(src, target, move, conflict, o); err != nil {
@@ -190,7 +165,9 @@ func (a *App) archiveCreate() {
 	base := a.Panels[a.Active].Path
 	dst := filepath.Join(a.Panels[1-a.Active].Path, filepath.Base(paths[0])+".zip")
 	a.prompt("Create archive", "New filename: .zip / .tar.gz / .tar.bz2 / .tar.xz / .7z", dst, func(s string) {
-		a.workProgress("Creating archive", func(o *fsops.Operation) error { return fsops.CreateArchive(paths, expand(s, base), o) })
+		a.workProgress("Creating archive", func(o *fsops.Operation) error {
+			return o.Attempt("create archive", strings.Join(paths, "\n"), expand(s, base), func() error { return fsops.CreateArchive(paths, expand(s, base), o) })
+		})
 	})
 }
 func (a *App) archiveExtract() {
@@ -211,7 +188,9 @@ func (a *App) archiveExtractPath(src string) {
 	base := a.Panels[1-a.Active].filesystemPath()
 	dst := filepath.Join(base, fsops.ArchiveStem(filepath.Base(src)))
 	a.prompt("Extract archive", "New destination folder", dst, func(s string) {
-		a.workProgress("Extracting archive", func(o *fsops.Operation) error { return fsops.ExtractArchive(src, expand(s, base), o) })
+		a.workProgress("Extracting archive", func(o *fsops.Operation) error {
+			return o.Attempt("extract archive", src, expand(s, base), func() error { return fsops.ExtractArchive(src, expand(s, base), o) })
+		})
 	})
 }
 func (a *App) archiveCommands() {
@@ -236,4 +215,10 @@ func (a *App) archiveCommands() {
 			return func() { a.report("Archive: "+filepath.Base(path), text) }, err
 		})
 	})
+}
+
+// The prefilled single-item path names the item itself, even when it exists.
+// A different existing directory or a trailing slash explicitly selects a container.
+func transferIntoDirectory(input, destination, suggested string, count int, isDir bool) bool {
+	return isDir && (count > 1 || destination != suggested || strings.HasSuffix(input, "/"))
 }

@@ -321,17 +321,20 @@ func TestSFTPWriteFailuresStayVisible(t *testing.T) {
 	selectEntry(t, &a.Panels[0], "upload.txt")
 	a.key(Message{Key: "F5"})
 	a.key(Message{Key: "Enter"})
-	waitNetwork(t, a)
+	waitOperationQuestion(t, a, "Error")
 	if a.Form == nil || !strings.Contains(a.Form.Message, "permission denied") {
 		t.Fatalf("upload failure only flashed: %q form=%+v", a.Status, a.Form)
 	}
-	a.key(Message{Key: "Enter"})
+	a.key(Message{Key: "Escape"})
+	waitNetwork(t, a)
 	a.Active = 1
 	a.key(Message{Key: "F7"})
 	a.Dialog.Input = "created"
 	a.key(Message{Key: "Enter"})
-	waitNetwork(t, a)
+	waitOperationQuestion(t, a, "Error")
 	if a.Form == nil || !strings.Contains(a.Form.Message, "permission denied") {
 		t.Fatalf("mkdir failure only flashed: %q form=%+v", a.Status, a.Form)
 	}
+	a.key(Message{Key: "Escape"})
+	waitNetwork(t, a)
 }

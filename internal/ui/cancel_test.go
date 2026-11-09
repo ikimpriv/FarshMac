@@ -87,7 +87,7 @@ func TestCancelOverwriteAndCloseReleaseWorker(t *testing.T) {
 				a.Poll()
 				time.Sleep(time.Millisecond)
 			}
-			if a.Form == nil || a.Form.Title != "Overwrite" {
+			if a.Form == nil || a.Form.Title != "Warning" {
 				t.Fatal("no conflict", a.Status)
 			}
 			op := a.Operation

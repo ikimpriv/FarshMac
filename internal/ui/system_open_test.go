@@ -72,6 +72,10 @@ func TestSystemOpenReportsFailureAndRejectsVirtualPaths(t *testing.T) {
 	if !strings.Contains(a.Status, "No application is registered") {
 		t.Fatal("open failure not shown", a.Status)
 	}
+	if a.Form == nil {
+		t.Fatal("open failure must remain visible until acknowledged")
+	}
+	a.key(Message{Key: "Enter"})
 	a.Panels[0] = Panel{Path: filepath.Join(root, "archive.zip"), Archive: &fsops.ArchiveIndex{Path: filepath.Join(root, "archive.zip")}, Entries: []Entry{{Name: "inside.txt"}}}
 	a.key(Message{Key: "Enter", Shift: true})
 	if a.Busy || !strings.Contains(a.Status, "F5") {

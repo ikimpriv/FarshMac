@@ -53,12 +53,12 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 	o.Streaming()
 	ctx, cancel := context.WithCancel(o.Context())
 	defer cancel()
-	scan, err := source.Open(ctx)
+	scan, err := openTransferEndpoint(source, ctx, o)
 	if err != nil {
 		return err
 	}
 	defer scan.Close()
-	dest, err := target.Open(ctx)
+	dest, err := openTransferEndpoint(target, ctx, o)
 	if err != nil {
 		return err
 	}
@@ -77,18 +77,21 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		}
 		errMu.Unlock()
 		cancel()
+		if errors.Is(err, fsops.ErrCancelled) {
+			o.Cancel()
+		}
 	}
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := source.Open(ctx)
+			s, err := openTransferEndpoint(source, ctx, o)
 			if err != nil {
 				fail(err)
 				return
 			}
 			defer s.Close()
-			d, err := target.Open(ctx)
+			d, err := openTransferEndpoint(target, ctx, o)
 			if err != nil {
 				fail(err)
 				return
@@ -103,7 +106,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 				if source.Remote == nil && target.Remote == nil {
 					err = fsops.Transfer(task.Source, task.Destination, false, options.Conflict, child)
 				} else {
-					err = copyFile(s, d, source, target, task, options, child)
+					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error { return copyFile(s, d, source, target, task, options, child) }))
 				}
 				o.Worker(-1)
 				child.Cancel()
@@ -133,9 +136,9 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		}
 		var err error
 		if info == nil {
-			info, err = scan.Lstat(pair.Source)
+			err = o.Attempt("read attributes", pair.Source, pair.Destination, func() error { info, err = scan.Lstat(pair.Source); return err })
 			if err != nil {
-				return err
+				return fsops.IgnoreSkipped(err)
 			}
 		}
 		task := job{pair, info}
@@ -152,20 +155,23 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 				return ctx.Err()
 			}
 		}
-		existing, err := dest.Lstat(pair.Destination)
 		created := false
-		if os.IsNotExist(err) {
-			if target.Remote == nil && options.Metadata.Permissions {
-				err = os.Mkdir(pair.Destination, 0700)
-			} else {
-				err = dest.Mkdir(pair.Destination)
+		err = o.Attempt("create folder", pair.Source, pair.Destination, func() error {
+			existing, e := dest.Lstat(pair.Destination)
+			if os.IsNotExist(e) {
+				if target.Remote == nil && options.Metadata.Permissions {
+					e = os.Mkdir(pair.Destination, 0700)
+				} else {
+					e = dest.Mkdir(pair.Destination)
+				}
+				created = e == nil
+			} else if e == nil && !existing.IsDir() {
+				return fmt.Errorf("destination is not a directory: %s", pair.Destination)
 			}
-			created = err == nil
-		} else if err == nil && !existing.IsDir() {
-			return fmt.Errorf("destination is not a directory: %s", pair.Destination)
-		}
+			return e
+		})
 		if err != nil {
-			return err
+			return fsops.IgnoreSkipped(err)
 		}
 		if created {
 			directories = append(directories, task)
@@ -189,7 +195,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			})
 		} else {
 			var entries []os.FileInfo
-			entries, err = scan.ReadDir(pair.Source)
+			err = o.Attempt("read folder", pair.Source, pair.Destination, func() error { entries, err = scan.ReadDir(pair.Source); return err })
 			if err == nil && len(entries) > 100000 {
 				err = fmt.Errorf("remote directory exceeds 100000 entries")
 			}
@@ -202,7 +208,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			}
 		}
 		if err != nil {
-			return err
+			return fsops.IgnoreSkipped(err)
 		}
 		o.Complete(pair.Source)
 		return nil
@@ -267,21 +273,30 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 			return fmt.Errorf("remote file changed; reopen before saving")
 		}
 	}
+	appendMode := false
 	if exists {
+		resolution := o.Resolve(fsops.Collision{Source: j.Source, Destination: j.Destination, SourceInfo: j.Info, DestinationInfo: before}, options.Conflict)
+		switch resolution.Action {
+		case fsops.Skip:
+			o.SkipItem(j.Source)
+			return nil
+		case fsops.Rename:
+			if resolution.Destination == "" || resolution.Destination == j.Destination {
+				return fmt.Errorf("choose a different destination name")
+			}
+			j.Destination = resolution.Destination
+			return copyFile(s, d, source, target, j, options, o)
+		case fsops.Append:
+			appendMode = true
+		case fsops.Replace:
+		default:
+			return fsops.ErrCancelled
+		}
 		if before.IsDir() {
 			return fmt.Errorf("cannot replace a directory with a file")
 		}
-		answer := 2
-		if options.Conflict != nil {
-			answer = options.Conflict(j.Source, j.Destination)
-		}
-		if answer == 1 {
-			o.Complete(j.Source)
-			o.Advance(j.Info.Size())
-			return nil
-		}
-		if answer != 0 {
-			return fsops.ErrCancelled
+		if appendMode && (!before.Mode().IsRegular() || !j.Info.Mode().IsRegular()) {
+			return fmt.Errorf("append requires two regular files")
 		}
 	}
 	tmp := path.Join(path.Dir(j.Destination), ".farshmac-part-"+rand.Text())
@@ -323,6 +338,35 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 			return e
 		}
 		created = true
+		if appendMode {
+			prefixFS, e := target.Open(o.Context())
+			if e != nil {
+				in.Close()
+				out.Close()
+				return e
+			}
+			previous, e := prefixFS.Open(j.Destination)
+			if e != nil {
+				prefixFS.Close()
+				in.Close()
+				out.Close()
+				return e
+			}
+			n, e := io.CopyBuffer(struct{ io.Writer }{out}, o.Reader(previous), make([]byte, 256*1024))
+			readErr := previous.Close()
+			prefixFS.Close()
+			if e != nil || readErr != nil || n != before.Size() {
+				in.Close()
+				out.Close()
+				if e != nil {
+					return e
+				}
+				if readErr != nil {
+					return readErr
+				}
+				return fmt.Errorf("destination size changed during append")
+			}
+		}
 		o.Begin(j.Source, j.Info.Size())
 		buffer := make([]byte, 256*1024)
 		n, e := io.CopyBuffer(struct{ io.Writer }{out}, o.Reader(in), buffer)
@@ -339,6 +383,28 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 		}
 		if n != j.Info.Size() {
 			return fmt.Errorf("source size changed while copying %s", j.Source)
+		}
+	}
+	if appendMode {
+		for {
+			err = d.Chmod(tmp, before.Mode().Perm())
+			if err == nil {
+				break
+			}
+			if o.MetadataFailure == nil {
+				return err
+			}
+			err = o.MetadataFailure(j.Source, tmp, err)
+			if errors.Is(err, fsops.ErrRetryMetadata) {
+				if e := o.Check(); e != nil {
+					return e
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			break
 		}
 	}
 	if err = applyPortableMetadata(d, j.Source, tmp, j.Info, options, o); err != nil {
@@ -364,6 +430,17 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 }
 
 func applyPortableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {
+	for {
+		err := portableMetadata(d, src, dst, info, options, o)
+		if !errors.Is(err, fsops.ErrRetryMetadata) {
+			return err
+		}
+		if e := o.Check(); e != nil {
+			return e
+		}
+	}
+}
+func portableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {
 	var problems []error
 	if info.Mode()&os.ModeSymlink != 0 {
 		// Chmod/Chtimes would follow the link and change its target.
@@ -435,9 +512,12 @@ func validateRemotePair(source, target FS, pair Pair) error {
 }
 
 func RemoveTree(f FS, p string, o *fsops.Operation) error {
-	return removeTree(f, p, o, 0)
+	return fsops.IgnoreSkipped(removeTree(f, p, o, 0))
 }
 func removeTree(f FS, p string, o *fsops.Operation, depth int) error {
+	return o.Attempt("delete", p, "", func() error { return removeTreeStep(f, p, o, depth) })
+}
+func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 	if depth > 256 {
 		return fmt.Errorf("remote tree depth exceeds 256")
 	}
@@ -448,11 +528,21 @@ func removeTree(f FS, p string, o *fsops.Operation, depth int) error {
 	if err != nil {
 		return err
 	}
+	if o.BeforeDelete != nil {
+		switch o.BeforeDelete(p, info) {
+		case fsops.Skip:
+			o.SkipItem(p)
+			return fsops.ErrSkipped
+		case fsops.Cancel:
+			return fsops.ErrCancelled
+		}
+	}
 	if info.IsDir() {
 		entries, err := f.ReadDir(p)
 		if err != nil {
 			return err
 		}
+		skipped := false
 		for _, entry := range entries {
 			if entry.Name() == "." || entry.Name() == ".." {
 				continue
@@ -461,8 +551,15 @@ func removeTree(f FS, p string, o *fsops.Operation, depth int) error {
 				return fmt.Errorf("unsafe server filename")
 			}
 			if err = removeTree(f, path.Join(p, entry.Name()), o, depth+1); err != nil {
+				if errors.Is(err, fsops.ErrSkipped) {
+					skipped = true
+					continue
+				}
 				return err
 			}
+		}
+		if skipped {
+			return fsops.ErrSkipped
 		}
 	}
 	if err = o.Check(); err != nil {
@@ -473,4 +570,24 @@ func removeTree(f FS, p string, o *fsops.Operation, depth int) error {
 		o.Complete(p)
 	}
 	return err
+}
+
+func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Operation) (FS, error) {
+	var f FS
+	name := "local filesystem"
+	if endpoint.Remote != nil {
+		name = endpoint.Remote.Label()
+	}
+	err := o.Attempt("connect", name, "", func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var e error
+		f, e = endpoint.Open(ctx)
+		if e != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return e
+	})
+	return f, err
 }

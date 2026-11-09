@@ -186,7 +186,11 @@ func (a *App) remoteMkdir() {
 				return nil, nil, err
 			}
 			defer f.Close()
-			err = f.Mkdir(target)
+			a.operationQuestions(o)
+			err = o.Attempt("create folder", target, "", func() error { return f.Mkdir(target) })
+			if errors.Is(err, fsops.ErrSkipped) {
+				return func() { a.Status = "Folder creation skipped" }, nil, nil
+			}
 			if err != nil {
 				err = fmt.Errorf("%w (create folder %s)", err, target)
 			}
@@ -249,7 +253,10 @@ func (a *App) remoteMoveDialog() {
 	}
 	a.prompt("Remote move / rename", "Destination on the same server", dest, func(value string) {
 		dst := expand(value, target.Path)
+		ask := a.Settings.ConfirmOverwrite
 		a.workProgress("Renaming remote files", func(o *fsops.Operation) error {
+			a.collisionQuestions(o, ask)
+			a.moveMetadataQuestions(o)
 			f, err := config.Dial(o.Context())
 			if err != nil {
 				return err
@@ -268,21 +275,12 @@ func (a *App) remoteMoveDialog() {
 					return err
 				}
 				to := dst
-				if isDir {
+				if transferIntoDirectory(value, dst, dest, len(paths), isDir) {
 					to = filepath.Join(dst, filepath.Base(src))
 				}
-				if to == src || strings.HasPrefix(to, src+"/") {
-					return fmt.Errorf("destination is inside source")
-				}
-				if _, err = f.Lstat(to); err == nil {
-					return fmt.Errorf("destination already exists: %s", to)
-				} else if !os.IsNotExist(err) {
+				if err = remotefs.Move(f, remotefs.Endpoint{Remote: &config}, src, to, o); err != nil {
 					return err
 				}
-				if err = f.Rename(src, to); err != nil {
-					return err
-				}
-				o.Complete(src)
 			}
 			return nil
 		})

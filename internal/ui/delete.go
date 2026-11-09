@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -35,17 +36,8 @@ func (a *App) deleteSelected(permanent bool) {
 	}
 	remove := func() {
 		a.workProgress(progress, func(o *fsops.Operation) error {
-			if permanent {
-				if err := o.Scan(paths); err != nil {
-					return err
-				}
-			} else {
-				// Recycling a folder is one native operation; never scan its contents.
-				for _, path := range paths {
-					o.Add(path, 0)
-				}
-				o.Ready()
-			}
+			// Enumerate as deletion proceeds so unreadable children can be skipped.
+			o.Streaming()
 			for _, path := range paths {
 				if err := o.Check(); err != nil {
 					return err
@@ -54,7 +46,23 @@ func (a *App) deleteSelected(permanent bool) {
 				if permanent {
 					err = fsops.Remove(path, o)
 				} else {
-					err = trash(path, o)
+					o.Add(path, 0)
+					err = fsops.IgnoreSkipped(o.Attempt("move to Trash", path, "", func() error {
+						info, e := os.Lstat(path)
+						if e != nil {
+							return e
+						}
+						if o.BeforeDelete != nil {
+							switch o.BeforeDelete(path, info) {
+							case fsops.Skip:
+								o.SkipItem(path)
+								return fsops.ErrSkipped
+							case fsops.Cancel:
+								return fsops.ErrCancelled
+							}
+						}
+						return trash(path, o)
+					}))
 				}
 				if err != nil {
 					return err // Never fall back to permanent deletion if Trash fails.

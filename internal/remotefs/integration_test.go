@@ -338,3 +338,160 @@ func TestConnectionURLRoundTrip(t *testing.T) {
 		t.Fatal("URL username ignored", got, err)
 	}
 }
+
+func TestRemoteCopyCollisionDecisions(t *testing.T) {
+	for _, protocol := range []string{"ftp", "sftp"} {
+		t.Run(protocol, func(t *testing.T) {
+			var c remotefs.Config
+			if protocol == "ftp" {
+				c = testnet.FTP(t).Config
+			} else {
+				c = testnet.SFTP(t)
+			}
+			local := filepath.Join(t.TempDir(), "file")
+			if e := os.WriteFile(local, []byte("new"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			f, e := c.Dial(context.Background())
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer f.Close()
+			for _, choice := range []int{0, 1, 2} {
+				t.Run(fmt.Sprint(choice), func(t *testing.T) {
+					dst := fmt.Sprintf("/file-%d", choice)
+					w, e := f.Create(dst)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if _, e = w.Write([]byte("old")); e != nil {
+						t.Fatal(e)
+					}
+					if e = w.Close(); e != nil {
+						t.Fatal(e)
+					}
+					o := fsops.NewOperation("Copy")
+					defer o.Cancel()
+					err := remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Remote: &c}, []remotefs.Pair{{Source: local, Destination: dst}}, remotefs.CopyOptions{Workers: 3, Conflict: func(string, string) int { return choice }}, o)
+					if choice == 2 {
+						if !errors.Is(err, fsops.ErrCancelled) {
+							t.Fatal(err)
+						}
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					r, e := f.Open(dst)
+					if e != nil {
+						t.Fatal(e)
+					}
+					b, e := io.ReadAll(r)
+					r.Close()
+					want := "old"
+					if choice == 0 {
+						want = "new"
+					}
+					if e != nil || string(b) != want {
+						t.Fatalf("got %q %v", b, e)
+					}
+					if b, e := os.ReadFile(local); e != nil || string(b) != "new" {
+						t.Fatal("source changed", e)
+					}
+					entries, e := f.ReadDir("/")
+					if e != nil {
+						t.Fatal(e)
+					}
+					for _, entry := range entries {
+						if strings.HasPrefix(entry.Name(), ".farshmac-part-") {
+							t.Fatal("temporary output leaked", entry.Name())
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRemoteAppendAndMoveMerge(t *testing.T) {
+	for _, protocol := range []string{"ftp", "sftp"} {
+		t.Run(protocol, func(t *testing.T) {
+			var c remotefs.Config
+			if protocol == "ftp" {
+				c = testnet.FTP(t).Config
+			} else {
+				c = testnet.SFTP(t)
+			}
+			remote := remotefs.Endpoint{Remote: &c}
+			f, e := c.Dial(context.Background())
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer f.Close()
+			write := func(p, data string) {
+				t.Helper()
+				w, e := f.Create(p)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if _, e = w.Write([]byte(data)); e != nil {
+					t.Fatal(e)
+				}
+				if e = w.Close(); e != nil {
+					t.Fatal(e)
+				}
+			}
+			read := func(p, want string) {
+				t.Helper()
+				r, e := f.Open(p)
+				if e != nil {
+					t.Fatal(e)
+				}
+				b, e := io.ReadAll(r)
+				r.Close()
+				if e != nil || string(b) != want {
+					t.Fatalf("%s: %q %v", p, b, e)
+				}
+			}
+			local := filepath.Join(t.TempDir(), "file")
+			if e = os.WriteFile(local, []byte("new"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			write("/append", "old")
+			o := fsops.NewOperation("Copy")
+			defer o.Cancel()
+			o.MetadataFailure = func(string, string, error) error { return nil }
+			o.Collision = func(fsops.Collision) fsops.Resolution { return fsops.Resolution{Action: fsops.Append} }
+			if e = remotefs.Copy(remotefs.Endpoint{}, remote, []remotefs.Pair{{Source: local, Destination: "/append"}}, remotefs.CopyOptions{Workers: 2}, o); e != nil {
+				t.Fatal(e)
+			}
+			read("/append", "oldnew")
+			for _, p := range []string{"/source", "/dest"} {
+				if e = f.Mkdir(p); e != nil {
+					t.Fatal(e)
+				}
+			}
+			write("/source/collision", "new")
+			write("/source/unique", "unique")
+			write("/dest/collision", "old")
+			write("/dest/keep", "keep")
+			o = fsops.NewOperation("Move")
+			defer o.Cancel()
+			o.MetadataFailure = func(string, string, error) error { return nil }
+			o.Collision = func(fsops.Collision) fsops.Resolution { return fsops.Resolution{Action: fsops.Skip} }
+			if e = remotefs.Move(f, remote, "/source", "/dest", o); e != nil {
+				t.Fatal(e)
+			}
+			read("/source/collision", "new")
+			read("/dest/collision", "old")
+			read("/dest/unique", "unique")
+			read("/dest/keep", "keep")
+			o.Collision = func(fsops.Collision) fsops.Resolution { return fsops.Resolution{Action: fsops.Append} }
+			if e = remotefs.Move(f, remote, "/source", "/dest", o); e != nil {
+				t.Fatal(e)
+			}
+			read("/dest/collision", "oldnew")
+			if _, e = f.Lstat("/source"); !os.IsNotExist(e) {
+				t.Fatal("source folder retained", e)
+			}
+		})
+	}
+}

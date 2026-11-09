@@ -15,6 +15,7 @@ import (
 )
 
 type Progress struct {
+	Skipped                                                   int64
 	Workers, Active                                           int
 	Label, Path                                               string
 	Bytes, TotalBytes, Files, TotalFiles, FileBytes, FileSize int64
@@ -22,8 +23,11 @@ type Progress struct {
 	Started                                                   time.Time
 }
 type Operation struct {
-	Questions sync.Mutex
-	parent    *Operation
+	BeforeDelete func(string, os.FileInfo) int
+	Failure      func(Failure) ErrorAction
+	Collision    func(Collision) Resolution
+	Questions    sync.Mutex
+	parent       *Operation
 	// Set before starting a worker. Visibility of other hidden files is UI-only.
 	IgnoreDSStore bool
 	CopyMetadata  *MetadataOptions
@@ -322,7 +326,7 @@ func Remove(path string, o *Operation) error {
 	if o.Ignored(path) {
 		return o.Check()
 	}
-	return removeTree(path, o)
+	return IgnoreSkipped(removeTree(path, o))
 }
 
 // A selected directory is removed completely, including its Finder metadata.
@@ -331,6 +335,9 @@ func removeTree(path string, o *Operation) error {
 	return removeTreeWith(path, o, os.Remove)
 }
 func removeTreeWith(path string, o *Operation, remove func(string) error) error {
+	return o.Attempt("delete", path, "", func() error { return removeTreeStep(path, o, remove) })
+}
+func removeTreeStep(path string, o *Operation, remove func(string) error) error {
 	if e := o.Check(); e != nil {
 		return e
 	}
@@ -341,10 +348,37 @@ func removeTreeWith(path string, o *Operation, remove func(string) error) error 
 	if e != nil {
 		return e
 	}
+	if !o.Ignored(path) {
+		size := int64(0)
+		if info.Mode().IsRegular() {
+			size = info.Size()
+		}
+		o.Add(path, size)
+	}
+	if o != nil && o.BeforeDelete != nil {
+		switch o.BeforeDelete(path, info) {
+		case Skip:
+			o.SkipItem(path)
+			return ErrSkipped
+		case Cancel:
+			return ErrCancelled
+		}
+	}
 	for attempt := 0; ; attempt++ {
 		if info.IsDir() {
-			if e = readDirectory(path, o, func(child os.DirEntry) error { return removeTreeWith(filepath.Join(path, child.Name()), o, remove) }); e != nil && !os.IsNotExist(e) {
+			skipped := false
+			if e = readDirectory(path, o, func(child os.DirEntry) error {
+				err := removeTreeWith(filepath.Join(path, child.Name()), o, remove)
+				if errors.Is(err, ErrSkipped) {
+					skipped = true
+					return nil
+				}
+				return err
+			}); e != nil && !os.IsNotExist(e) {
 				return e
+			}
+			if skipped {
+				return ErrSkipped
 			}
 		}
 		if e = o.Check(); e != nil {

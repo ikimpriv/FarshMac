@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"farshmac/internal/fsops"
 	"fmt"
 	"strings"
@@ -9,15 +10,24 @@ import (
 
 func (a *App) workProgress(label string, fn func(*fsops.Operation) error) {
 	a.backgroundTask(label, func(o *fsops.Operation) (func(), func(), error) {
+		a.operationQuestions(o)
 		err := fn(o)
-		return func() { a.Status = "Done" }, func() {
-			if !a.closed {
-				a.refresh()
-			}
-		}, err
+		if errors.Is(err, fsops.ErrSkipped) {
+			err = nil
+		}
+		return func() {
+				a.Status = "Done"
+				if skipped := o.Snapshot().Skipped; skipped > 0 {
+					a.Status = fmt.Sprintf("Done — %d item(s) skipped", skipped)
+				}
+			}, func() {
+				if !a.closed {
+					a.refresh()
+				}
+			}, err
 	})
 	if a.task != nil {
-		a.task.reportError = a.Panels[0].Remote != nil || a.Panels[1].Remote != nil
+		a.task.reportError = true // Local permission/collision errors must stay visible too.
 	}
 }
 func (a *App) cancelOperation() {
@@ -27,7 +37,7 @@ func (a *App) cancelOperation() {
 	a.Operation.Cancel()
 	// Release an outstanding overwrite question too. Its worker also observes
 	// the cancellation channel, including when the window is closed.
-	if a.Form != nil && (a.Form.Title == "Overwrite" || a.Form.Title == "Cannot preserve metadata") {
+	if a.Form != nil && (a.Form.OperationQuestion || a.Form.Title == "Overwrite" || a.Form.Title == "Cannot preserve metadata") {
 		a.Form = nil
 	}
 	a.Status = "Cancelling…"

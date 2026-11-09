@@ -14,6 +14,9 @@ func (o *Operation) Fork(ctx context.Context) *Operation {
 		child.CopyMetadata = &options
 	}
 	child.MetadataFailure = o.MetadataFailure
+	child.Failure = o.Failure
+	child.BeforeDelete = o.BeforeDelete
+	child.Collision = o.Collision
 	return child
 }
 func (o *Operation) Parallel(workers int)               { o.mu.Lock(); o.state.Workers = workers; o.mu.Unlock() }

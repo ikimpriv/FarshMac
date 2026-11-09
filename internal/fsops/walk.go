@@ -23,7 +23,8 @@ func readDirectory(path string, o *Operation, visit func(fs.DirEntry) error) err
 	if err := o.Check(); err != nil {
 		return err
 	}
-	f, err := os.Open(path)
+	var f *os.File
+	err := o.Attempt("read folder", path, "", func() error { var e error; f, e = os.Open(path); return e })
 	if err != nil {
 		return err
 	}
