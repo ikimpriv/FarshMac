@@ -21,12 +21,26 @@ while IFS= read -r item; do
   item="${item#*\"}"; item="${item%\"*}"
   [[ -n "$item" ]] && old_keychains+=("$item")
 done < <(security list-keychains -d user)
+# Security.framework may wait indefinitely for an unavailable GUI session.
+# Bound cleanup commands; the hosted VM is destroyed after this job as a fallback.
+cleanup_command() {
+  python3 - "$@" <<'PYTIMEOUT'
+import subprocess
+import sys
+try:
+    subprocess.run(sys.argv[1:], timeout=15, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+    print("::warning::Runner keychain cleanup did not complete: " + type(error).__name__)
+PYTIMEOUT
+}
 cleanup() {
+  echo 'Cleaning up temporary signing material.'
   if [[ "$trusted_certificate" == true ]]; then
-    sudo -n security remove-trusted-cert -d "$signing_dir/certificate.pem" >/dev/null 2>&1 || true
+    cleanup_command sudo -n security remove-trusted-cert -d "$signing_dir/certificate.pem"
   fi
-  security list-keychains -d user -s "${old_keychains[@]}" >/dev/null 2>&1 || true
-  security delete-keychain "$signing_keychain" >/dev/null 2>&1 || true
+  cleanup_command security list-keychains -d user -s "${old_keychains[@]}"
+  cleanup_command security delete-keychain "$signing_keychain"
   rm -rf "$signing_dir"
 }
 trap cleanup EXIT
