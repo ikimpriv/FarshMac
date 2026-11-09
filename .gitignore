@@ -1,0 +1,26 @@
+# Generated applications, archives, previews, and test output
+/build/
+/dist/
+/coverage.out
+/coverage.html
+*.test
+*.prof
+
+# macOS and editor state
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local configuration, signing material, and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision

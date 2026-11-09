@@ -1,0 +1,13 @@
+* text=auto eol=lf
+*.go text
+*.sh text
+*.md text
+*.yml text
+*.json text
+*.png binary
+*.ico binary
+*.icns binary
+
+# Preserve the exact upstream files, including original whitespace.
+resources/upstream/* -whitespace
+internal/native/assets/vendor/* -whitespace

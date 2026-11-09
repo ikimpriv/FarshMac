@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest a workflow or a Far behavior to implement.
+title: '[Feature] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What workflow needs improvement?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested behavior
+      description: For Far parity requests, include the original shortcut, behavior, and a reference if available.
+    validations:
+      required: true

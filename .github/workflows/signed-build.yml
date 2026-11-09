@@ -1,0 +1,120 @@
+name: Signed macOS release
+
+# Deliberately separate from PR CI. Configure the signing environment to allow
+# main only, with required reviewers, before adding signing secrets.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      self_signed:
+        description: Use the local self-signed certificate (not Developer ID)
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-macos
+  cancel-in-progress: false
+
+jobs:
+  signed-build:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    environment: signing
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - name: Checkout trusted main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate version, release notes, and trusted ancestry
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          version=$(sed -n 's/.*CFBundleShortVersionString<\/key><string>\([^<]*\)<\/string>.*/\1/p' scripts/build.sh)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -f "docs/releases/v${version}.md"
+          if [[ "$RELEASE_REF" == refs/tags/* ]]; then test "$RELEASE_TAG" = "v$version"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.x'
+          package-manager-cache: false
+      - name: Checks without signing credentials
+        run: ./scripts/check.sh --race
+      - name: Import identity, package, and clean up temporary keychain
+        env:
+          FARSHMAC_CERTIFICATE_BASE64: ${{ secrets.FARSHMAC_CERTIFICATE_BASE64 }}
+          FARSHMAC_CERTIFICATE_PASSWORD: ${{ secrets.FARSHMAC_CERTIFICATE_PASSWORD }}
+          FARSHMAC_SIGN_IDENTITY: ${{ secrets.FARSHMAC_SIGN_IDENTITY }}
+          FARSHMAC_SELF_SIGNED: ${{ github.event_name == 'push' || inputs.self_signed }}
+        run: ./scripts/package-ci-signed.sh
+      - name: Upload signed build for review (not notarized)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: FarshMac-macOS-universal-signed
+          path: |
+            build/FarshMac-*-macOS-universal.zip
+            build/FarshMac-*-macOS-universal.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish verified release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: signed-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download and verify this run's signed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          VERSION: ${{ needs.signed-build.outputs.version }}
+        run: |
+          gh run download "$RUN_ID" --name FarshMac-macOS-universal-signed --dir release
+          cd release
+          sha256sum -c "FarshMac-${VERSION}-macOS-universal.zip.sha256"
+      - name: Publish release with ZIP and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.signed-build.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace published assets.' >&2
+            exit 1
+          fi
+          flags=()
+          if [[ "$VERSION" == 0.* ]]; then flags+=(--prerelease); fi
+          gh release create "$tag" --verify-tag --title "FarshMac ${VERSION}" \
+            --notes-file "docs/releases/${tag}.md" "${flags[@]}" \
+            "release/FarshMac-${VERSION}-macOS-universal.zip" \
+            "release/FarshMac-${VERSION}-macOS-universal.zip.sha256"

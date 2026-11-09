@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'">
+<title>FarshMac</title><link rel="stylesheet" href="vendor/xterm.css"><link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="panels" aria-label="File manager"></div>
+<img id="quick-preview" alt="File preview" hidden>
+<div id="terminal" aria-label="Interactive terminal"></div>
+
+<div id="history" tabindex="0" aria-label="Terminal history">
+<div id="history-toolbar"><button id="history-older">↑ Older</button><button id="history-newer">↓ Newer</button><button id="history-live">Live · Esc</button><span id="history-caption"></span></div>
+<div id="history-lines"></div></div>
+<div id="commands" hidden role="dialog" aria-label="Command history">
+<div id="command-caption">Command history</div>
+<select id="command-list" size="12" aria-label="Commands"></select>
+<label for="command-edit">Edit command (Shift+Enter: new line)</label>
+<textarea id="command-edit" rows="3" spellcheck="false"></textarea>
+<div><button id="command-run">Run · Enter</button> <button id="command-cancel">Cancel · Esc</button></div>
+</div>
+<div id="footer"></div>
+<script src="vendor/xterm.js"></script><script src="vendor/addon-unicode11.js"></script><script src="history.js"></script><script src="history_view.js"></script><script src="commands.js"></script><script src="app.js"></script>
+</body></html>

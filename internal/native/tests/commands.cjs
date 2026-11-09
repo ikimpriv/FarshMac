@@ -1,0 +1,23 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {context,sent,elements,docListeners}=require('./harness.cjs')();
+const settle=()=>new Promise(r=>setImmediate(r));
+const key=(key,extra={})=>docListeners.keydown({key,preventDefault(){},...extra});
+(async()=>{
+ context.window.farshmacUpdate({mode:'terminal',shellReady:true});await settle();
+ context.window.farshmacToggleHistory();assert.equal(sent.at(-1).Type,'commandHistory');
+ const commands=['echo "first"\nprintf second','ls -la'];
+ context.window.farshmacUpdate({mode:'terminal',shellReady:true,commands});await settle();
+ assert.equal(elements.get('command-list').children.length,2);
+ assert.equal(elements.get('command-edit').value,commands[0]);
+ elements.get('command-list').selectedIndex=1;elements.get('command-list').onchange();
+ assert.equal(elements.get('command-edit').value,commands[1]);
+ elements.get('command-edit').value='ls -lh';key('Enter');
+ assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))),{Type:'commandHistoryRun',Text:'ls -lh'});
+ assert.equal(elements.get('commands').hidden,true);
+ context.window.farshmacToggleHistory();const n=sent.length;key('Escape');assert.equal(sent.length,n,'cancel must not execute');
+ context.window.farshmacUpdate({mode:'terminal',shellReady:false});await settle();
+ context.window.farshmacToggleHistory();assert.equal(sent.length,n+1,'busy shell must not receive history request');
+ context.window.farshmacUpdate({mode:'terminal',shellReady:true});await settle();assert.equal(sent.filter(m=>m.Type==='commandHistory').length,3);
+ console.log('Command history: shell snapshot, selection, editing, run, cancel and busy shell: OK');
+})().catch(e=>{console.error(e);process.exitCode=1});
