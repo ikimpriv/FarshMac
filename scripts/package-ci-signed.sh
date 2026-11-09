@@ -23,7 +23,7 @@ while IFS= read -r item; do
 done < <(security list-keychains -d user)
 cleanup() {
   if [[ "$trusted_certificate" == true ]]; then
-    security remove-trusted-cert "$signing_dir/certificate.pem" >/dev/null 2>&1 || true
+    sudo -n security remove-trusted-cert -d "$signing_dir/certificate.pem" >/dev/null 2>&1 || true
   fi
   security list-keychains -d user -s "${old_keychains[@]}" >/dev/null 2>&1 || true
   security delete-keychain "$signing_keychain" >/dev/null 2>&1 || true
@@ -44,7 +44,8 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
   -k "$keychain_password" "$signing_keychain" >/dev/null
 security list-keychains -d user -s "$signing_keychain" "${old_keychains[@]}"
 if [[ "${FARSHMAC_SELF_SIGNED:-false}" == true ]]; then
-  # Import trust only on this disposable runner and only for code signing.
+  # Use administrator-domain trust to avoid an interactive authorization dialog.
+  # This is restricted to code signing on the disposable hosted runner.
   /usr/bin/openssl pkcs12 -in "$signing_dir/certificate.p12" -nokeys -clcerts \
     -passin env:FARSHMAC_CERTIFICATE_PASSWORD -out "$signing_dir/certificate.pem"
   cert_hash=$(/usr/bin/openssl x509 -in "$signing_dir/certificate.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
@@ -52,7 +53,7 @@ if [[ "${FARSHMAC_SELF_SIGNED:-false}" == true ]]; then
     echo 'Certificate fingerprint does not match the configured signing identity.' >&2; exit 1;
   }
   trusted_certificate=true
-  security add-trusted-cert -r trustRoot -p codeSign -k "$signing_keychain" "$signing_dir/certificate.pem"
+  sudo -n security add-trusted-cert -d -r trustRoot -p codeSign -k "$signing_keychain" "$signing_dir/certificate.pem"
 fi
 unset FARSHMAC_CERTIFICATE_PASSWORD keychain_password
 rm -f "$signing_dir/certificate.p12"
