@@ -1,7 +1,7 @@
 name: Signed macOS release
 
 # Deliberately separate from PR CI. Configure the signing environment to allow
-# main only, with required reviewers, before adding signing secrets.
+# main and release tags before adding signing secrets.
 on:
   push:
     tags: ['v*']
@@ -65,7 +65,7 @@ jobs:
           FARSHMAC_CERTIFICATE_BASE64: ${{ secrets.FARSHMAC_CERTIFICATE_BASE64 }}
           FARSHMAC_CERTIFICATE_PASSWORD: ${{ secrets.FARSHMAC_CERTIFICATE_PASSWORD }}
           FARSHMAC_SIGN_IDENTITY: ${{ secrets.FARSHMAC_SIGN_IDENTITY }}
-          FARSHMAC_SELF_SIGNED: ${{ github.event_name == 'push' || inputs.self_signed }}
+          FARSHMAC_SELF_SIGNED: ${{ github.event_name == 'push' && vars.FARSHMAC_SELF_SIGNED != 'false' || github.event_name == 'workflow_dispatch' && inputs.self_signed }}
         run: ./scripts/package-ci-signed.sh
       - name: Upload signed build for review (not notarized)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

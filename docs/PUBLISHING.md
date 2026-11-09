@@ -133,7 +133,9 @@ Using the same certificate and `local.farshmac.app` keeps the designated require
 consistent with local builds. The user still grants Full Disk Access explicitly.
 Downloading an artifact introduces Gatekeeper/quarantine checks independently of
 TCC; a self-signed build is not a notarized public release. For public distribution,
-replace the secrets with a Developer ID identity, disable **self_signed**, and add
+replace the secrets with a Developer ID identity, set the repository Actions
+variable `FARSHMAC_SELF_SIGNED=false` for tag builds (and disable **self_signed**
+for manual runs), and add
 Apple notarization/stapling separately. Switching identities requires granting
 permissions again once.
 
