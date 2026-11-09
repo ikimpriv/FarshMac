@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 — File-operation dialogs and recovery
 
 - Adapt Far Manager file-operation dialogs: source/destination size and date, Overwrite / Skip / Rename / Append, Remember choice, and read-only confirmations.
 - Add Retry / Skip / Skip all / Cancel for transfer and deletion failures, including individual children of folders and archive-operation failures.

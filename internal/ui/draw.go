@@ -10,7 +10,7 @@ func (a *App) Draw() *Grid {
 	for _, section := range a.menuSections() {
 		g.Text(section.X, 0, section.Name, Black, Cyan, len(section.Name))
 	}
-	brand := "FarshMac 0.19.1"
+	brand := "FarshMac 0.20.0"
 	if g.W >= 70 {
 		g.Text(g.W-len(brand)-2, 0, brand, Black, Cyan, len(brand))
 	}

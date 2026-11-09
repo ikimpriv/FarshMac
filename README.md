@@ -9,7 +9,7 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.19.1 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.20.0 · macOS 12+ · Apple Silicon and Intel**
 
 [Changelog](CHANGELOG.md) · [File operations](docs/FILE_OPERATIONS.md) · [Contributing](CONTRIBUTING.md)
 
@@ -21,11 +21,11 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the first public preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.19.1)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.20.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.19.1.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.20.0.md) for installation details and known limitations.
 
 ## Features
 
