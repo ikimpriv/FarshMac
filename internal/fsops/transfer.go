@@ -68,7 +68,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		}
 	}
 	di, e := os.Lstat(dst)
-	if e == nil && di.Mode()&os.ModeSymlink != 0 {
+	if e == nil && di.Mode()&os.ModeSymlink != 0 && !os.SameFile(si, di) {
 		// A link to a directory acts as that directory: merge into it, never replace it.
 		if target, err := os.Stat(dst); err == nil && target.IsDir() {
 			if si.IsDir() {
@@ -102,6 +102,16 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		return e
 	}
 	if src == dst || os.SameFile(si, di) {
+		if move && caseOnlyRename(src, dst, si) {
+			// A case-insensitive volume resolved the new spelling to the source.
+			if e = os.Rename(src, dst); e == nil {
+				o.CompleteTree(src)
+			}
+			return e
+		}
+		if !move {
+			return fmt.Errorf("cannot copy a file onto itself: %s", dst)
+		}
 		return fmt.Errorf("source and destination are the same file")
 	}
 	if si.IsDir() && di.IsDir() {
@@ -256,6 +266,32 @@ func moveEntryAcross(src, dst string, o *Operation) error {
 		return err
 	}
 	return IgnoreSkipped(o.Attempt("delete source folder", src, "", func() error { return os.Remove(src) }))
+}
+
+// caseOnlyRename reports whether dst names the source entry itself in another
+// letter case. Two hard links whose names differ only by case are distinct
+// entries and remain a collision.
+func caseOnlyRename(src, dst string, si os.FileInfo) bool {
+	if src == dst || filepath.Dir(src) != filepath.Dir(dst) || !strings.EqualFold(filepath.Base(src), filepath.Base(dst)) {
+		return false
+	}
+	if st, ok := si.Sys().(*syscall.Stat_t); ok && !si.IsDir() && st.Nlink > 1 {
+		f, err := os.Open(filepath.Dir(dst))
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		names, err := f.Readdirnames(-1)
+		if err != nil {
+			return false
+		}
+		for _, name := range names {
+			if name == filepath.Base(dst) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func readOne(path string) ([]os.DirEntry, error) {

@@ -101,7 +101,7 @@ func (a *App) transferDialog(move bool) {
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			isDir := err == nil && exists && info.IsDir()
+			isDir := err == nil && exists && info.IsDir() && !(len(paths) == 1 && caseRename(paths[0], dst))
 			if len(paths) > 1 && !isDir {
 				return fmt.Errorf("destination must be an existing directory")
 			}
@@ -216,6 +216,13 @@ func (a *App) archiveCommands() {
 			return func() { a.report("Archive: "+filepath.Base(path), text) }, err
 		})
 	})
+}
+
+// caseRename: on a case-insensitive volume "Folder" → "folder" finds the source
+// itself, which must be renamed rather than treated as a destination folder.
+func caseRename(src, dst string) bool {
+	src, dst = filepath.Clean(src), filepath.Clean(dst)
+	return src != dst && filepath.Dir(src) == filepath.Dir(dst) && strings.EqualFold(filepath.Base(src), filepath.Base(dst))
 }
 
 // The prefilled single-item path names the item itself, even when it exists.

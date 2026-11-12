@@ -90,6 +90,30 @@ func TestLocalTransferPermissionErrorStaysVisible(t *testing.T) {
 	}
 }
 
+func TestMoveDialogRenamesFolderCase(t *testing.T) {
+	left := t.TempDir()
+	if e := os.Mkdir(filepath.Join(left, "Folder"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := os.Lstat(filepath.Join(left, "folder")); e != nil {
+		t.Skip("volume is case-sensitive")
+	}
+	a, e := New(left, left)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "Folder")
+	a.key(Message{Key: "F6"})
+	a.Dialog.Input = filepath.Join(left, "folder")
+	a.key(Message{Key: "Enter"})
+	waitWork(t, a)
+	entries, e := os.ReadDir(left)
+	if e != nil || len(entries) != 1 || entries[0].Name() != "folder" {
+		t.Fatalf("entries %v %v status %s form %+v", entries, e, a.Status, a.Form)
+	}
+}
+
 func TestCopyDialogAcceptsSymlinkedDirectory(t *testing.T) {
 	for _, key := range []string{"F5", "F6"} {
 		t.Run(key, func(t *testing.T) {

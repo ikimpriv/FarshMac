@@ -44,6 +44,13 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	if err != nil {
 		return err
 	}
+	if caseOnlyRename(f, src, dst) {
+		// A case-insensitive server resolved the new spelling to the source.
+		if err = f.Rename(src, dst); err == nil {
+			o.CompleteTree(src)
+		}
+		return err
+	}
 	if si.IsDir() {
 		di = FollowDir(f, dst, di) // Merge into a linked directory; never replace the link.
 	}
@@ -129,4 +136,22 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	default:
 		return fsops.ErrCancelled
 	}
+}
+
+// caseOnlyRename is true when dst differs from src only in letter case and the
+// parent listing has no entry spelled exactly like dst (else it is a real collision).
+func caseOnlyRename(f FS, src, dst string) bool {
+	if path.Dir(src) != path.Dir(dst) || !strings.EqualFold(path.Base(src), path.Base(dst)) {
+		return false
+	}
+	entries, err := f.ReadDir(path.Dir(dst))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Name() == path.Base(dst) {
+			return false
+		}
+	}
+	return true
 }
