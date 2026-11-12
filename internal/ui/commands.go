@@ -232,7 +232,7 @@ func (a *App) historyMenu(kind string) {
 	}
 	a.folderHistory = paths
 	reverse(paths)
-	a.choose("Folder history", paths, func(i int) { a.error(a.Panels[a.Active].Load(paths[i])) })
+	a.choose("Folder history", paths, func(i int) { a.goFolderHistory(paths[i]) })
 }
 func reverse(s []string) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
@@ -313,6 +313,10 @@ func (a *App) fileAttributes() {
 	})
 }
 func (a *App) createLink() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if a.remoteUnsupported() {
 		return
 	}
@@ -495,6 +499,18 @@ func (a *App) updatePreview() {
 		return
 	}
 	path := source.Current()
+	if path == "" {
+		a.previewKey, a.previewImage = "", ""
+		a.previewText = "No file selected"
+		return
+	}
+	if source.Archive != nil {
+		if _, inside := source.Archive.Relative(path); inside {
+			a.previewKey, a.previewImage = "", ""
+			a.previewText = "Archive member: press F3 to extract and view"
+			return
+		}
+	}
 	key := path
 	if len(source.Entries) > 0 {
 		e := source.Entries[source.Cursor]
@@ -527,7 +543,14 @@ func (a *App) updatePreview() {
 		imageData := ""
 		info, e := os.Stat(path)
 		if e != nil {
-			text = fmt.Sprint(e)
+			if link, le := os.Lstat(path); le == nil && link.Mode()&os.ModeSymlink != 0 {
+				target, _ := os.Readlink(path)
+				text = fmt.Sprintf("%s\nBroken symbolic link → %s", filepath.Base(path), target)
+			} else {
+				text, _ = describeReadError(path, e)
+			}
+		} else if kind := specialFileKind(info.Mode()); kind != "" {
+			text = fmt.Sprintf("%s\n%s (no preview)", filepath.Base(path), kind)
 		} else if info.IsDir() {
 			var entries []os.DirEntry
 			e := fsops.ReadDirectory(path, o, func(entry os.DirEntry) error {
@@ -548,7 +571,11 @@ func (a *App) updatePreview() {
 			}
 			text = fmt.Sprintf("%s\nDirectory (preview, up to 100 entries)\n", path)
 			if e != nil {
-				text += e.Error()
+				footer, hint := describeReadError(path, e)
+				text += footer
+				if hint != "" {
+					text += "\n" + hint
+				}
 			} else {
 				for i, entry := range entries {
 					if i == 100 {

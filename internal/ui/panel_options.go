@@ -148,8 +148,28 @@ func (p *Panel) sortEntries(files []Entry) {
 }
 func (a *App) sortMenu(index int) {
 	p := &a.Panels[index]
-	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Directories first", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
-	a.choose("Sort mode", names, func(i int) {
+	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Mix directories and files", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
+	labels := make([]string, len(names))
+	for i, name := range names {
+		var on bool
+		switch i {
+		case 4:
+			on = p.Reverse
+		case 5:
+			on = p.CaseSensitive
+		case 6:
+			on = p.MixDirectories
+		case 7:
+			on = p.SelectedFirst
+		default:
+			on = p.Sort == name || p.Sort == "" && name == "Name"
+		}
+		labels[i] = name
+		if on {
+			labels[i] = "✓ " + name
+		}
+	}
+	a.choose("Sort mode", labels, func(i int) {
 		switch i {
 		case 0, 1, 2, 3, 8, 9, 10, 11, 12:
 			p.Sort = names[i]
@@ -244,6 +264,10 @@ func readDescriptions(path string, ops ...*fsops.Operation) map[string]string {
 	return out
 }
 func (a *App) describeFiles() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if a.remoteUnsupported() {
 		return
 	}
@@ -320,7 +344,9 @@ func writeConfigFile(path string, data []byte, ops ...*fsops.Operation) error {
 	return os.Rename(f.Name(), path)
 }
 func (a *App) setView(index int, view string) {
-	if a.Panels[index].Remote != nil && (view == "Tree panel" || view == "Info panel" || view == "Quick view") {
+	// Quick view only previews the other panel, so it works for remote
+	// panels like Ctrl+Q; Tree and Info panel need a local folder.
+	if a.Panels[index].Remote != nil && (view == "Tree panel" || view == "Info panel") {
 		a.Status = "Choose a file view for remote panels"
 		return
 	}
@@ -331,7 +357,9 @@ func (a *App) setView(index int, view string) {
 	}
 	p.View = view
 	p.Hidden = false
-	a.error(p.Load(p.Path))
+	if p.Remote == nil || view != "Quick view" {
+		a.error(p.Load(p.Path))
+	}
 	a.previewKey = ""
 }
 func (a *App) volumes(index int) {
@@ -342,7 +370,33 @@ func (a *App) volumes(index int) {
 	for _, e := range items {
 		paths = append(paths, filepath.Join("/Volumes", e.Name()))
 	}
-	a.choose("Volumes and home", paths, func(i int) { a.Active = index; a.Panels[index].Remote = nil; a.error(a.Panels[index].Load(paths[i])) })
+	a.choose("Volumes and home", paths, func(i int) { a.openVolume(index, paths[i]) })
+}
+
+// openVolume switches a panel to a local volume. The volume is probed before
+// the panel leaves its current source, so an unmounted or unreadable volume
+// keeps a remote/archive panel intact. A hidden panel is shown first.
+func (a *App) openVolume(index int, path string) {
+	f, err := os.Open(path)
+	if err == nil {
+		_, err = f.ReadDir(1)
+		f.Close()
+		if err == io.EOF {
+			err = nil
+		}
+	}
+	if err != nil {
+		a.error(err)
+		return
+	}
+	p := &a.Panels[index]
+	p.Hidden = false
+	a.Active = index
+	p.cancelPanelLoad()
+	p.cancelTree()
+	previous := *p
+	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
+	a.error(p.loadSource(path, previous, ""))
 }
 func (a *App) folderShortcuts() {
 	names := []string{"Save current folder…"}

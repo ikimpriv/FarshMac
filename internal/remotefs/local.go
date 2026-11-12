@@ -24,6 +24,7 @@ func (Local) ReadDir(p string) ([]os.FileInfo, error) {
 	return out, nil
 }
 func (Local) Lstat(p string) (os.FileInfo, error)  { return os.Lstat(p) }
+func (Local) Stat(p string) (os.FileInfo, error)   { return os.Stat(p) }
 func (Local) Open(p string) (io.ReadCloser, error) { return os.Open(p) }
 func (Local) Create(p string) (io.WriteCloser, error) {
 	return os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)

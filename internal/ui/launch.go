@@ -95,6 +95,9 @@ func (a *App) launch(path string, plan LaunchPlan) {
 // Shift+Enter uses Finder's default application, ignoring Far associations and
 // the command line. Pass the absolute path as one argument, never shell syntax.
 func (a *App) openSystemSelected() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
 	if p.Remote != nil {
 		a.Status = "Copy remote files to a local panel before opening them with macOS"
@@ -113,6 +116,9 @@ func (a *App) openSystemSelected() {
 	a.launch(path, externalPlan(path, "", false))
 }
 func (a *App) openConfigured(edit, alternate, forceInternal bool) {
+	if !a.requireFilePanel() {
+		return
+	}
 	p0 := &a.Panels[a.Active]
 	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir {
 		a.folderSize()
@@ -151,12 +157,18 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 	a.launch(path, a.viewPlan(path, edit, alternate, forceInternal))
 }
 func (a *App) enterFile() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if p := &a.Panels[a.Active]; p.Remote != nil {
 		if len(p.Entries) == 0 {
 			return
 		}
-		if p.Entries[p.Cursor].Dir {
+		if e := p.Entries[p.Cursor]; e.Dir {
 			a.error(p.Load(p.Current()))
+		} else if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
+			a.enterRemoteLink()
 		} else {
 			a.openRemoteDocument(false)
 		}
@@ -177,7 +189,9 @@ func (a *App) enterFile() {
 		return
 	}
 	if info.IsDir() {
-		if strings.EqualFold(filepath.Ext(path), ".app") {
+		// The tree shows bundles as folders: Enter re-roots there, and
+		// Shift+Enter is the way to launch the application.
+		if strings.EqualFold(filepath.Ext(path), ".app") && p.View != "Tree panel" {
 			a.launch(path, externalPlan(path, "", false))
 		} else {
 			a.error(p.Load(path))

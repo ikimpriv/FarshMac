@@ -149,6 +149,18 @@ func (f *ftpFS) Lstat(p string) (os.FileInfo, error) {
 	}
 	return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
 }
+
+// Stat follows symbolic links as far as FTP allows: a path the server lets
+// us change into is a folder; anything else is described by Lstat.
+func (f *ftpFS) Stat(p string) (os.FileInfo, error) {
+	if err := SafePath(p); err != nil {
+		return nil, err
+	}
+	if err := f.client.ChangeDir(p); err == nil {
+		return ftpInfo{&ftp.Entry{Name: path.Base(p), Type: ftp.EntryTypeFolder}}, nil
+	}
+	return f.Lstat(p)
+}
 func (f *ftpFS) Open(p string) (io.ReadCloser, error) {
 	if err := SafePath(p); err != nil {
 		return nil, err

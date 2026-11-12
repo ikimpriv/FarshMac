@@ -9,6 +9,10 @@ import (
 )
 
 func (a *App) deleteSelected(permanent bool) {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if a.Panels[a.Active].Remote != nil {
 		a.remoteDelete()
 		return

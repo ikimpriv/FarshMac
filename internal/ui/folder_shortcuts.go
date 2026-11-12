@@ -82,8 +82,11 @@ func (a *App) goFolderShortcut(n int) {
 	}
 	p.cancelPanelLoad()
 	p.cancelTree()
+	// Remembered cursor positions and marks of visited folders survive the
+	// jump; going up still focuses the folder just left (see beginLoad).
+	previous := *p
 	p.Remote = nil
+	p.RemoteLocalPath = ""
 	p.Archive = nil
-	p.states = nil
-	a.error(p.Load(path))
+	a.error(p.loadSource(path, previous, ""))
 }

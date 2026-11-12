@@ -11,7 +11,11 @@ import (
 )
 
 func (a *App) transferDialog(move bool) {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
+
 	if move && (p.Remote != nil || a.Panels[1-a.Active].Remote != nil) {
 		a.remoteMoveDialog()
 		return

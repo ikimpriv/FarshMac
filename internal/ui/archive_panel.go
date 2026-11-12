@@ -42,7 +42,7 @@ func (p *Panel) loadArchiveDirectory(path string) error {
 		if p.IgnoreDSStore && m.Name() == ".DS_Store" || p.HideHidden && strings.HasPrefix(m.Name(), ".") {
 			continue
 		}
-		if !m.IsDir() && !matchesMask(m.Name(), p.Filter, p.MaskGroups) {
+		if !m.IsDir() && !matchesMask(m.Name(), p.activeFilter(), p.MaskGroups) {
 			continue
 		}
 		files = append(files, Entry{Name: m.Name(), Info: m, Dir: m.IsDir()})
@@ -164,17 +164,14 @@ func (a *App) matchOtherPanel() {
 	dst := &a.Panels[1-a.Active]
 	dst.cancelPanelLoad()
 	dst.cancelTree()
-	previous := dst.Archive
-	previousRemote, previousLocal := dst.Remote, dst.RemoteLocalPath
+	previous := *dst
 	dst.Remote, dst.RemoteLocalPath = src.Remote, src.RemoteLocalPath
 	dst.Archive = src.Archive
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
 		dst.View = "Full"
 	}
-	if err := dst.Load(src.Path); err != nil {
-		dst.Archive = previous
-		dst.Remote, dst.RemoteLocalPath = previousRemote, previousLocal
-		a.error(err)
+	if err := dst.loadSource(src.Path, previous, "Other panel kept: "); err != nil {
+		a.Status = "Other panel kept: " + err.Error()
 		return
 	}
 	if len(src.Entries) > 0 {
@@ -195,6 +192,11 @@ func (a *App) togglePanel(index int) {
 	a.Panels[index].Hidden = !a.Panels[index].Hidden
 	if a.Panels[index].Hidden && a.Active == index && !a.Panels[1-index].Hidden {
 		a.Active = 1 - index
+	}
+	// A read abandoned while hidden would otherwise strand the panel with
+	// only ".." and "Reading folder…" in its footer.
+	if p := &a.Panels[index]; !p.Hidden && p.load == nil && p.tree == nil && strings.HasPrefix(p.Err, "Reading ") {
+		a.error(p.Load(p.Path))
 	}
 }
 

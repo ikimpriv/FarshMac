@@ -37,6 +37,8 @@ type Panel struct {
 	Archive                *fsops.ArchiveIndex
 	Async                  bool
 	load                   *panelLoad
+	rollback               *panelRollback
+	loadStatus             string
 	readOperation          *fsops.Operation
 	tree                   *treeLoad
 	treeLabels             map[string]string
@@ -136,7 +138,7 @@ func (p *Panel) Load(path string) error {
 				isDir = target.IsDir()
 			}
 		}
-		if !isDir && !matchesMask(e.Name(), p.Filter, p.MaskGroups) {
+		if !isDir && !matchesMask(e.Name(), p.activeFilter(), p.MaskGroups) {
 			return nil
 		}
 		files = append(files, Entry{e.Name(), info, isDir})
@@ -176,7 +178,7 @@ func (p *Panel) beginLoad(abs string) panelState {
 		}
 	}
 	if changed {
-		p.History = appendUnique(p.History, abs, 200)
+		p.History = appendUnique(p.History, p.historyEntry(abs), 200)
 	}
 	p.Path = abs
 	p.Entries = nil
@@ -887,7 +889,7 @@ func (a *App) key(m Message) {
 	p := &a.Panels[a.Active]
 	switch m.Key {
 	case "Tab":
-		a.Active = 1 - a.Active
+		a.switchPanels()
 	case "ArrowUp":
 		if m.Ctrl {
 			a.historyAt = max(0, a.historyAt-1)
@@ -958,6 +960,9 @@ func (a *App) key(m Message) {
 	}
 }
 func (a *App) mark() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
 	if len(p.Entries) > 0 {
 		e := p.Entries[p.Cursor]
@@ -999,6 +1004,9 @@ func (a *App) function(n int) {
 	case 5, 6:
 		a.transferDialog(n == 6)
 	case 7:
+		if !a.requireFilePanel() {
+			return
+		}
 		if p.Remote != nil {
 			a.remoteMkdir()
 			return
@@ -1175,7 +1183,7 @@ func (a *App) click(m Message) {
 		a.function(min(10, m.X*10/a.Cols+1))
 		return
 	}
-	if a.infoPanelClick(m) {
+	if a.infoPanelClick(m) || a.quickViewClick(m) {
 		return
 	}
 	a.panelMouse(m)
@@ -1196,6 +1204,10 @@ jobsDone:
 	for i := range a.Panels {
 		if a.Panels[i].pollTree() || a.Panels[i].pollPanelLoad() {
 			a.dirty = true
+		}
+		if s := a.Panels[i].loadStatus; s != "" {
+			a.Panels[i].loadStatus = ""
+			a.Status = s
 		}
 	}
 	if a.Operation != nil {
@@ -1362,7 +1374,11 @@ Text editing/decoding: 64 MiB limit. Larger files: paged hex/dump viewer.
 Esc returns to the file panels.`
 
 func (a *App) insertFilename() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
+
 	if p.Cursor < 0 || p.Cursor >= len(p.Entries) {
 		return
 	}

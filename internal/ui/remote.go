@@ -11,6 +11,46 @@ import (
 	"farshmac/internal/remotefs"
 )
 
+// remoteLinkResolveLimit bounds the extra round trips per remote listing.
+var remoteLinkResolveLimit = 500
+
+// enterRemoteLink resolves a remote symbolic link that the listing did not
+// follow: a folder target is entered, anything else is opened as a file.
+func (a *App) enterRemoteLink() {
+	index := a.Active
+	p := &a.Panels[index]
+	config, base, target := *p.Remote, p.Path, p.Current()
+	a.backgroundTask("Checking remote link", func(o *fsops.Operation) (func(), func(), error) {
+		f, err := config.Dial(o.Context())
+		if err != nil {
+			return nil, nil, err
+		}
+		defer f.Close()
+		dir := false
+		if stater, ok := f.(remotefs.Stater); ok {
+			info, err := stater.Stat(target)
+			dir = err == nil && info.IsDir()
+		} else {
+			_, err = f.ReadDir(target)
+			dir = err == nil
+		}
+		if err := o.Check(); err != nil {
+			return nil, nil, err
+		}
+		return func() {
+			p := &a.Panels[index]
+			if p.Remote == nil || p.Path != base || a.Active != index || p.Current() != target {
+				return
+			}
+			if dir {
+				a.error(p.Load(target))
+			} else {
+				a.openRemoteDocument(false)
+			}
+		}, nil, nil
+	})
+}
+
 func (p *Panel) loadRemote(path string) error {
 	o := p.readOperation
 	if o == nil {
@@ -30,6 +70,8 @@ func (p *Panel) loadRemote(path string) error {
 		return fmt.Errorf("remote folder exceeds 100000 entries")
 	}
 	var files []Entry
+	stater, _ := f.(remotefs.Stater)
+	links := 0
 	for _, info := range entries {
 		if err := o.Check(); err != nil {
 			return err
@@ -44,10 +86,21 @@ func (p *Panel) loadRemote(path string) error {
 		if p.IgnoreDSStore && name == ".DS_Store" || p.HideHidden && strings.HasPrefix(name, ".") {
 			continue
 		}
-		if !info.IsDir() && !matchesMask(name, p.Filter, p.MaskGroups) {
+		// Listings report links themselves (lstat); follow a bounded number
+		// so links to folders open as folders. The rest resolve on Enter.
+		isDir := info.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 && stater != nil && links < remoteLinkResolveLimit {
+			links++
+			if target, err := stater.Stat(filepath.Join(path, name)); err == nil {
+				isDir = target.IsDir()
+			} else if err := o.Check(); err != nil {
+				return err
+			}
+		}
+		if !isDir && !matchesMask(name, p.activeFilter(), p.MaskGroups) {
 			continue
 		}
-		files = append(files, Entry{Name: name, Info: info, Dir: info.IsDir()})
+		files = append(files, Entry{Name: name, Info: info, Dir: isDir})
 	}
 	state := p.beginLoad(path)
 	p.sortEntries(files)
@@ -162,11 +215,16 @@ func (a *App) disconnectRemote(index int) {
 	}
 	p.cancelPanelLoad()
 	p.cancelTree()
-	local := p.RemoteLocalPath
+	home, _ := os.UserHomeDir()
+	local := accessibleFolder(p.RemoteLocalPath, home)
+	previous := *p
 	p.Remote = nil
 	p.RemoteLocalPath = ""
 	p.states = nil
-	a.error(p.Load(local))
+	if err := p.loadSource(local, previous, "Cannot disconnect: "); err != nil {
+		a.error(err)
+		return
+	}
 	a.Status = "Disconnected"
 }
 func (a *App) remoteMkdir() {
