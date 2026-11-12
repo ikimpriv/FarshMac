@@ -234,6 +234,7 @@ type Dialog struct {
 	Title, Message, Input string
 	Confirm               func(string)
 	Error                 string
+	Back                  int // caret position counted from the end of Input
 }
 type Message struct {
 	History                  []json.RawMessage
@@ -441,13 +442,16 @@ func (a *App) prompt(title, msg, value string, fn func(string)) {
 		value = a.dialogValues[title]
 	}
 	a.Dialog = &Dialog{Selected: a.Settings.SelectDialogInput, Title: title, Message: msg, Input: value, Confirm: func(s string) {
-		if a.Settings.RememberDialogValues {
+		a.activePrompt = &promptSpec{title, msg, fn}
+		a.promptRejected = false
+		fn(s)
+		// A value rejected by validation is not remembered (P5-15).
+		if a.Settings.RememberDialogValues && !a.promptRejected {
 			if a.dialogValues == nil {
 				a.dialogValues = map[string]string{}
 			}
 			a.dialogValues[title] = s
 		}
-		fn(s)
 	}}
 	a.dirty = true
 }
@@ -618,7 +622,7 @@ func (a *App) Handle(raw string) {
 				a.Dialog.Input = ""
 				a.Dialog.Selected = false
 			}
-			a.Dialog.Input += strings.ReplaceAll(m.Text, "\n", "")
+			a.Dialog.insert(strings.ReplaceAll(m.Text, "\n", ""))
 		} else if a.Doc == nil {
 			a.Command += strings.ReplaceAll(m.Text, "\n", "")
 		}
@@ -700,20 +704,19 @@ func (a *App) key(m Message) {
 				d.Focus = 3 - d.Focus
 			} else {
 				d.Selected = false
+				d.moveCaret(m.Key)
 			}
-		case "Backspace":
+		case "Backspace", "Delete":
 			if d.Focus > 0 {
 				return
 			}
 			if d.Selected {
 				d.Input = ""
 				d.Selected = false
+				d.Back = 0
 				return
 			}
-			r := []rune(d.Input)
-			if len(r) > 0 {
-				d.Input = string(r[:len(r)-1])
-			}
+			d.deleteAtCaret(m.Key == "Backspace")
 		default:
 			if d.Focus > 0 {
 				if m.Key == " " {
@@ -727,8 +730,9 @@ func (a *App) key(m Message) {
 				if d.Selected {
 					d.Input = ""
 					d.Selected = false
+					d.Back = 0
 				}
-				d.Input += m.Key
+				d.insert(m.Key)
 			}
 		}
 		return

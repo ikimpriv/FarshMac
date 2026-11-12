@@ -24,7 +24,7 @@ type Settings struct {
 	ExternalViewerDefault, ExternalEditorDefault                                                     bool
 	CompleteFiles, CompleteIgnoreCase, SelectDialogInput, RememberDialogValues, InfoHost, InfoVolume bool
 	FolderDescriptions                                                                               string
-	AutoSave, RestoreFolders, MenuWrap, ShowKeys                                                     bool
+	AutoSave, MenuWrap, ShowKeys                                                                     bool
 	FontSize                                                                                         int
 	ColorTheme                                                                                       string
 	ConfirmDelete                                                                                    bool
@@ -154,7 +154,7 @@ func (a *App) settingsMenu(kind string) {
 		a.form(kind, []Field{{Label: "Font size (10–24)", Value: strconv.Itoa(a.Settings.FontSize)}, toggle("Key bar", a.Settings.ShowKeys), toggle("Wrap menus", a.Settings.MenuWrap), toggle("Select initial dialog text", a.Settings.SelectDialogInput), toggle("Remember dialog values", a.Settings.RememberDialogValues), toggle("Confirm deletion", a.Settings.ConfirmDelete), toggle("Confirm overwrite", a.Settings.ConfirmOverwrite), toggle("Save setup on exit", a.Settings.AutoSave)}, func(f []Field) {
 			n, err := strconv.Atoi(f[0].Value)
 			if err != nil || n < 10 || n > 24 {
-				a.Status = "Font size must be 10–24"
+				a.reopenForm(f, 0, "Font size must be 10–24")
 				return
 			}
 			a.Settings.FontSize = n
@@ -170,12 +170,12 @@ func (a *App) settingsMenu(kind string) {
 		a.form(kind, []Field{{Label: "Shell: bash / sh / zsh (new windows)", Value: a.Settings.Shell}, {Label: "Command history entries (1–10000)", Value: strconv.Itoa(a.Settings.HistoryLimit)}, toggle("Complete filenames", a.Settings.CompleteFiles), toggle("Completion ignores case", a.Settings.CompleteIgnoreCase), toggle("Use custom shell prompt / hooks (new windows, may be slow)", a.Settings.ShellCustomPrompt)}, func(f []Field) {
 			shell := strings.TrimSpace(f[0].Value)
 			if !terminal.ValidShell(shell) {
-				a.Status = "Choose bash, sh or zsh"
+				a.reopenForm(f, 0, "Choose bash, sh or zsh")
 				return
 			}
 			n, err := strconv.Atoi(f[1].Value)
 			if err != nil || n < 1 || n > 10000 {
-				a.Status = "History entries must be 1–10000"
+				a.reopenForm(f, 1, "History entries must be 1–10000")
 				return
 			}
 			a.Settings.Shell = shell
@@ -188,13 +188,6 @@ func (a *App) settingsMenu(kind string) {
 	case "Advanced settings":
 		items := []string{"Colors", "Info panel settings", "Tree settings", "Folder description files", "File descriptions", "Groups of file masks", "Sort groups", "Code pages"}
 		a.choose(kind, items, func(i int) { a.settingsMenu(items[i]) })
-	case "Dialog settings":
-		a.form(kind, []Field{toggle("Select initial input", a.Settings.SelectDialogInput), toggle("Remember values", a.Settings.RememberDialogValues)}, func(f []Field) {
-			a.Settings.SelectDialogInput = f[0].Checked
-			a.Settings.RememberDialogValues = f[1].Checked
-		})
-	case "AutoComplete settings":
-		a.form(kind, []Field{toggle("Files (⌘Space)", a.Settings.CompleteFiles), toggle("Ignore case", a.Settings.CompleteIgnoreCase)}, func(f []Field) { a.Settings.CompleteFiles = f[0].Checked; a.Settings.CompleteIgnoreCase = f[1].Checked })
 	case "Info panel settings":
 		a.form(kind, []Field{toggle("Computer and user", a.Settings.InfoHost), toggle("Drive information", a.Settings.InfoVolume), toggle("Memory information", a.Settings.InfoMemory), toggle("Folder description", a.Settings.InfoDescription), toggle("Power status", a.Settings.InfoPower)}, func(f []Field) {
 			a.Settings.InfoHost = f[0].Checked
@@ -207,37 +200,27 @@ func (a *App) settingsMenu(kind string) {
 		})
 	case "Folder description files":
 		a.prompt(kind, "Names separated by commas", a.Settings.FolderDescriptions, func(s string) {
+			var names []string
 			for _, name := range strings.Split(s, ",") {
 				name = strings.TrimSpace(name)
-				if name != "" && filepath.Base(name) != name {
-					a.Status = "Use filenames without paths"
+				if name == "" {
+					continue
+				}
+				if !plainFileName(name) {
+					a.rejectPrompt(s, "Enter a file name without a path")
 					return
 				}
+				names = append(names, name)
 			}
+			s = strings.Join(names, ",")
 			a.Settings.FolderDescriptions = s
 			a.refresh()
 		})
 
-	case "System settings":
-		a.form(kind, []Field{toggle("Save setup on exit", a.Settings.AutoSave)}, func(f []Field) { a.Settings.AutoSave = f[0].Checked })
-	case "Interface settings":
-		a.form(kind, []Field{{Label: "Font size (10–24)", Value: strconv.Itoa(a.Settings.FontSize)}, toggle("Key bar", a.Settings.ShowKeys)}, func(f []Field) {
-			n, e := strconv.Atoi(f[0].Value)
-			if e != nil || n < 10 || n > 24 {
-				a.Status = "Font size must be 10–24"
-				return
-			}
-			a.Settings.FontSize = n
-			a.Settings.ShowKeys = f[1].Checked
-		})
-	case "Menu settings":
-		a.form(kind, []Field{toggle("Wrap at list ends", a.Settings.MenuWrap)}, func(f []Field) { a.Settings.MenuWrap = f[0].Checked })
 	case "Colors":
 		names := []string{"Classic Far", "Dark", "Light"}
 		a.choose(kind, names, func(i int) { a.Settings.ColorTheme = names[i] })
 
-	case "Confirmations":
-		a.form(kind, []Field{toggle("Delete files/folders", a.Settings.ConfirmDelete), toggle("Overwrite files", a.Settings.ConfirmOverwrite)}, func(f []Field) { a.Settings.ConfirmDelete = f[0].Checked; a.Settings.ConfirmOverwrite = f[1].Checked })
 	case "Panel settings":
 		a.form(kind, []Field{toggle("Show hidden files (Cmd+Shift+.)", a.Settings.ShowHidden), toggle("Highlight files", a.Settings.Highlight), toggle("Human-readable sizes (off = bytes)", a.Settings.HumanReadableSizes), toggle("Hide and ignore .DS_Store", a.Settings.IgnoreDSStore), toggle("Select folders with file masks", a.Settings.SelectFolders)}, func(f []Field) {
 			a.Settings.ShowHidden = f[0].Checked
@@ -261,7 +244,7 @@ func (a *App) settingsMenu(kind string) {
 		a.form(kind, []Field{toggle("Auto indent", a.Settings.EditorAutoIndent), toggle("Syntax highlighting (Chroma)", a.Settings.EditorSyntax), {Label: "Tab width (1–16)", Value: strconv.Itoa(a.Settings.EditorTabSize)}, toggle("Expand tabs to spaces", a.Settings.EditorExpandTabs), toggle("External by default", a.Settings.ExternalEditorDefault), {Label: "Command (blank=system)", Value: a.Settings.ExternalEditor}}, func(f []Field) {
 			n, err := strconv.Atoi(f[2].Value)
 			if err != nil || n < 1 || n > 16 {
-				a.Status = "Tab width must be 1–16"
+				a.reopenForm(f, 2, "Tab width must be 1–16")
 				return
 			}
 			a.Settings.EditorAutoIndent = f[0].Checked
@@ -277,7 +260,7 @@ func (a *App) settingsMenu(kind string) {
 		a.prompt(kind, "Maximum levels for folder tree (1–12)", strconv.Itoa(a.Settings.TreeDepth), func(s string) {
 			n, e := strconv.Atoi(s)
 			if e != nil || n < 1 || n > 12 {
-				a.Status = "Enter a number from 1 to 12"
+				a.rejectPrompt(s, "Enter a number from 1 to 12")
 				return
 			}
 			a.Settings.TreeDepth = n
@@ -286,20 +269,13 @@ func (a *App) settingsMenu(kind string) {
 			}
 			a.refresh()
 		})
-	case "Command line settings":
-		a.prompt(kind, "Maximum history entries (1–10000)", strconv.Itoa(a.Settings.HistoryLimit), func(s string) {
-			n, e := strconv.Atoi(s)
-			if e != nil || n < 1 || n > 10000 {
-				a.Status = "Enter a number from 1 to 10000"
-				return
-			}
-			a.Settings.HistoryLimit = n
-		})
 	case "File descriptions":
 		a.prompt(kind, "Description file name", a.Settings.DescriptionFile, func(s string) {
-			if s == "" || filepath.Base(s) != s {
-				a.Status = "Enter a file name without a path"
+			if name := strings.TrimSpace(s); !plainFileName(name) {
+				a.rejectPrompt(s, "Enter a file name without a path")
 				return
+			} else {
+				s = name
 			}
 			a.Settings.DescriptionFile = s
 			for i := range a.Panels {
@@ -310,7 +286,7 @@ func (a *App) settingsMenu(kind string) {
 	case "Sort groups":
 		a.prompt(kind, "Masks in priority order, separated by semicolons", a.Settings.SortGroups, func(s string) {
 			if err := validateMasks(strings.ReplaceAll(s, ";", ","), a.Settings.MaskGroups); err != nil {
-				a.error(err)
+				a.rejectPrompt(s, err.Error())
 				return
 			}
 			a.Settings.SortGroups = s
@@ -320,29 +296,32 @@ func (a *App) settingsMenu(kind string) {
 			a.refresh()
 		})
 	case "Groups of file masks":
+		keys := sortedKeys(a.Settings.MaskGroups)
 		names := []string{"Add group…"}
-		for _, k := range sortedKeys(a.Settings.MaskGroups) {
+		for _, k := range keys {
 			names = append(names, k+" = "+a.Settings.MaskGroups[k])
 		}
 		a.choose(kind, names, func(i int) {
 			name, value := "", ""
 			if i > 0 {
-				parts := strings.SplitN(names[i], " = ", 2)
-				name, value = parts[0], parts[1]
+				// Use the key itself: a label cannot be split back reliably.
+				name = keys[i-1]
+				value = a.Settings.MaskGroups[name]
 			}
 			old := name
 			a.form("Mask group", []Field{{Label: "Name", Value: name}, {Label: "Masks (empty deletes)", Value: value}}, func(f []Field) {
 				k, v := strings.TrimSpace(f[0].Value), f[1].Value
-				if k == "" || strings.ContainsAny(k, "<>,;|") {
-					a.Status = "Invalid group name"
+				// Existing names with "=" (allowed before) stay editable.
+				if k == "" || strings.ContainsAny(k, "<>,;|") || k != old && strings.Contains(k, "=") {
+					a.reopenForm(f, 0, "Invalid group name")
 					return
 				}
 				if strings.ContainsAny(v, "<>") {
-					a.Status = "Use literal masks in groups"
+					a.reopenForm(f, 1, "Use literal masks in groups")
 					return
 				}
 				if err := validateMasks(v, nil); err != nil {
-					a.error(err)
+					a.reopenForm(f, 1, err.Error())
 					return
 				}
 				delete(a.Settings.MaskGroups, old)
@@ -358,4 +337,9 @@ func (a *App) settingsMenu(kind string) {
 	default:
 		a.Status = fmt.Sprintf("Settings: %s", kind)
 	}
+}
+
+// plainFileName accepts a single file name: no path, not "." or "..".
+func plainFileName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00") && filepath.Base(name) == name
 }

@@ -280,12 +280,12 @@ func (a *App) fileAttributes() {
 	a.form("File attributes", []Field{{Label: "Permissions (octal)", Value: fmt.Sprintf("%03o", info.Mode().Perm())}, {Label: "Modified (local)", Value: info.ModTime().Format("2006-01-02 15:04:05")}}, func(f []Field) {
 		mode, e := strconv.ParseUint(f[0].Value, 8, 12)
 		if e != nil || mode > 0777 {
-			a.Status = "Permissions must be 000–777"
+			a.reopenForm(f, 0, "Permissions must be 000–777")
 			return
 		}
 		stamp, e := time.ParseInLocation("2006-01-02 15:04:05", f[1].Value, time.Local)
 		if e != nil {
-			a.error(e)
+			a.reopenForm(f, 1, "Enter the time as YYYY-MM-DD HH:MM:SS")
 			return
 		}
 		a.workProgress("Updating attributes", func(o *fsops.Operation) error {
@@ -393,11 +393,19 @@ func (a *App) editUserMenu() {
 			c = a.Settings.UserMenu[i-1]
 		}
 		a.form("User command — {} inserts filename", []Field{{Label: "Label", Value: c.Name}, {Label: "Command (empty deletes)", Value: c.Command}}, func(f []Field) {
-			c = UserCommand{f[0].Value, f[1].Value}
-			if i > 0 {
+			c = UserCommand{strings.TrimSpace(f[0].Value), f[1].Value}
+			switch {
+			case strings.TrimSpace(c.Command) == "":
+				if i == 0 {
+					return
+				}
 				a.Settings.UserMenu = append(a.Settings.UserMenu[:i-1], a.Settings.UserMenu[i:]...)
-			}
-			if c.Name != "" && c.Command != "" {
+			case c.Name == "":
+				a.reopenForm(f, 0, "Enter a label")
+				return
+			case i > 0:
+				a.Settings.UserMenu[i-1] = c // keep the F2 menu order
+			default:
 				a.Settings.UserMenu = append(a.Settings.UserMenu, c)
 			}
 			a.saveSetup()
@@ -422,15 +430,26 @@ func (a *App) fileAssociations() {
 			c = a.Settings.Associations[i-2]
 		}
 		a.form("File association — {} inserts filename", []Field{{Label: "Masks", Value: c.Mask}, {Label: "Run command", Value: c.Command}, {Label: "Viewer command", Value: c.Viewer}, {Label: "Editor command", Value: c.Editor}}, func(f []Field) {
-			if err := validateMasks(f[0].Value, a.Settings.MaskGroups); err != nil {
-				a.error(err)
+			c = Association{Mask: strings.TrimSpace(f[0].Value), Command: f[1].Value, Viewer: f[2].Value, Editor: f[3].Value}
+			if strings.TrimSpace(c.Command+c.Viewer+c.Editor) == "" {
+				if i <= 1 {
+					return
+				}
+				a.Settings.Associations = append(a.Settings.Associations[:i-2], a.Settings.Associations[i-1:]...)
+				a.saveSetup()
 				return
 			}
-			c = Association{Mask: f[0].Value, Command: f[1].Value, Viewer: f[2].Value, Editor: f[3].Value}
-			if i > 1 {
-				a.Settings.Associations = append(a.Settings.Associations[:i-2], a.Settings.Associations[i-1:]...)
+			if c.Mask == "" {
+				a.reopenForm(f, 0, "Enter file masks")
+				return
 			}
-			if c.Mask != "" && (c.Command != "" || c.Viewer != "" || c.Editor != "") {
+			if err := validateMasks(c.Mask, a.Settings.MaskGroups); err != nil {
+				a.reopenForm(f, 0, err.Error())
+				return
+			}
+			if i > 1 {
+				a.Settings.Associations[i-2] = c // keep association priority
+			} else {
 				a.Settings.Associations = append(a.Settings.Associations, c)
 			}
 			a.saveSetup()

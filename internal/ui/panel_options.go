@@ -361,7 +361,7 @@ func (a *App) folderShortcuts() {
 		a.prompt("Save folder shortcut", "Slot 1–9", "1", func(s string) {
 			i, e := strconv.Atoi(s)
 			if e != nil || i < 1 || i > 9 {
-				a.Status = "Choose 1–9"
+				a.rejectPrompt(s, "Choose 1–9")
 				return
 			}
 			a.saveFolderShortcut(i)

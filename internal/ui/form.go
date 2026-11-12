@@ -41,9 +41,11 @@ func (a *App) form(title string, fields []Field, submit func([]Field)) {
 
 // formState holds window-local modal bookkeeping for forms and settings.
 type formState struct {
-	submitting   *Form  // the form whose Submit is running
-	connectNote  string // appended to the next "Connected" status
-	autoSaveDone bool   // Save setup on exit already ran for this window
+	submitting     *Form       // the form whose Submit is running
+	connectNote    string      // appended to the next "Connected" status
+	autoSaveDone   bool        // Save setup on exit already ran for this window
+	activePrompt   *promptSpec // prompt whose Confirm is running
+	promptRejected bool        // the running prompt was reopened by validation
 }
 
 // reopenForm shows a form again after its Submit rejected the values, keeping
