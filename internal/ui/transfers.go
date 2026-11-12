@@ -44,6 +44,10 @@ func (a *App) transferDialog(move bool) {
 		label = "Move / rename"
 	}
 	start := func(s string, metadata fsops.MetadataOptions) {
+		if targetEndpoint.Remote != nil && remoteTilde(s) {
+			a.Status = remoteTildeStatus
+			return
+		}
 		workers := max(1, min(8, a.Settings.CopyWorkers))
 		dst := expand(s, base)
 		ask := a.Settings.ConfirmOverwrite
@@ -97,11 +101,26 @@ func (a *App) transferDialog(move bool) {
 				return e
 			})
 			exists := info != nil
+			created := false
+			if err == nil && strings.HasSuffix(s, "/") {
+				// A trailing slash names a folder, as in Far: create it and copy inside.
+				if exists && !info.IsDir() {
+					err = fmt.Errorf("destination is not a directory: %s", dst)
+				} else if !exists {
+					err = o.AttemptRequired("create folder", dst, "", func() error {
+						if targetEndpoint.Remote == nil {
+							return os.MkdirAll(dst, 0777)
+						}
+						return destination.Mkdir(dst)
+					})
+					created = err == nil
+				}
+			}
 			destination.Close()
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			isDir := err == nil && exists && info.IsDir() && !(len(paths) == 1 && caseRename(paths[0], dst))
+			isDir := created || err == nil && exists && info.IsDir() && !(len(paths) == 1 && caseRename(paths[0], dst))
 			if len(paths) > 1 && !isDir {
 				return fmt.Errorf("destination must be an existing directory")
 			}
@@ -152,6 +171,11 @@ func (a *App) transferDialog(move bool) {
 	a.Form.Primary = "Copy"
 	a.Form.Selected = a.Settings.SelectDialogInput
 }
+
+const remoteTildeStatus = "~ is not available on remote destinations; enter an absolute server path"
+
+// remoteTilde: "~" and "~user" would expand to a local home folder.
+func remoteTilde(s string) bool { return strings.HasPrefix(strings.TrimSpace(s), "~") }
 
 const archiveRemoteStatus = "Archives are extracted and created on local panels. Use F5 to transfer the result afterwards"
 

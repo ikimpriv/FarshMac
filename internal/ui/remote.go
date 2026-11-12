@@ -254,6 +254,10 @@ func (a *App) remoteMoveDialog() {
 		dest = filepath.Join(dest, filepath.Base(paths[0]))
 	}
 	a.prompt("Remote move / rename", "Destination on the same server", dest, func(value string) {
+		if remoteTilde(value) {
+			a.Status = remoteTildeStatus
+			return
+		}
 		dst := expand(value, target.Path)
 		ask := a.Settings.ConfirmOverwrite
 		a.workProgress("Renaming remote files", func(o *fsops.Operation) error {
@@ -270,7 +274,20 @@ func (a *App) remoteMoveDialog() {
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
+			if os.IsNotExist(err) && strings.HasSuffix(value, "/") {
+				// A trailing slash names a folder: create it and move inside.
+				if err = o.AttemptRequired("create folder", dst, "", func() error { return f.Mkdir(dst) }); err != nil {
+					return err
+				}
+				info, err = f.Lstat(dst)
+				if err != nil {
+					return err
+				}
+			}
 			isDir := err == nil && remotefs.FollowDir(f, dst, info).IsDir() && !(len(paths) == 1 && caseRename(paths[0], dst))
+			if err == nil && !isDir && strings.HasSuffix(value, "/") {
+				return fmt.Errorf("destination is not a directory: %s", dst)
+			}
 			if len(paths) > 1 && !isDir {
 				return fmt.Errorf("destination must be an existing directory")
 			}
