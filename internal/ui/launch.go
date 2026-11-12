@@ -187,7 +187,9 @@ func (a *App) enterFile() {
 		return
 	}
 	if info.IsDir() {
-		if strings.EqualFold(filepath.Ext(path), ".app") {
+		// The tree shows bundles as folders: Enter re-roots there, and
+		// Shift+Enter is the way to launch the application.
+		if strings.EqualFold(filepath.Ext(path), ".app") && p.View != "Tree panel" {
 			a.launch(path, externalPlan(path, "", false))
 		} else {
 			a.error(p.Load(path))

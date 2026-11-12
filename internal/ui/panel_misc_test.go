@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFastFindLiteralBracket(t *testing.T) {
@@ -31,6 +33,41 @@ func TestFastFindLiteralBracket(t *testing.T) {
 	}
 	if !fastMatch("Makefile", "m*f") || !fastMatch("Makefile", "?a") {
 		t.Fatal("wildcards must keep working")
+	}
+}
+
+func TestTreeEnterOnAppBundleReroots(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "Foo.app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	launched := false
+	a.runExternal = func(context.Context, []string) ([]byte, error) {
+		launched = true
+		return nil, nil
+	}
+	a.setView(0, "Tree panel")
+	p := &a.Panels[0]
+	waitTree(t, p)
+	selectEntry(t, p, "Foo.app")
+	a.key(Message{Key: "Enter"})
+	waitTree(t, p)
+	settleJobs(a)
+	if launched || p.Path != bundle {
+		t.Fatal("Enter in tree must re-root at the bundle", launched, p.Path)
+	}
+}
+
+func settleJobs(a *App) {
+	for i := 0; i < 20; i++ {
+		a.Poll()
+		time.Sleep(time.Millisecond)
 	}
 }
 
