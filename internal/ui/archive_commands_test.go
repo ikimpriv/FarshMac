@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,63 @@ func TestEncryptedArchiveMessage(t *testing.T) {
 	if a.Form == nil || !strings.HasPrefix(a.Form.Message, "Encrypted archives are not supported\n") || a.Panels[0].Archive != nil {
 		t.Fatalf("form %+v", a.Form)
 	}
+}
+
+func TestCtrlPageDownMatchesArchiveFormat(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "hello.txt")
+	if err := os.WriteFile(src, []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsops.CreateArchive([]string{src}, filepath.Join(root, "app.zip")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "app.zip"), filepath.Join(root, "app.war")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.gz"), []byte("plain"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	launched := false
+	a.runExternal = func(context.Context, []string) ([]byte, error) { launched = true; return nil, nil }
+	selectEntry(t, &a.Panels[0], "notes.gz")
+	a.key(Message{Key: "PageDown", Ctrl: true})
+	waitWork(t, a)
+	if launched || a.Panels[0].Archive != nil {
+		t.Fatal("Ctrl+PgDn acted on a non-archive .gz", launched)
+	}
+	selectEntry(t, &a.Panels[0], "app.war")
+	a.key(Message{Key: "PageDown", Ctrl: true})
+	waitWork(t, a)
+	if a.Panels[0].Archive == nil {
+		t.Fatal("Ctrl+PgDn did not enter a .war archive", a.Status)
+	}
+}
+
+func TestExtractNonArchiveNamesUnknownExtension(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "plain.txt"), []byte("plain text"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "plain.txt")
+	a.archiveExtract()
+	a.key(Message{Key: "Enter"})
+	waitOperationQuestion(t, a, "Error")
+	if !strings.Contains(a.Form.Message, "(plain.txt has no known archive extension)") {
+		t.Fatal(a.Form.Message)
+	}
+	chooseOperation(t, a, "Cancel")
+	waitWork(t, a)
 }
 
 func TestCreateArchiveExistingNameOffersRename(t *testing.T) {

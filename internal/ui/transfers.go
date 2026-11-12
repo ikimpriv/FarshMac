@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
 	"fmt"
@@ -269,7 +270,14 @@ func (a *App) archiveExtractPath(src string) {
 	dst := filepath.Join(base, fsops.ArchiveStem(filepath.Base(src)))
 	a.prompt("Extract archive", "New destination folder", dst, func(s string) {
 		a.workProgress("Extracting archive", func(o *fsops.Operation) error {
-			return o.Attempt("extract archive", src, expand(s, base), func() error { return fsops.ExtractArchive(src, expand(s, base), o) })
+			return o.Attempt("extract archive", src, expand(s, base), func() error {
+				err := fsops.ExtractArchive(src, expand(s, base), o)
+				if err != nil && !errors.Is(err, fsops.ErrCancelled) && fsops.ArchiveFormat(src) == "" {
+					// libarchive is still tried for .iso, .xar, .deb, single .gz and the like.
+					err = fmt.Errorf("%w (%s has no known archive extension)", err, filepath.Base(src))
+				}
+				return err
+			})
 		})
 	})
 }

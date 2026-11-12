@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"farshmac/internal/fsops"
 	"farshmac/internal/terminal"
 	"path/filepath"
 	"strings"
@@ -316,7 +317,7 @@ func (a *App) farPanelKey(m Message) bool {
 		return true
 	}
 	if !m.Shift && m.Key == "PageDown" {
-		if len(p.Entries) > 0 && (p.Entries[p.Cursor].Dir || isArchiveName(p.Entries[p.Cursor].Name)) {
+		if len(p.Entries) > 0 && (p.Entries[p.Cursor].Dir || fsops.ArchiveFormat(p.Entries[p.Cursor].Name) != "") {
 			a.enterFile()
 		}
 		return true
@@ -335,14 +336,6 @@ func (a *App) farPanelKey(m Message) bool {
 	if m.Code == "Numpad5" {
 		a.panelSplit = 0
 		return true
-	}
-	return false
-}
-func isArchiveName(name string) bool {
-	for _, suffix := range []string{".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz", ".jar"} {
-		if strings.HasSuffix(strings.ToLower(name), suffix) {
-			return true
-		}
 	}
 	return false
 }
