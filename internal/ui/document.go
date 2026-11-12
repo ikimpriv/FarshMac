@@ -1102,19 +1102,27 @@ func (a *App) cycleScreen(back bool) {
 
 const documentHelp = `FarshMac viewer / editor
 
+Ctrl works as Cmd in the viewer/editor (also for external keyboards).
+
 Esc / F10   Close this document, return to previous screen / panels
 Cmd+Q       Quit application (checks ALL unsaved documents)
+Cmd+R       Reload from disk (asks first if there are unsaved changes)
 F6          Switch viewer / editor, retaining text and cursor
 F12         Switch open document screens
-F7 / Cmd+F  Search: literal / regex, case, whole words, backwards, hex
+F7 / Cmd+F  Search: literal / regex, case, whole words, backwards;
+            hex search is viewer-only
 Shift+F7    Next match      Alt+F7 Previous match
 Cmd+F7 / Cmd+H  Search and replace; confirmation or Replace all
 Alt+F8 / Cmd+G  Go to line:column, byte offset, or percentage
-Shift+F8    Codepage chooser     F8 CP866 / Windows-1251
-F9          Encoding-related options, line endings, BOM, read-only
+Shift+F8    Codepage chooser     F8 CP866 / Windows-1251 (first press: CP866)
+F9          Encoding, line endings, BOM, read-only; Syntax, Auto indent,
+            Tab width and Expand tabs change app settings, not the document
 Cmd+Shift+0..9 Save bookmark     Cmd+0..9 Restore bookmark
+            Cmd+Shift+3/4/5 are taken by macOS screenshots; use Ctrl+Shift+3/4/5
+Cmd+L       Toggle read-only    Cmd+U Clear selection
 Cmd+B       Toggle key bar      Cmd+Shift+B Toggle status
 Cmd+O       Terminal / document
+Ctrl+Tab    Next screen         Ctrl+Shift+Tab Previous screen
 
 Viewer:
 F2          Toggle wrap         Shift+F2 Word / character wrap
@@ -1123,6 +1131,7 @@ Arrows      Scroll              Cmd+Left/Right Scroll 20 columns
 Home/End    Start/end           PgUp/PgDn Page
 Alt+Left/Right  Adjust hex bytes per row
 Cmd+Z       Previous viewing position
+Space       Next search match   Cmd+S Toggle scrollbar
 + / -       Next / previous file in active panel
 
 Editor:
@@ -1133,6 +1142,8 @@ Cmd+Z / Cmd+Shift+Z Undo / redo
 Insert      Insert / overwrite
 Shift+arrows Stream selection   Alt+Shift+arrows Rectangular selection
 Cmd+C/X/V   Copy / cut / paste  Cmd+A Select all
+Ctrl+Insert Copy                Shift+Delete Cut
+Cmd+D       Delete selection
 Cmd+Left/Right  Word movement   Cmd+Home/End File start/end
 Cmd+Backspace/Delete Delete word   Cmd+Y Delete line
 Cmd+K       Delete to line end  Alt+U / Alt+I Unindent / indent
@@ -1141,4 +1152,11 @@ Enter       Newline with auto-indent    Tab Insert tab
 Limits: Go/RE2 regex, not Far's full regex dialect. No fuzzy/style-preserving
 replacement, plugin APIs, macros or persistent bookmarks yet. Text editing
 and text decoding are limited to 64 MiB; larger files use paged hex/dump.
-Legacy encoding guesses are heuristic: choose an explicit codepage if needed.`
+Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
+
+Saving keeps xattrs, ACLs and hidden/nodump flags; partial loss reports
+"Saved; some attributes were not preserved". Save dialogs: "Save failed"
+(Retry / Save as… / Cancel), "File changed on disk" (Overwrite), "File was
+deleted" (Create), "Save in place" for unwritable folders (not atomic, keeps
+hard links). A file that probably cannot be saved asks View / Edit anyway /
+Cancel when opened. Saving through a symbolic link writes its target.`

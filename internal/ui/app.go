@@ -1401,86 +1401,114 @@ termDone:
 	return u
 }
 
-const help = `FarshMac — native macOS window, Go file manager, persistent zsh terminal
+const help = `FarshMac — native macOS window, Go file manager, persistent shell
+(bash by default; sh or zsh in F9 > Options > Terminal settings)
 
-Tab                 Switch active panel
+Ctrl/⌘: shortcuts written Cmd/⌘ also work with Ctrl. Ctrl only: Ctrl+Q,
+Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+1..9, Ctrl+Shift+1..9. Cmd only: ⌘1..9, ⌘+/−/0.
+Letter shortcuts follow the physical key on non-Latin keyboard layouts.
+
+Tab                 Switch active panel (skips a hidden panel)
 Arrows / PgUp/PgDn   Navigate files
+Shift+arrows/PgUp/PgDn/Home/End  Mark a range of files
+Quick view / Info / Tree / hidden panel: file keys need a file panel (Tab)
 Ctrl+Q             Toggle inactive Quick view (restore previous view)
 Ctrl+L / Ctrl+T    Toggle inactive Info / Tree
 Ctrl+P / Ctrl+B    Toggle inactive panel / key bar
 Ctrl+F3..F11       Sort (name, ext, modified, size, unsorted, created, accessed, description, owner)
-Ctrl+F12           Sort menu; Shift+F12 selected first
+Ctrl+F12           Sort menu; Shift+F12 selected first; Shift+F11 sort groups
+Left/Right menu    Brief, Medium, Full, Wide, Detailed, Info, Tree, Quick view
 Shift+F5/F6        Copy/move only the current item
 Shift+F1/F2/F3     Archive create/extract/commands
 Shift+F9           Save setup
+Alt+F6             Link (symbolic / hard)
+Alt+F7 / Alt+F8    Find file / command history (inserts, does not run)
+Alt+F10            Folder tree
 Alt+F11/F12        View/edit history / folder history
 Ctrl+PgUp/PgDown   Parent / enter folder or archive
 Ctrl+Left/Right    Panel width (empty command); Ctrl+Num5 reset
 Ctrl+E/X/Y         Previous / next command / clear
-Ctrl+F / Ctrl+;    Insert full path from active / inactive panel
-Ctrl+Insert        Copy command or selected names; Alt+Shift+Insert full paths
+Ctrl+↑/↓, ⌘↑/↓     Command history
+Cmd+F / Cmd+;      Insert full path from active / inactive panel
+Ctrl+[ / Ctrl+]    Insert left / right panel path (+Shift: active / inactive)
+Cmd+Enter          Insert current filename; Cmd+Shift+Enter other panel's
+Ctrl+Insert / ⌘C   Copy command or selected names (on .. the panel path)
+Alt+Shift+Insert   Copy full paths; Ctrl+Alt+Insert real paths (links resolved)
 Shift+Insert       Paste text
 Num + / Num -      Select / deselect by masks
 Num *              Invert files; Cmd/Ctrl+Num * includes folders
+Alt+Num *          Invert files and unmark folders
 Cmd/Ctrl+Num +/-   Select / deselect same extension
 Alt+Num +/-        Select / deselect same base name
 Shift+Num +/-      Select / deselect all files
 Cmd/Ctrl+M         Restore previous selection
 Ctrl+Shift+1..9     Save folder shortcut (panels)
-Ctrl+1..9           Go to folder shortcut (panels)
+Ctrl+1..9           Go to folder shortcut (keeps remembered cursor positions)
 Network connections: F9 > Commands > Network connections
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
 
 Enter               Open directory / view file / execute command
 Shift+Enter         Open selected item with macOS (folders in Finder)
-Cmd+Shift+.         Show / hide hidden files (display only)
+Cmd+Shift+. / Ctrl+H Show / hide hidden files (also in Panel settings)
+Cmd+Shift+S         Human-readable / exact sizes
 Backspace           Delete command-line character; never leave directory
 Space / Insert      Mark file; operations apply to marked files
 F3 on a folder      Calculate marked/current folder sizes; participates in Size sort
+F4 on a folder      File attributes (permissions, modified)
 ⌘Option+F3         Calculate all folder sizes (~ = cached, possibly outdated)
 Info: Ctrl+F12      Configure sections; PgUp/PgDn/wheel scroll; F3/F4 description
 F3 / F4             Viewer / editor (F1 inside for full key reference)
-F5 / F6             Copy / move or rename (no overwriting)
-F7                  New directory
+Alt+F3 / Alt+F4     Alternate viewer / editor (external vs internal)
+Cmd+Shift+F3/F4     Internal viewer / editor
+Shift+F4            New file
+F5 / F6             Copy / move or rename (asks before overwriting)
+                    Destination ending in / that does not exist: new folder
+F7                  Make folder
 F8 / Delete         Move selected items to Trash
-Shift+F8 / Shift+Del Delete permanently
+Shift+F8 / Shift+Del Delete permanently (always asks)
 F9 / Cmd+9          Main menu (arrows, Enter, Esc)
 Cmd+L              Change directory
-Cmd+Enter          Insert current filename in command line
 F2 / Cmd+2          User menu
-Cmd+R              Refresh panels
+Cmd+R              Re-read active panel (F9 > Left/Right > Re-read)
 Cmd+Space          Complete filename in command line
 ⌘U              Swap panels
 ⌘F1 / ⌘F2     Hide/show left / right panel
 Alt+F1 / Alt+F2    Choose left / right volume
 ⌘Shift+\ or ⌘=  Open active folder in the other panel
+⌘+ / ⌘− / ⌘0    Font size larger / smaller / default (10–24; ⌘= in terminal)
+⌃⌘F             Full screen
 Enter on archive  Browse archive; .. returns to parent
 F5 in archive     Copy selected files/folders out; F3 previews
-File links view   Names, sizes and hard-link counts (names sharing one inode)
-⌘Up / Down      Command history
 ⌘O              Toggle panels and persistent terminal
 Cmd+1 … Cmd+9       Alternatives to F1 … F9 on Mac keyboards
-Cmd+N / Cmd+W      New / close native window
-Cmd+Q              Quit ALL windows; F10 closes only viewer/editor
+Cmd+N / Cmd+W      New / close native window (new windows copy histories)
+Cmd+Q              Quit ALL windows
+F10                Closes the viewer/editor; in panels it does nothing
 Alt+characters     Fast find (Cmd+Enter next; Cmd+Shift+Enter previous)
 F12                Panels and document screens
-Esc during operation  Cancel
+Esc during operation  Cancel the whole operation
+Status line click  Last 20 messages (also F9 > Commands > Last messages)
 
 Type a shell command directly while panels are visible, then press Enter.
 The panels disappear and the SAME window becomes an interactive terminal.
-Commands run in the active panel's directory. zsh keeps its environment,
-history, aliases and jobs. Your .zshrc is loaded at shell startup.
+Commands run in the active panel's directory. The shell keeps its environment,
+history, aliases and jobs. Your shell's startup files are loaded.
 The output stays visible after completion; ⌘O restores the panels.
 ⌘O also works during a command; returning does not stop the job.
 Use Cmd+. (or Ctrl+C) to interrupt, Cmd+C / Cmd+V to copy / paste.
 Scroll the terminal to review output. vim/less use the alternate screen.
+If the shell exits it restarts (1/2/4/8 s backoff; stops after 5 failed
+starts): press Enter or ⌘O to retry.
 
 This is an initial independent implementation, not full Far compatibility.
-Read-only archive panels are supported. No Windows DLL plugins, macros or network VFS yet.
-Cross-volume move is refused. Copy, verify, then delete explicitly.
-Copies preserve permissions, timestamps and links, not ACLs/xattrs.
-The text editor saves atomically, but does not preserve ACLs/xattrs/hardlinks.
+Read-only archive panels are supported. No Windows DLL plugins or macros.
+Cross-volume moves copy each file with metadata, ask before any loss, then
+delete the source.
+Copy options: permissions/ACL, xattrs/flags/timestamps (F5 dialog).
+The text editor saves atomically and keeps xattrs, ACLs and hidden/nodump
+flags; it warns "Saved; some attributes were not preserved" otherwise.
+Unwritable folders: "Save in place" (not atomic, keeps hard links).
 Text editing/decoding: 64 MiB limit. Larger files: paged hex/dump viewer.
 Esc returns to the file panels.`
 

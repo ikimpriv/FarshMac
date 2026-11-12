@@ -18,8 +18,9 @@ import (
 	"unsafe"
 )
 
-// Move uses macOS's atomic no-replace rename. Cross-volume moves are refused;
-// users can explicitly copy and then delete after checking the result.
+// Move uses macOS's atomic no-replace rename. Across volumes the rename fails
+// with EXDEV; the transfer engine (moveAcrossVolumes) then copies each file with
+// its metadata, asks before any loss, and deletes the source afterwards.
 func Move(src, dst string) error {
 	s, d := C.CString(src), C.CString(dst)
 	defer C.free(unsafe.Pointer(s))

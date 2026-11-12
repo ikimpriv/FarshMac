@@ -8,19 +8,28 @@ This historical audit records implemented scenarios and validation limits. See
 ## Windows and screens
 
 - ⌘N / File → New Window / Commands → New window creates an independent Cocoa
-  window, initially using the source window's directories. Documents, selections,
-  command line, PTY/shell, history, and operations are independent.
+  window, initially using the source window's directories and a copy of its
+  command, folder, and view/edit histories. Documents, selections, command line,
+  PTY/shell, and operations are independent afterwards.
 - ⌘W and the red close button check that window's documents and shell before
-  closing it. Closing the last window leaves the macOS menu available; ⌘N opens another.
+  closing it; a running command asks **Close window** ("A command is running.
+  Close this window?"). ⌘W/⌘Q with a form open cancel the form first. Closing the last window leaves the macOS menu available; ⌘N opens another.
 - ⌘Q checks every window. None closes until all confirmations finish. Cancel
   retains unsaved documents, including those previously marked Discard. Other
-  windows cannot be edited during this check.
+  windows cannot be edited during this check. A window that refuses to quit
+  because it is busy is brought to the front.
 - Window → Next/Previous Window, ⌘` / ⌘Shift+`, and the native window list navigate windows.
 - F12 lists **Panels** and the current window's viewer/editor screens. Panels hides
   the document without closing it. Ctrl+Tab / Ctrl+Shift+Tab or ⌘Shift+] / ⌘Shift+[
   switches internal screens; ⌘Tab remains assigned to macOS.
-- F10 closes only the current document. New windows inherit settings; Save setup
-  writes the invoking window's settings to the shared setup.json.
+- F10 closes only the current document; in panels it does nothing (quit with ⌘Q).
+  Settings are shared live by all windows. Save setup writes them to setup.json and
+  merges histories with the copy on disk; if another FarshMac instance changed
+  setup.json, it asks "Overwrite?". A damaged setup.json or session.json is kept as
+  `.broken-<time>` and defaults are used.
+- ⌘+ / ⌘− / ⌘0 change the font size (10–24) in every window. ⌘= zooms only in
+  terminal mode; in panels it remains "Same folder in other panel". ⌘/Ctrl letter
+  shortcuts use the physical key on non-Latin layouts.
 
 ## Enter, viewer, and editor
 
@@ -50,8 +59,11 @@ macOS chooses system applications; FarshMac does not change global associations.
 ## Fast find
 
 Alt/Option+characters opens Fast find and selects by prefix. Continue typing
-without Alt. Supported input includes `*`, `?`, Cyrillic, Backspace, and paste
-until the first unmatched character. ⌘Enter / ⌘Shift+Enter (also Ctrl) and ↑/↓
+without Alt. Supported input includes `*` and `?` (wildcards), `[` and `\`
+(literal characters), Cyrillic, Backspace, and paste. The first character is always
+accepted so the search box appears even without a match; later pasted characters
+stop at the first unmatched one. Matching is NFC-normalized, so decomposed
+filenames match typed text. ⌘Enter / ⌘Shift+Enter (also Ctrl) and ↑/↓
 cycle matches. Esc retains the found position; Enter opens/runs the selected item.
 Search does not replace the command line.
 
@@ -59,6 +71,37 @@ Cocoa takes Option input from the current keyboard layout without Option's
 character transformation, avoiding accent dead keys such as Alt+e. This interception
 is disabled in editor and terminal. Transliteration and Far's full mask language
 are absent. Later Option-input fixes are documented in the changelog.
+
+## Panels
+
+- Tab skips a hidden panel; with both panels hidden it shows the active one. On
+  Quick view, Info panel, Tree panel or a hidden panel, file keys (Enter, F3–F8,
+  Insert, …) report "Switch to a file panel first (Tab)". A single click on Quick
+  view activates it.
+- Sort modes (Ctrl+F12) mark the current mode and the toggles with ✓; the toggle
+  is named **Mix directories and files**. Remote panels refuse metadata sorts
+  (created, accessed, owner, description).
+- ⌘C equals Ctrl+Insert: copies the command line or selected names; on `..` it
+  copies the panel path. Ctrl+Alt+Insert copies real paths (links resolved).
+- Ctrl+1…9 bookmark jumps keep remembered cursor positions and marks of visited
+  folders.
+- Ctrl+PgDn enters exactly the archive formats in [ARCHIVE_SUPPORT.md](ARCHIVE_SUPPORT.md);
+  a bare `.gz`/`.bz2`/`.xz` is not entered.
+- Folder history entries remember their source (local path,
+  `sftp://user@host:port/path`, `[Archive] path`); remote entries reconnect.
+- Remote symbolic links to folders are resolved in listings (up to 500 per folder;
+  the rest on Enter).
+- Quick view works on remote panels from the menu too; an archive member shows
+  "Archive member: press F3 to extract and view".
+- EPERM from macOS privacy protection reads "Access denied by macOS privacy
+  protection" with a Full Disk Access hint.
+- In the Tree panel, Enter on an `.app` re-roots the tree; Shift+Enter opens it.
+- An invalid panel filter is ignored with a footer note. Deleting a mask group used
+  elsewhere asks first.
+- Other keys: Shift+arrows/PgUp/PgDn/Home/End mark a range, Alt+Num* inverts files
+  and unmarks folders, Shift+F11 toggles sort groups, ⌘⇧S toggles human-readable
+  sizes, Ctrl+[ / Ctrl+] insert the left/right panel path (with Shift: active /
+  inactive), Ctrl+↑/↓ and ⌘↑/↓ walk command history.
 
 ## F7
 
@@ -115,6 +158,11 @@ Model tests cover multiple windows, focus, cursor positions, geometry, saving
 without AutoSave, individual/last-window close, global quit, invalid coordinates
 and JSON, missing directories, and explicit CLI paths. Native restoration after
 relaunch was not verified with macOS automation in this audit.
+
+Only one instance owns the window session (`session.lock`); a second instance
+reports "Another FarshMac instance owns the window session…" and does not save it.
+If saving settings fails at quit, the app asks "Settings were not saved … Quit
+anyway?". "Save setup on exit" saves once, at quit.
 
 ## Tree fix (0.6.1)
 

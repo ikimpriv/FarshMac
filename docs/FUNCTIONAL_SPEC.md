@@ -4,6 +4,8 @@
 
 Документ составлен 2026-11-11 по состоянию ветки `main` (коммит `b91313a`). При изменении поведения обновляйте соответствующую часть.
 
+> **Обновление (ветка `backlog-fixes`, 2026-11-11).** Все 85 пунктов `docs/IMPLEMENTATION_BACKLOG.md` реализованы, поэтому поведение ряда функций изменилось относительно описанного ниже. Списки расхождений в конце каждой части и раздел «Сводка расхождений» закрыты: решения из раздела «Решения по расхождениям» backlog применены к коду, справке F1, README и parity-документам. Ниже обновлены только самые заметные записи (Tab, Ctrl+PgDn, меню сортировки, закладки, fast find); остальные части описывают состояние на коммит `b91313a` — при расхождении источником истины остаётся код и backlog.
+
 ## Содержание
 
 1. [Часть 1. Файловые панели и навигация](#часть-1)
@@ -119,7 +121,7 @@
 
 #### Quick view (быстрый просмотр)
 - **Вызов:** Ctrl+Q (только Ctrl, не ⌘) — переключает **неактивную** панель; `Commands → Quick view on/off`; через меню Left/Right (`setView`) — для любой панели.
-- **Где доступно:** Ctrl+Q работает и когда неактивная панель удалённая (единственный view, разрешённый для remote через `toggleOtherView`); `setView` для remote запрещён.
+- **Где доступно:** Ctrl+Q и меню Left/Right → `Quick view` работают и для удалённой панели (после backlog `setView` разрешает Quick view для remote; Info/Tree по-прежнему требуют локальную папку). Для члена архива показывается `Archive member: press F3 to extract and view`. Ctrl+L (только Ctrl; ⌘L — Change directory) / Ctrl+T (также ⌘T) переключают Info/Tree; отдельных пунктов в Commands для них нет — виды доступны в Left/Right.
 - **Поведение (`toggleOtherView("Quick view")`):**
   - если неактивная уже в этом режиме — восстанавливается запомненная пара `{View, Hidden}` из `viewReturns[view]` (вложенные переключения восстанавливаются по цепочке: Brief → Ctrl+L → Ctrl+Q → Ctrl+Q возвращает `Info panel` → Ctrl+L возвращает `Brief`);
   - иначе запоминается текущая пара, ставится `View = "Quick view"`, `Hidden = false`;
@@ -207,7 +209,7 @@
 
 #### Tab — смена активной панели
 - **Вызов:** Tab.
-- **Поведение:** `Active = 1 − Active`, без проверки `Hidden` (можно активировать скрытую панель).
+- **Поведение:** `Active = 1 − Active`; скрытая панель пропускается, при обеих скрытых активная панель показывается (P1-01). На Quick view / Info / Tree / скрытой панели файловые клавиши (Enter, F3–F8, Insert и т. п.) не действуют, статус `Switch to a file panel first (Tab)`.
 - **Код:** `app.go: key`.
 
 #### Стрелки ↑/↓
@@ -240,7 +242,7 @@
 - **Код:** `far_keys.go`.
 
 #### Ctrl/⌘+PgDn — войти в папку/архив
-- **Поведение:** если под курсором папка или имя оканчивается на `.zip .tar .gz .bz2 .xz .7z .rar .tgz .jar` (`isArchiveName`) — `enterFile()`. Для `.gz/.bz2/.xz` без `.tar` `ArchiveFormat` вернёт "", и `enterFile` откроет файл системным приложением.
+- **Поведение:** если под курсором папка или `fsops.ArchiveFormat(name) != ""` — `enterFile()`. Входит ровно в поддерживаемые форматы (в т. ч. `.war .cpio .tbz .txz`); одиночные `.gz/.bz2/.xz` без `.tar` архивами не считаются.
 - **Код:** `far_keys.go`, `launch.go`.
 
 #### Backspace
@@ -346,7 +348,7 @@
 - **Код:** `far_keys.go`.
 
 #### Ctrl/⌘+F12 — меню сортировки
-- **Диалог:** список `Sort mode`: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`. Пункты 4–7 — переключатели (без индикации состояния). `Directories first` на самом деле переключает `MixDirectories`. Также `Left/Right → Sort modes…`.
+- **Диалог:** список `Sort mode`: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`. Пункты 4–7 — переключатели; пункт `Directories first` переименован в `Mix directories and files` (переключает `MixDirectories`). Текущий режим и включённые переключатели отмечены `✓ `. Для remote-панели режимы, требующие локальных метаданных, отклоняются (`This sort mode requires local file metadata`). Также `Left/Right → Sort modes…`.
 - В активной Info panel Ctrl+F12 открывает `Info panel settings`.
 - **Код:** `panel_options.go: sortMenu`.
 
@@ -421,7 +423,7 @@
 - **Код:** `folder_shortcuts.go: saveFolderShortcut`.
 
 #### Ctrl+1…9 — перейти
-- **Поведение:** пустой слот → `Folder shortcut %d is empty`. Remote-закладка: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная закладка → `openArchiveAt(archive, path)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Shortcut is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, **сброс `states` (запомненных позиций курсора)**, `Load(path)`.
+- **Поведение:** пустой слот → `Folder shortcut %d is empty`. Remote-закладка: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная закладка → `openArchiveAt(archive, path)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Shortcut is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `Load(path)`. Запомненные позиции курсора и пометки (`states`) сохраняются.
 - Меню `Folder shortcuts`: `Save current folder…`, затем `1  <path>` … `9  <path>` (для remote с префиксом `Label()`).
 - **Код:** `folder_shortcuts.go: goFolderShortcut`, `panel_options.go: folderShortcuts`.
 
@@ -431,7 +433,7 @@
 
 #### Alt+символ — начать поиск
 - **Вызов:** Option+печатный символ (Cocoa переводит символ по текущей раскладке без Option-трансформации, `panel_keys_darwin.h`; Numpad `*`, `+`, `-` сохраняют коды). Также вставка текста (⌘V) при открытом окне поиска.
-- **Поведение (`fastFindText`):** символы добавляются по одному; для каждого префикса ищется первое совпадение `filepath.Match(lower(query)+"*", lower(name))` от текущего курсора вперёд по кругу (кроме `..`); если префикс не найден и запрос уже не пуст — ввод останавливается на первом несовпавшем символе (первый символ принимается всегда). Управляющие символы завершают ввод. Запрос может содержать `*` и `?`.
+- **Поведение (`fastFindText`):** символы добавляются по одному; для каждого префикса ищется первое совпадение `filepath.Match(lower(query)+"*", lower(name))` от текущего курсора вперёд по кругу (кроме `..`); если префикс не найден и запрос уже не пуст — ввод останавливается на первом несовпавшем символе (первый символ принимается всегда). Управляющие символы завершают ввод. Запрос может содержать `*` и `?` (подстановочные знаки); `[` и `\` трактуются буквально; сравнение с NFC-нормализацией.
 - Окно: рамка Black на Gray, 3 строки, ширина `min(40, W−4)`, у нижнего края (`y = H−7`), слева для левой панели и справа для правой; заголовок ` Find `, поле Black на Cyan с хвостом запроса и `▌`.
 - Клавиши при открытом поиске: печатные без Ctrl/⌘ — добавить; Backspace — удалить символ и повторить поиск; ↓/↑ или ⌘Enter/Ctrl+Enter / ⌘Shift+Enter — следующее/предыдущее совпадение по кругу; Enter — закрыть и `enterFile()`; Esc — закрыть (позиция сохраняется); любая другая клавиша закрывает поиск и обрабатывается обычным образом. Клик мышью, Delete, Shift+Enter, ⌘Shift+., Num+/−/*, закладки также закрывают поиск.
 - Приоритет: печатные Alt-символы и уже открытый поиск обрабатываются раньше клавиш выделения, кроме явных Numpad-кодов.
@@ -474,7 +476,7 @@
 - **Код:** `completion.go`.
 
 #### Shift+Insert — вставка из буфера
-- Обрабатывается рендерером (`pasteRequest`) → `paste` → командная строка/диалог/поиск.
+- Обрабатывается рендерером (`pasteRequest`) → `paste` → командная строка/диалог/поиск. Особенность архитектуры: системный pasteboard доступен только рендереру, поэтому в Go нет обработки Shift+Insert; headless-тесты используют сообщение `paste`.
 
 ---
 
@@ -556,6 +558,8 @@
 ---
 
 ## Расхождения между справкой F1 / README / парити-документами и кодом
+
+> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
 
 1. **F1: `Cmd+R Refresh panels`** — код перечитывает только активную панель (`rereadPanel(a.Active)`); обе панели перечитываются лишь при `refresh()` (возврат из терминала, смена настроек). Меню `Left/Right → Re-read ⌘R` вызывает перечитывание конкретной панели независимо от активности.
 2. **F1: `Cmd+Shift+.  Show / hide hidden files (display only)`** — на деле переключается персистентная настройка `Settings.ShowHidden` (та же, что в `Panel settings`), и она сохраняется в setup.json; «display only» неверно. Ctrl+H делает то же, но в справке/README не упомянут.
@@ -913,6 +917,8 @@
 
 ## Расхождения между документацией и кодом
 
+> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+
 1. **Help (F1) в `app.go`:** «Cross-volume move is refused. Copy, verify, then delete explicitly.» — в коде `moveAcrossVolumes` выполняет копирование с полным сохранением метаданных и удаление источника (с диалогом `Cannot preserve metadata` при потерях). `docs/FILE_OPERATIONS.md` описывает это верно. Комментарий в `move_darwin.go` («Cross-volume moves are refused») тоже устарел.
 2. **Help:** «Copies preserve permissions, timestamps and links, not ACLs/xattrs» — код при включённых флажках сохраняет ACL (`COPYFILE_ACL`), xattr (`COPYFILE_XATTR`), флаги и creation time, а диалог F5 прямо предлагает «Preserve permissions (mode, owner, group, ACL)» / «Preserve attributes (xattrs, flags, timestamps)».
 3. **Help:** «F5 / F6 Copy / move or rename (no overwriting)» — перезапись существует через диалог коллизии (`Overwrite`/`Append`/`Rename`).
@@ -1179,7 +1185,7 @@
 
 #### `+` / `-` — следующий / предыдущий файл панели
 - **Вызов:** клавиши `+` / `-` в просмотрщике (в редакторе это обычный ввод).
-- **Поведение (`adjacentFile`):** архивный документ → `Return to the archive panel to choose another file`. Ищется ближайшая не-папка в активной панели вперёд/назад от курсора. Если текущий документ `Dirty` → confirm `Save changes` / `Save changes before viewing the next file?` / кнопки `Save`, `Discard`, `Cancel`. Далее курсор панели переставляется и файл открывается **в просмотрщике** (`open(false)` → `openDocument`, минуя внешние настройки) даже если текущий был редактором; старый документ заменяется (его `File` закрывается). Если открыть не удалось — остаётся старый документ и курсор панели. Нет файла → `No next file` / `No previous file`.
+- **Поведение (`adjacentFile`):** архивный документ → `Return to the archive panel to choose another file`. Ищется ближайшая не-папка в активной панели вперёд/назад от курсора. Если текущий документ `Dirty` → confirm `Save changes` / `Save changes before viewing the next file?` / кнопки `Save`, `Discard`, `Cancel`. Далее курсор панели переставляется и файл открывается **во внутреннем просмотрщике** (`open(false)` → `openDocument`, минуя внешние настройки). `adjacentFile` вызывается только из `viewerKey`: в редакторе `+`/`-` — обычный ввод (Dirty-просмотрщик возможен после F6); старый документ заменяется (его `File` закрывается). Если открыть не удалось — остаётся старый документ и курсор панели. Нет файла → `No next file` / `No previous file`.
 - **Код:** `document_keys.go: adjacentFile`.
 
 #### Alt+F8 / Cmd+G — переход (Go to)
@@ -1455,6 +1461,8 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 ---
 
 ## Расхождения между документацией (VIEWER_EDITOR_PARITY.md, README, F1-справка) и кодом
+
+> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
 
 1. **Alt+F3 / Alt+F4 (инверсия внутренний/внешний) и Cmd+Shift+F3 / Cmd+Shift+F4 (принудительно внутренний)** реализованы в `launch.go`/`app.go`, но не упомянуты ни в README, ни в справке F1, ни в `VIEWER_EDITOR_PARITY.md`, ни в меню Files.
 2. **Меню Commands → `File view/edit history`** не показывает клавишу (пустая строка), хотя Alt+F11 работает и указан в справке панелей (`Alt+F11/F12 View/edit history / folder history`).
@@ -1826,6 +1834,8 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 
 ## Расхождения между документацией/справкой и кодом
 
+> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+
 1. **Справка F1** (`app.go`, `help`): заголовок `persistent zsh terminal`, «zsh keeps its environment…», «Your .zshrc is loaded at shell startup» — по умолчанию shell `bash` (`defaultSettings`, `TestDefaultShellIsBash`); zsh — только при выборе в Terminal settings.
 2. **Справка F1**: `Ctrl+E/X/Y` — в коде Ctrl+Y и ⌘Y очищают строку, но Ctrl+E/X работают только с Ctrl (не ⌘); дополнительно работают недокументированные Ctrl+↑/Ctrl+↓ и ⌘↑/⌘↓ (последние есть в справке).
 3. **Справка F1**: `Ctrl+F / Ctrl+;` — в коде также ⌘F / ⌘; (любой `cmd`). `Ctrl+Insert … Alt+Shift+Insert full paths` — ⌘Insert тоже работает; недокументирован Ctrl+Alt+Insert (пути с разрешением симлинков / метка удалённого сервера). Ctrl+[ / Ctrl+] (пути левой/правой панели, с Shift — активной/неактивной) и Ctrl+Shift+Enter (имя из неактивной панели) в справке отсутствуют.
@@ -2183,6 +2193,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 - Список `Groups of file masks`: `Add group…`, затем `<name> = <masks>` (ключи отсортированы). Форма `Mask group`: `Name`, `Masks (empty deletes)`. Ошибки: `Invalid group name` (пусто или содержит `<>,;|`), `Use literal masks in groups` (вложенные `<>`), ошибки `filepath.Match`. Переименование удаляет старый ключ. Default-группы: `arc` (`*.zip,*.tar,*.gz,*.bz2,*.xz,*.tgz,*.tbz,*.tbz2,*.txz,*.7z,*.rar,*.jar,*.war,*.cpio`), `source` (`*.go,*.c,*.h,*.js,*.ts,*.py`), `exec` (`*.sh,*.command`). Группы подставляются как `<name>` в масках фильтра, выделения, поиска, ассоциаций, sort groups.
 
 #### Sort groups (Advanced → Sort groups; Commands → Edit sort groups…)
+- Два входа в один prompt — намеренное дублирование (как в Far: Commands → «Edit sort groups», Options → «Sorting»).
 - prompt `Sort groups` / `Masks in priority order, separated by semicolons`, default пусто → `SortGroups`. Валидация с заменой `;`→`,`; статус с текстом ошибки (`unknown mask group` и т.п.). Файлы, подходящие под более ранние маски, сортируются выше (кроме режима `Unsorted` и при `DisableSortGroups`/Shift+F11).
 
 #### Code pages
@@ -2378,6 +2389,7 @@ Esc returns to the file panels.
 - **Вызов:** меню Commands → `Network connections…` (горячей клавиши нет; справка F1: `Network connections: F9 > Commands > Network connections`).
 - **Диалог:** перед показом перечитывается `connections.json` (`loadConnectionProfiles`). Список `Network connections`: `New FTP / SFTP connection…`, затем каждый профиль как `<Label><Directory>` (Label = `sftp://user@host:port`), последний пункт `Disconnect active panel`.
 - **Поведение:** `New…` → форма с заготовкой `{Protocol: sftp, Port: 22, Directory: "/", User: $USER}`; профиль → форма с его значениями; `Disconnect active panel` → `disconnectRemote(Active)` (если панель не удалённая — ничего).
+- **После backlog (P5-13 и др.):** F8/Delete на профиле удаляет его после подтверждения `Delete connection profile`; несколько профилей на один сервер различаются парой сервер + папка; повреждённый `connections.json` переименовывается в `.broken-<время>`. Неизвестный ключ SFTP: `Trust once` / `Trust and save` (дописывает в `~/.ssh/known_hosts`) / `Cancel`; изменённый или отозванный ключ — `SSH host key changed` / `revoked` с отпечатками и `file:line`, только OK; прочие ошибки — `Connection failed` с `Edit` / `Retry` / `Cancel`. Тест с тремя пунктами меню при одном профиле соответствует коду и обновляется вместе с удалением профилей.
 - **Код:** `remote.go` (`networkMenu`), `connection_profiles.go`.
 
 #### Форма «FTP / SFTP connection»
@@ -2443,6 +2455,8 @@ Esc returns to the file panels.
 
 ## 7. Расхождения между кодом, MENU_PARITY.md, README и справкой F1
 
+> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+
 1. **`Save setup` без шортката в меню**, хотя `Shift+F9` реализован (`far_keys.go`) и указан в справке F1. В README не упомянут.
 2. **Пункты без шортката в меню, но с горячими клавишами в коде и справке:** `Link…` (`Alt+F6` — не упомянут и в справке), `Create archive…`/`Extract archive…`/`Archive commands…` (`Shift+F1/F2/F3` в справке), `File view/edit history`/`Folder history` (`Alt+F11/F12` в справке), `Sort modes…` (`Ctrl+F12` в справке), `Find folder…` нет клавиши нигде.
 3. **Справка F1 называет `Ctrl+L / Ctrl+T` переключением Info/Tree, а `Cmd+L` — Change directory**: код подтверждает (`toggleOtherView` только при `Ctrl` без `Meta`; `⌘L` → `gotoPrompt`). README пишет `Ctrl+Q / Ctrl+L` — согласовано. Но в меню Commands есть только `Quick view on/off`, пункта для `Info panel on/off`/`Tree` нет (они в Left/Right как виды).
@@ -2466,6 +2480,8 @@ Esc returns to the file panels.
 
 <a id="сводка-расхождений"></a>
 # Сводка расхождений
+
+> **Закрыто.** Все расхождения ниже разрешены на ветке `backlog-fixes` (см. «Решения по расхождениям» в `docs/IMPLEMENTATION_BACKLOG.md`). Раздел сохранён как история.
 
 Списки расхождений между кодом и README / справкой F1 / parity-документами приведены в конце каждой части:
 

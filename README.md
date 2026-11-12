@@ -72,22 +72,56 @@ Local builds automatically reuse the `FarshMac Local Development` code-signing i
 
 ## Keyboard essentials
 
+Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only: Ctrl+Q, Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+1…9, Ctrl+Shift+1…9. ⌘ letter shortcuts follow the physical key on non-Latin keyboard layouts.
+
 | Key | Action |
 | --- | --- |
-| Tab | Switch active panel |
+| Tab | Switch active panel (a hidden panel is skipped) |
 | Cmd+O | Switch between panels and terminal; synchronize the folder |
 | Cmd+Option+F3 | Calculate all displayed folder sizes |
-| F3 / F4 | View / edit; F3 on a folder calculates selected folder sizes |
-| F5 / F6 / F7 | Copy / move / create folder |
+| F3 / F4 | View / edit; F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
+| Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
+| F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
+| Alt+F6 | Create a symbolic or hard link |
 | F8 | Move to Trash |
-| Shift+F8 / Shift+Delete | Delete permanently |
+| Shift+F8 / Shift+Delete | Delete permanently (always asks) |
+| Shift+F1 / Shift+F2 / Shift+F3 | Create archive / extract archive / archive commands |
+| Alt+F7 / Alt+F8 | Find file / command history (Alt+F8 only inserts the command) |
+| Alt+F11 / Alt+F12 | File view/edit history / folder history |
 | F9 | Open the menu |
+| Cmd+R | Re-read the active panel (F9 → Left/Right → Re-read for a specific panel) |
+| Cmd+Shift+. / Ctrl+H | Show / hide hidden files |
 | Cmd+Enter | Insert the selected filename into the command line |
+| Cmd+F / Cmd+; | Insert the full path from the active / inactive panel |
+| Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
 | Shift+Enter | Open with macOS / Finder |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
 | Ctrl+Shift+1…9 / Ctrl+1…9 | Save / open folder bookmarks |
-| Cmd+Shift+H | Shell command history: Enter to run, F4 to edit |
-| Cmd+Q | Quit |
+| Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
+| Cmd+Shift+H | Shell command history (terminal mode): Enter to run, F4 to edit |
+| Cmd++ / Cmd+− / Cmd+0 | Font size larger / smaller / default (10–24); Cmd+= also zooms in terminal mode, in panels it opens the same folder in the other panel |
+| Ctrl+Cmd+F | Full screen |
+| Cmd+N / Cmd+W | New window (inherits folders and histories) / close window |
+| Cmd+Q | Quit; F10 closes only the viewer/editor and does nothing in panels |
+
+In the viewer and editor:
+
+| Key | Action |
+| --- | --- |
+| F2 | Viewer: toggle wrap (Shift+F2 word/character wrap). Editor: save (Shift+F2 Save as) |
+| F6 | Switch viewer / editor, keeping text and cursor |
+| F7 / Shift+F7 / Alt+F7 | Search / next / previous match (Space also finds the next match in the viewer) |
+| F8 / Shift+F8 | Toggle CP866 / Windows-1251 / choose a code page |
+| F9 | Encoding, line endings, BOM, read-only and editor settings |
+| F12 | Switch open document screens |
+| Cmd+R | Reload from disk (asks if there are unsaved changes) |
+| Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
+| Cmd+0…9 / Cmd+Shift+0…9 | Go to / set a bookmark; use Ctrl+Shift+3/4/5 because macOS takes Cmd+Shift+3/4/5 for screenshots |
+| Ctrl+Insert / Shift+Delete | Copy / cut |
+
+The editor saves atomically and keeps extended attributes, ACLs and hidden/nodump flags; if some cannot be kept it reports "Saved; some attributes were not preserved". A failed save offers Retry / Save as… / Cancel; a file changed or deleted on disk asks before overwriting or recreating it; in an unwritable folder **Save in place** rewrites the file non-atomically and keeps hard links. Opening a file that probably cannot be saved asks View / Edit anyway / Cancel. Saving through a symbolic link writes the link target.
+
+The terminal is bash by default (sh or zsh in Options → Terminal settings) and gets `TERM_PROGRAM=FarshMac`. If the shell exits it restarts with a 1/2/4/8 s backoff and stops after 5 failed starts; press Enter or Cmd+O to retry. Click the status line, or use Commands → **Last messages…**, to see the last 20 messages.
 
 F1 opens the complete in-app keyboard reference. On keyboards configured for media keys, hold Fn to use F1–F12. Files → **Calculate all folder sizes** calculates all displayed folders. Calculated sizes participate in size sorting. They remain in memory when navigating back or refreshing; `~` marks a cached, possibly outdated value, and `>=` marks an incomplete scan. Recalculate with F3 or Cmd+Option+F3. Previous-directory snapshots are limited to 128 directories, 16,384 results, and a 2 MiB estimated storage budget per panel; least recently used snapshots expire. The current panel is separate from this history budget. Sizes are not saved across application restarts.
 
@@ -104,7 +138,7 @@ GitHub Actions runs checks and produces an ad-hoc universal ZIP artifact. A sepa
 
 ## Scope and limitations
 
-This is an early release. Far Manager plugin binaries and macros are not compatible. Archive panels are read-only; editing an archive member requires extracting it first. Encrypted and some nested archive workflows are not supported. Remote metadata and rename behavior depend on the server. Windows-specific information and actions are replaced with macOS equivalents.
+This is an early release. Far Manager plugin binaries and macros are not compatible. Archive panels are read-only; editing an archive member requires extracting it first. Encrypted archives are refused ("Encrypted archives are not supported"), and some nested archive workflows are not supported. Remote metadata and rename behavior depend on the server. SFTP host keys are checked against `~/.ssh/known_hosts`; an unknown host can be trusted once or with **Trust and save**, while a changed or revoked key is refused. Settings are shared live between windows; one instance owns the window session at a time. Windows-specific information and actions are replaced with macOS equivalents.
 
 See [archive support](ARCHIVE_SUPPORT.md), [terminal behavior](TERMINAL_PARITY.md), and [viewer/editor notes](VIEWER_EDITOR_PARITY.md). The detailed parity audits and [development history](docs/DEVELOPMENT_HISTORY.md) record implementation work over time; some older entries describe previous versions.
 
