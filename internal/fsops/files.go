@@ -30,6 +30,7 @@ func Copy(src, dst string, ops ...*Operation) error {
 	if err != nil {
 		return err
 	}
+	o.ensureRoots(src)
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -55,7 +56,13 @@ func Copy(src, dst string, ops ...*Operation) error {
 }
 
 func copyEntry(src, dst string, o *Operation) (err error) {
-	var sourceInfo os.FileInfo
+	if o.symlinkMode() == SymlinksContents {
+		if info, e := os.Lstat(src); e == nil && info.Mode()&os.ModeSymlink != 0 {
+			// Retry/Skip apply to this link only; metadata comes from the target.
+			return o.Attempt("copy", src, dst, func() error { return o.copyLinkContents(src, dst) })
+		}
+	}
+	var release func(bool)
 	options, explicit := o.metadataOptions()
 	// All destinations here are newly created. On metadata rejection keep the
 	// source intact and discard only this operation's incomplete output.
@@ -63,9 +70,10 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 		if err == nil {
 			if err = o.preserveMetadata(src, dst); err != nil {
 				_ = os.RemoveAll(dst)
-			} else if sourceInfo != nil {
-				o.rememberHardlink(dst, sourceInfo)
 			}
+		}
+		if release != nil {
+			release(err == nil)
 		}
 	}()
 	if err = o.Check(); err != nil {
@@ -75,16 +83,19 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 	if err != nil {
 		return err
 	}
-	sourceInfo = info
-	if linked, e := o.copyHardlink(src, dst, info); e != nil || linked {
-		return e
+	if o.symlinkMode() == SymlinksContents {
+		o.Add(src, regularSize(info)) // Followed folders were not prescanned.
+	}
+	linked := false
+	if linked, release, err = o.copyHardlink(src, dst, info); err != nil || linked {
+		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(src)
 		if err != nil {
 			return err
 		}
-		err = os.Symlink(target, dst)
+		err = os.Symlink(o.copiedLinkText(src, dst, target), dst)
 		if err == nil {
 			o.Complete(src)
 		}
@@ -104,7 +115,7 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 			}
 		}()
 		if err = ReadDirectory(src, o, func(entry os.DirEntry) error {
-			return copyEntry(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()), o)
+			return IgnoreSkipped(copyEntry(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()), o))
 		}); err != nil {
 			return err
 		}
@@ -192,6 +203,13 @@ func copyRegularStream(in *os.File, dst string, info os.FileInfo, o *Operation) 
 		o.Complete(src)
 	}
 	return err
+}
+
+func regularSize(info os.FileInfo) int64 {
+	if info.Mode().IsRegular() {
+		return info.Size()
+	}
+	return 0
 }
 
 // Create in the destination parent so its ACL and the process umask apply

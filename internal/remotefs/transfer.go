@@ -49,6 +49,14 @@ type job struct {
 func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.Operation) error {
 	metadata := options.Metadata
 	o.CopyMetadata = &metadata
+	if source.Remote == nil && target.Remote == nil {
+		// Smart symbolic links keep links into the copied items verbatim.
+		sources := make([]string, len(pairs))
+		for i, pair := range pairs {
+			sources[i] = pair.Source
+		}
+		o.TransferRoots(sources)
+	}
 	workers := max(1, min(8, options.Workers))
 	o.Parallel(workers)
 	o.Streaming()

@@ -41,6 +41,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 	}
 	src, _ = filepath.Abs(src)
 	dst, _ = filepath.Abs(dst)
+	o.ensureRoots(src)
 	si, e := os.Lstat(src)
 	if e != nil {
 		return e
@@ -88,6 +89,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 			if !errors.Is(e, syscall.EXDEV) {
 				if e == nil {
 					o.CompleteTree(src)
+					e = o.relinkMoved(src, dst, si)
 				}
 				return e
 			}
@@ -136,6 +138,11 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		return nil
 	}
 	collision := Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}
+	if si.Mode()&os.ModeSymlink != 0 {
+		collision.SourceLink, _ = os.Readlink(src)
+		_, statErr := os.Stat(src)
+		collision.SourceBroken = statErr != nil
+	}
 	if di.Mode()&os.ModeSymlink != 0 {
 		collision.DestinationLink, _ = os.Readlink(dst)
 		_, statErr := os.Stat(dst)
@@ -171,6 +178,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		if e = os.Rename(src, dst); !errors.Is(e, syscall.EXDEV) {
 			if e == nil {
 				o.CompleteTree(src)
+				e = o.relinkMoved(src, dst, si)
 			}
 			return e
 		}
@@ -182,7 +190,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 	}
 	defer os.RemoveAll(stage)
 	tmp := filepath.Join(stage, "item")
-	if e = Copy(src, tmp, o); e != nil {
+	if e = o.copyStaged(src, tmp, dst); e != nil {
 		return e
 	}
 	current, e := os.Lstat(dst)
@@ -211,6 +219,7 @@ func moveAcrossVolumes(src, dst string, o *Operation) error {
 	previous := o.moving
 	o.moving = true
 	defer func() { o.moving = previous }()
+	o.ensureRoots(src)
 	if err := o.Scan([]string{src}); err != nil {
 		return err
 	}

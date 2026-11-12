@@ -31,6 +31,9 @@ type Collision struct {
 	// DestinationLink is the target of an existing symbolic link (file or broken).
 	DestinationLink   string
 	DestinationBroken bool
+	// SourceLink is the text of a source symbolic link.
+	SourceLink   string
+	SourceBroken bool
 }
 type Resolution struct {
 	Action      int

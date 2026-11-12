@@ -38,16 +38,21 @@ type Operation struct {
 	// once per operation. Return nil to continue, or an error to stop.
 	MetadataLimitation func(notice string) error
 	metadataCopier     func(src, dst string, o *Operation) error
-	moving             bool
-	hardlinks          map[fileIdentity]copiedLink
-	ctx                context.Context
-	stop               context.CancelFunc
-	pauseWake          chan struct{}
-	mu                 sync.Mutex
-	state              Progress
-	sizes              map[string]int64
-	completed          map[string]bool
-	cancel             atomic.Bool
+	// Symlinks applies to local copy/move; set before starting workers.
+	Symlinks             SymlinkMode
+	roots                []string // physical paths of the selected items
+	stagedFrom, stagedTo string   // staging copy and its published name
+	followed             []string // folders entered through links (Copy contents)
+	moving               bool
+	links                *hardlinkTable // shared with forks through parent
+	ctx                  context.Context
+	stop                 context.CancelFunc
+	pauseWake            chan struct{}
+	mu                   sync.Mutex
+	state                Progress
+	sizes                map[string]int64
+	completed            map[string]bool
+	cancel               atomic.Bool
 }
 
 // MetadataOptions are independent; nil retains the legacy copy policy.
