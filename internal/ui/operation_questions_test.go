@@ -222,6 +222,7 @@ func TestReadOnlyCollisionAndDeleteCanSkip(t *testing.T) {
 	selectEntry(t, &a.Panels[1], "file")
 	a.Settings.ConfirmDelete = false
 	a.key(Message{Key: "F8", Shift: true})
+	chooseOperation(t, a, "Delete") // Permanent deletion always confirms.
 	waitOperationQuestion(t, a, "Warning")
 	chooseOperation(t, a, "Skip")
 	waitWork(t, a)

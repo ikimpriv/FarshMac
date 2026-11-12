@@ -264,7 +264,7 @@ func (a *App) settingsMenu(kind string) {
 		a.choose(kind, names, func(i int) { a.Settings.ColorTheme = names[i] })
 
 	case "Confirmations":
-		a.form(kind, []Field{toggle("Delete files/folders", a.Settings.ConfirmDelete), toggle("Overwrite files", a.Settings.ConfirmOverwrite)}, func(f []Field) { a.Settings.ConfirmDelete = f[0].Checked; a.Settings.ConfirmOverwrite = f[1].Checked })
+		a.form(kind, []Field{toggle("Move to Trash (permanent deletion always asks)", a.Settings.ConfirmDelete), toggle("Overwrite files", a.Settings.ConfirmOverwrite)}, func(f []Field) { a.Settings.ConfirmDelete = f[0].Checked; a.Settings.ConfirmOverwrite = f[1].Checked })
 	case "Panel settings":
 		a.form(kind, []Field{toggle("Show hidden files (Cmd+Shift+.)", a.Settings.ShowHidden), toggle("Highlight files", a.Settings.Highlight), toggle("Human-readable sizes (off = bytes)", a.Settings.HumanReadableSizes), toggle("Hide and ignore .DS_Store", a.Settings.IgnoreDSStore), toggle("Select folders with file masks", a.Settings.SelectFolders)}, func(f []Field) {
 			a.Settings.ShowHidden = f[0].Checked
