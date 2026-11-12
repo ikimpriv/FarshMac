@@ -98,7 +98,9 @@ func TestMoveMetadataFailureRetainsSourceUntilConsent(t *testing.T) {
 		asked := 0
 		o.MetadataFailure = func(s, d string, err error) error {
 			asked++
-			assertIgnoredCopy(t, src, false)
+			if _, e := os.Lstat(s); e != nil {
+				t.Fatal("source removed before consent", e)
+			}
 			if accept {
 				return nil
 			}
