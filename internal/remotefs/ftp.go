@@ -211,11 +211,19 @@ func (f *ftpFS) Rename(a, b string) error {
 	if err := SafePath(a + b); err != nil {
 		return err
 	}
-	return f.client.Rename(a, b)
+	err := f.client.Rename(a, b)
+	if FTPStatus(err) == 550 {
+		if _, statErr := f.Lstat(b); statErr == nil && exists(f, a) {
+			return replaceError(b, "RNTO refused", err)
+		}
+	}
+	return err
 }
 
 // ErrNoPermissions is FTP's known inability to set permissions.
 var ErrNoPermissions = errors.New("FTP does not provide portable permission preservation")
+
+func exists(f FS, p string) bool { _, err := f.Lstat(p); return err == nil }
 
 func (f *ftpFS) Chmod(string, os.FileMode) error {
 	return ErrNoPermissions

@@ -135,7 +135,21 @@ func (f *sftpFS) Rename(a, b string) error {
 	if _, ok := f.client.HasExtension("posix-rename@openssh.com"); ok {
 		return f.client.PosixRename(a, b)
 	}
-	return f.client.Rename(a, b)
+	err := f.client.Rename(a, b)
+	if err != nil {
+		if _, statErr := f.client.Lstat(b); statErr == nil && f.exists(a) {
+			return replaceError(b, "no posix-rename", err)
+		}
+	}
+	return err
+}
+
+func (f *sftpFS) exists(p string) bool { _, err := f.client.Lstat(p); return err == nil }
+
+// replaceError explains why an explicit Overwrite failed: the protocol rename
+// refuses existing targets, and a non-atomic delete+rename is never attempted.
+func replaceError(dst, reason string, err error) error {
+	return fmt.Errorf("server cannot replace an existing file atomically (%s); delete %s first or choose Rename: %w", reason, dst, err)
 }
 func (f *sftpFS) Chmod(p string, m os.FileMode) error { return f.client.Chmod(p, m) }
 func (f *sftpFS) Chtimes(p string, t time.Time) error { return f.client.Chtimes(p, t, t) }
