@@ -2,6 +2,43 @@ package ui
 
 import "testing"
 
+func TestFontSizeShortcuts(t *testing.T) {
+	left, right := t.TempDir(), t.TempDir()
+	a, err := New(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Handle(`{"Type":"key","Key":"+","Code":"Equal","Meta":true,"Shift":true}`)
+	if a.Settings.FontSize != 15 || a.Status != "Font size 15" || a.Poll().FontSize != 15 {
+		t.Fatal("Cmd+Plus", a.Settings.FontSize, a.Status)
+	}
+	a.Handle(`{"Type":"key","Key":"=","Code":"Equal","Meta":true}`)
+	if a.Settings.FontSize != 15 || a.Panels[1].Path != left {
+		t.Fatal("Cmd+= in panels must keep Same folder in other panel")
+	}
+	a.TermVisible = true
+	a.Handle(`{"Type":"key","Key":"=","Code":"Equal","Meta":true}`)
+	if a.Settings.FontSize != 16 {
+		t.Fatal("Cmd+= in the terminal", a.Settings.FontSize)
+	}
+	for i := 0; i < 20; i++ {
+		a.Handle(`{"Type":"key","Key":"-","Code":"Minus","Meta":true}`)
+	}
+	if a.Settings.FontSize != 10 {
+		t.Fatal("Cmd+Minus lower bound", a.Settings.FontSize)
+	}
+	a.Handle(`{"Type":"key","Key":"0","Code":"Digit0","Meta":true}`)
+	if a.Settings.FontSize != 14 {
+		t.Fatal("Cmd+0 reset", a.Settings.FontSize)
+	}
+	a.TermVisible = false
+	a.Handle(`{"Type":"key","Key":"-","Code":"NumpadSubtract","Meta":true}`)
+	if a.Settings.FontSize != 14 {
+		t.Fatal("numpad minus must keep selection semantics")
+	}
+}
+
 func TestMetaShortcutsMapCodeForNonLatinKey(t *testing.T) {
 	left, right := t.TempDir(), t.TempDir()
 	a, err := New(left, right)

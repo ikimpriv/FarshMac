@@ -49,6 +49,7 @@ term.attachCustomKeyEventHandler(e=>{
  if(e.type!=='keydown')return true;
  if(toggle(e)){e.preventDefault();send(keyMessage(e));return false;}
  if(e.metaKey&&e.key==='.'){e.preventDefault();send({Type:'input',Text:'\x03'});return false;}
+ if(e.metaKey&&!e.ctrlKey&&!e.altKey&&['=','+','-','0'].includes(e.key)&&!/^Numpad/.test(e.code||'')){e.preventDefault();send(keyMessage(e));return false;}
  if((e.metaKey||e.ctrlKey&&e.shiftKey)&&shortcutLetter(e)==='c'){e.preventDefault();copyText();return false;}
  if((e.metaKey||e.ctrlKey&&e.shiftKey)&&shortcutLetter(e)==='v'||e.shiftKey&&e.key==='Insert'){e.preventDefault();pasteRequest();return false;}
  if(e.metaKey&&shortcutLetter(e)==='a'){e.preventDefault();term.selectAll();return false;}

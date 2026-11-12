@@ -699,6 +699,9 @@ func (a *App) key(m Message) {
 		a.RequestQuit()
 		return
 	}
+	if a.fontSizeKey(m) {
+		return
+	}
 	if (m.Ctrl && m.Key == "Tab") || (m.Meta && m.Shift && (m.Key == "[" || m.Key == "]" || m.Key == "{" || m.Key == "}")) {
 		a.cycleScreen(m.Shift && m.Key == "Tab" || m.Key == "[" || m.Key == "{")
 		return

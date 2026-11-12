@@ -24,6 +24,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  panels.events.wheel(event({deltaY:80}));assert.equal(sent.at(-1).Type,'wheel');assert.equal(sent.at(-1).Delta,4);
  context.window.farshmacUpdate({mode:'terminal',shellReady:true,history:{first:0,total:100}});await settle();
  term.key(event({type:'keydown',ctrlKey:true,key:'o'}));assert.equal(sent.at(-1).Key,'o');assert.equal(sent.at(-1).Ctrl,true);
+ for(const key of ['=','+','-','0']){assert.equal(term.key(event({type:'keydown',metaKey:true,key})),false);assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,key);}
  assert.equal(term.key(event({type:'keydown',metaKey:true,key:'щ',code:'KeyO'})),false);assert.equal(sent.at(-1).Key,'o');assert.equal(sent.at(-1).Meta,true);
  term.selection='hello';term.key(event({type:'keydown',metaKey:true,key:'c'}));assert.equal(sent.at(-1).Text,'hello');
  term.key(event({type:'keydown',metaKey:true,key:'v'}));assert.equal(sent.at(-1).Type,'pasteRequest');

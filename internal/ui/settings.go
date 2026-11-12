@@ -389,3 +389,26 @@ func (a *App) settingsMenu(kind string) {
 		a.Status = fmt.Sprintf("Settings: %s", kind)
 	}
 }
+
+// fontSizeKey handles Cmd+Plus / Cmd+Minus / Cmd+0. Cmd+= also zooms in the
+// terminal; in panels it keeps "Same folder in other panel".
+func (a *App) fontSizeKey(m Message) bool {
+	if !m.Meta || m.Ctrl || m.Alt || strings.HasPrefix(m.Code, "Numpad") {
+		return false
+	}
+	size := a.Settings.FontSize
+	switch {
+	case m.Key == "+" || m.Key == "=" && a.TermVisible:
+		size++
+	case m.Key == "-" && !m.Shift:
+		size--
+	case m.Key == "0" && !m.Shift:
+		size = defaultSettings().FontSize
+	default:
+		return false
+	}
+	a.Settings.FontSize = max(10, min(24, size))
+	a.Status = fmt.Sprintf("Font size %d", a.Settings.FontSize)
+	a.dirty = true
+	return true
+}
