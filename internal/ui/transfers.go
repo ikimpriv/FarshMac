@@ -201,12 +201,47 @@ func (a *App) archiveCreate() {
 		return
 	}
 	base := a.Panels[a.Active].Path
-	dst := filepath.Join(a.Panels[1-a.Active].Path, filepath.Base(paths[0])+".zip")
-	a.prompt("Create archive", "New filename: .zip / .tar.gz / .tar.bz2 / .tar.xz / .7z", dst, func(s string) {
+	a.archiveCreatePrompt(paths, base, filepath.Join(a.Panels[1-a.Active].Path, filepath.Base(paths[0])+".zip"))
+}
+
+// The destination is checked before starting: Retry cannot fix an existing
+// name, and Skip must not report "Done" for an archive that was never created.
+func (a *App) archiveCreatePrompt(paths []string, base, suggested string) {
+	a.prompt("Create archive", "New filename: .zip / .tar.gz / .tar.bz2 / .tar.xz / .7z", suggested, func(s string) {
+		dst := expand(s, base)
+		if !fsops.CreatableArchive(dst) {
+			a.Status = "Archive creation supports .zip, .tar, .tar.gz, .tar.bz2, .tar.xz and .7z"
+			return
+		}
+		if _, err := os.Lstat(dst); err == nil {
+			a.confirm("Warning", "The archive already exists\n"+dst, []string{"Rename", "Cancel"}, func(i int) {
+				if i == 0 {
+					a.archiveCreatePrompt(paths, base, archiveCandidate(dst))
+				}
+			})
+			return
+		}
+		source := paths[0]
+		if len(paths) > 1 {
+			source = fmt.Sprintf("%s (+%d more)", paths[0], len(paths)-1)
+		}
 		a.workProgress("Creating archive", func(o *fsops.Operation) error {
-			return o.Attempt("create archive", strings.Join(paths, "\n"), expand(s, base), func() error { return fsops.CreateArchive(paths, expand(s, base), o) })
+			return o.AttemptRequired("create archive", source, dst, func() error { return fsops.CreateArchive(paths, dst, o) })
 		})
 	})
+}
+
+// archiveCandidate suggests "<stem> (1).zip", keeping compound extensions.
+func archiveCandidate(dst string) string {
+	name := filepath.Base(dst)
+	stem := fsops.ArchiveStem(name)
+	ext := strings.TrimPrefix(name, stem)
+	for n := 1; ; n++ {
+		candidate := filepath.Join(filepath.Dir(dst), fmt.Sprintf("%s (%d)%s", stem, n, ext))
+		if _, err := os.Lstat(candidate); os.IsNotExist(err) || n >= 1000 {
+			return candidate
+		}
+	}
 }
 func (a *App) archiveExtract() {
 	if a.remoteUnsupported() || a.archiveRemoteTarget() {

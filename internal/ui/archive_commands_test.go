@@ -60,6 +60,48 @@ func TestEncryptedArchiveMessage(t *testing.T) {
 	}
 }
 
+func TestCreateArchiveExistingNameOffersRename(t *testing.T) {
+	left, right := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(left, "file"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(right, "file.tar.gz")
+	if err := os.WriteFile(existing, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "file")
+	a.archiveCreate()
+	a.Dialog.Input = "file.unknown"
+	a.key(Message{Key: "Enter"})
+	if a.Busy || !strings.Contains(a.Status, "supports .zip") {
+		t.Fatal("unsupported extension", a.Status)
+	}
+	a.archiveCreate()
+	a.Dialog.Input = existing
+	a.key(Message{Key: "Enter"})
+	if a.Busy || a.Form == nil || a.Form.Message != "The archive already exists\n"+existing || strings.Join(a.Form.Choice, ",") != "Rename,Cancel" {
+		t.Fatalf("busy=%v form=%+v", a.Busy, a.Form)
+	}
+	chooseOperation(t, a, "Rename")
+	want := filepath.Join(right, "file (1).tar.gz")
+	if a.Dialog == nil || a.Dialog.Input != want {
+		t.Fatalf("rename candidate %+v", a.Dialog)
+	}
+	a.key(Message{Key: "Enter"})
+	waitWork(t, a)
+	if _, err := fsops.ArchiveContents(want, true); err != nil {
+		t.Fatal(err, a.Status)
+	}
+	if b, err := os.ReadFile(existing); err != nil || string(b) != "keep" {
+		t.Fatal("existing archive changed", err)
+	}
+}
+
 func TestArchiveCommandsRefuseRemoteOppositePanel(t *testing.T) {
 	root, hidden := t.TempDir(), t.TempDir()
 	src := filepath.Join(root, "hello.txt")

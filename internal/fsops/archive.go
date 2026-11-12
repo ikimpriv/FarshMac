@@ -2,6 +2,7 @@ package fsops
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -49,6 +50,9 @@ func CreateZIP(paths []string, dst string, ops ...*Operation) error {
 	z := zip.NewWriter(f)
 	for _, root := range paths {
 		err = WalkDir(root, o, func(path string, d fs.DirEntry, e error) error {
+			if errors.Is(e, ErrSkipped) {
+				return nil
+			}
 			if e != nil {
 				return e
 			}
@@ -62,6 +66,15 @@ func CreateZIP(paths []string, dst string, ops ...*Operation) error {
 			rel, e := filepath.Rel(filepath.Dir(root), path)
 			if e != nil {
 				return e
+			}
+			var in *os.File
+			if info.Mode().IsRegular() {
+				if in, e = openArchiveSource(path, o); errors.Is(e, ErrSkipped) {
+					return nil
+				} else if e != nil {
+					return e
+				}
+				defer in.Close()
 			}
 			h, e := zip.FileInfoHeader(info)
 			if e != nil {
@@ -95,11 +108,6 @@ func CreateZIP(paths []string, dst string, ops ...*Operation) error {
 				}
 				return e
 			}
-			in, e := os.Open(path)
-			if e != nil {
-				return e
-			}
-			defer in.Close()
 			o.Begin(path, info.Size())
 			_, e = copyProgress(w, in, o)
 			if e == nil {
