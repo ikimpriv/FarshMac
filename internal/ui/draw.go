@@ -26,7 +26,7 @@ func (a *App) Draw() *Grid {
 	g.Fill(0, g.H-3, g.W, 2, Gray, Black)
 	status := a.Status
 	if status == "" {
-		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys"
+		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark"
 	}
 	g.Text(0, g.H-3, fitStatus(status, g.W), Gray, Black, g.W)
 	promptPath := a.Panels[a.Active].Path

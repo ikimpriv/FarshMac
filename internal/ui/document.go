@@ -1102,7 +1102,6 @@ Shift+F8    Codepage chooser     F8 CP866 / Windows-1251 (first press: CP866)
 F9          Encoding, line endings, BOM, read-only; Syntax, Auto indent,
             Tab width and Expand tabs change app settings, not the document
 Cmd+Option+0..9 Save bookmark    Cmd+0..9 Go to bookmark
-            (Ctrl+Shift+0..9 also saves, Ctrl+0..9 also jumps)
             Bookmarks are shared with the panels and belong to the window:
             a document bookmark reopens the file if its screen was closed
             (end of file if it shrank, nothing if it is gone); a folder

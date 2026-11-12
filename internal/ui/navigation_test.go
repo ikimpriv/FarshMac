@@ -171,7 +171,7 @@ func TestF9MenuKeyboardAndMouse(t *testing.T) {
 		t.Fatal("menu did not dispatch mkdir")
 	}
 	a.key(Message{Key: "Escape"})
-	a.key(Message{Key: "9", Meta: true})
+	a.key(Message{Key: "F9"})
 	a.key(Message{Key: "Escape"})
 	if a.Menu != nil || a.Command != "existing command" {
 		t.Fatal("menu cancellation changed command line")

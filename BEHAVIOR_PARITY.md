@@ -27,7 +27,7 @@ This historical audit records implemented scenarios and validation limits. See
   merges histories with the copy on disk; if another FarshMac instance changed
   setup.json, it asks "Overwrite?". A damaged setup.json or session.json is kept as
   `.broken-<time>` and defaults are used.
-- ⌘+ / ⌘− / ⌘0 change the font size (10–24) in every window. ⌘= zooms only in
+- ⌘+ / ⌘− change the font size (10–24) in every window (⌘0 resets it in the terminal only; in panels and documents ⌘0 is bookmark 0). ⌘= zooms only in
   terminal mode; in panels it remains "Same folder in other panel". ⌘/Ctrl letter
   shortcuts use the physical key on non-Latin layouts.
 
@@ -83,10 +83,11 @@ are absent. Later Option-input fixes are documented in the changelog.
   (created, accessed, owner, description).
 - ⌘C equals Ctrl+Insert: copies the command line or selected names; on `..` it
   copies the panel path. Ctrl+Alt+Insert copies real paths (links resolved).
-- ⌘⌥0…9 (or Ctrl+0…9) bookmark jumps keep remembered cursor positions and marks of visited
+- ⌘0…9 bookmark jumps keep remembered cursor positions and marks of visited
   folders and put the cursor on the file that was under it when the bookmark was saved.
-  Unlike Far's folder shortcuts, bookmarks belong to one window and are not saved; the same
-  ten slots also hold viewer/editor positions (see VIEWER_EDITOR_PARITY.md).
+  ⌘⌥0…9 saves. Unlike Far's folder shortcuts (Ctrl+digit / Ctrl+Shift+digit), bookmarks belong
+  to one window and are not saved; the same ten slots and keys also hold viewer/editor
+  positions (see VIEWER_EDITOR_PARITY.md). ⌘1…9 are no longer aliases of F1…F9.
 - Ctrl+PgDn enters exactly the archive formats in [ARCHIVE_SUPPORT.md](ARCHIVE_SUPPORT.md);
   a bare `.gz`/`.bz2`/`.xz` is not entered.
 - Folder history entries remember their source (local path,

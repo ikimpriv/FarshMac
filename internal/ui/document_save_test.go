@@ -543,14 +543,10 @@ func TestBookmarkSavedWithOptionKeySymbol(t *testing.T) {
 	if a.Doc.Offset != 2 {
 		t.Fatal("bookmark restore", a.Doc.Offset)
 	}
+	// Ctrl variants are not bookmark keys.
 	a.key(Message{Key: "№", Code: "Digit5", Ctrl: true, Shift: true})
-	if _, ok := a.Bookmarks[5]; !ok {
-		t.Fatal("Ctrl+Shift alias")
-	}
-	a.Doc.Offset = 1
-	a.key(Message{Key: "5", Code: "Digit5", Ctrl: true})
-	if a.Doc.Offset != 2 {
-		t.Fatal("Ctrl restore", a.Doc.Offset)
+	if _, ok := a.Bookmarks[5]; ok {
+		t.Fatal("Ctrl+Shift saved a bookmark")
 	}
 }
 

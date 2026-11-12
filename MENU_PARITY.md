@@ -45,7 +45,7 @@ archive plugin or extension.
 ## Commands
 
 - Find file / Find folder: masks, subdirectories, containing text and case sensitivity. Text is streamed; results are capped at 10,000, with unreadable paths counted. Archive search, regex and all Far encodings were not implemented in this search dialog.
-- Command history (⌥F8) inserts without immediate execution. File view/edit history (⌥F11) and Folder history (⌥F12) list recent entries; folder history remembers whether an entry is local, remote or inside an archive. Far's folder shortcuts are **Bookmarks…**: ten window-scoped slots 0–9 shared with the viewer/editor (⌘⌥0…9 to jump, ⌘⌥⇧0…9 to save the folder and the file under the cursor; ⌃0…9 / ⌃⇧0…9 as aliases, since macOS may take ⌃0…9 for switching desktops and ⌘1…9 are F1…F9). They are not saved and are not shared between windows.
+- Command history (⌥F8) inserts without immediate execution. File view/edit history (⌥F11) and Folder history (⌥F12) list recent entries; folder history remembers whether an entry is local, remote or inside an archive. Far's folder shortcuts are **Bookmarks…**: ten window-scoped slots 0–9 shared with the viewer/editor (⌘⌥0…9 saves the folder and the file under the cursor, ⌘0…9 jumps; no Ctrl or Shift variants, since macOS takes Ctrl+digit for switching desktops and ⌘⇧3/4/5 for screenshots). They are not saved and are not shared between windows.
 - Find folder has no shortcut, as in Far.
 - Folder tree, Swap panels, Panels on/off / terminal and Compare folders. Comparison is nonrecursive and uses names, sizes and times, not content hashes.
 - **F2** opens the user menu. Edit user menu and File associations configure commands with `{}` substitution, saved in `setup.json`. Enter applies associations; opening through macOS is also available. FarMenu.ini, hierarchical user menus and Far's complete substitution language are unsupported.
@@ -57,7 +57,7 @@ archive plugin or extension.
 
 ## Options
 
-- General: font size (10–24, also ⌘+ / ⌘− / ⌘0), key bar, wrapping navigation, dialogs, confirmations and Save setup on exit. **Confirm Move to Trash** covers F8 only; permanent deletion always asks. The former Dialog, AutoComplete, System, Interface, Menu, Confirmations and Command line settings forms were removed: their fields are in General and Terminal settings.
+- General: font size (10–24, also ⌘+ / ⌘−), key bar, wrapping navigation, dialogs, confirmations and Save setup on exit. **Confirm Move to Trash** covers F8 only; permanent deletion always asks. The former Dialog, AutoComplete, System, Interface, Menu, Confirmations and Command line settings forms were removed: their fields are in General and Terminal settings.
 - Panel: hidden-file visibility (also ⌘⇧. / Ctrl+H, saved with the setup), independent Hide and ignore .DS_Store, highlighting and human-readable/exact byte sizes. Hiding affects display only. The .DS_Store filter applies to copy/archive creation; moving or deleting a selected directory processes it completely.
 - Terminal: bash/sh/zsh (bash by default), history length and completion. The shell applies to new windows and after the current shell exits.
 - Viewer and Editor: corresponding document options.

@@ -104,9 +104,9 @@ func TestMacShortcutsAndDirectoryNavigation(t *testing.T) {
 	if a.Panels[0].Path != root {
 		t.Fatal("parent navigation failed")
 	}
-	a.key(Message{Key: "7", Meta: true})
+	a.key(Message{Key: "F7"})
 	if a.Dialog == nil {
-		t.Fatal("Cmd+7 did not open mkdir")
+		t.Fatal("F7 did not open mkdir")
 	}
 	a.Dialog.Input = "new folder"
 	a.key(Message{Key: "Enter"})

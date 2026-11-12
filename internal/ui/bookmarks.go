@@ -70,21 +70,27 @@ func bookmarkDigit(m Message) (int, bool) {
 	return n, true
 }
 
-// panelBookmarkKey: in the panels ⌘⌥0…9 jumps to a bookmark and ⌘⌥⇧0…9
-// saves the current folder and cursor (macOS may take Ctrl+0…9 for switching
-// desktops, and ⌘1…9 are F1…F9). Ctrl+0…9 / Ctrl+Shift+0…9 remain as aliases.
-func (a *App) panelBookmarkKey(m Message) bool {
-	ctrl := m.Ctrl && !m.Meta && !m.Alt
-	cmdOption := m.Meta && m.Alt && !m.Ctrl
-	if !ctrl && !cmdOption {
-		return false
+// bookmarkKey recognises the bookmark keys, the same in the panels and in a
+// document: ⌘⌥0…9 saves and ⌘0…9 jumps. Shift and Ctrl variants are not
+// bookmark keys (macOS takes ⌘⇧3/4/5 for screenshots and Ctrl+digit for
+// switching desktops). save reports which of the two was pressed.
+func bookmarkKey(m Message) (n int, save, ok bool) {
+	if !m.Meta || m.Ctrl || m.Shift {
+		return 0, false, false
 	}
-	n, ok := bookmarkDigit(m)
+	n, ok = bookmarkDigit(m)
+	return n, m.Alt, ok
+}
+
+// panelBookmarkKey: ⌘⌥0…9 saves the current folder with the file under the
+// cursor, ⌘0…9 jumps.
+func (a *App) panelBookmarkKey(m Message) bool {
+	n, save, ok := bookmarkKey(m)
 	if !ok {
 		return false
 	}
 	a.FastFind = nil
-	if m.Shift {
+	if save {
 		a.saveFolderBookmark(n)
 	} else {
 		a.goBookmark(n)
@@ -92,20 +98,15 @@ func (a *App) panelBookmarkKey(m Message) bool {
 	return true
 }
 
-// documentBookmarkKey: in a document ⌘⌥0…9 (also ⌘⌥⇧, Ctrl+Shift) saves the
-// position and ⌘0…9 (also Ctrl) jumps. macOS takes ⌘⇧3/4/5 for screenshots.
+// documentBookmarkKey: ⌘⌥0…9 saves the position in the document, ⌘0…9 jumps.
 func (a *App) documentBookmarkKey(d *Document, m Message) bool {
-	if !m.Meta && !m.Ctrl {
-		return false
-	}
-	n, ok := bookmarkDigit(m)
+	n, save, ok := bookmarkKey(m)
 	if !ok {
 		return false
 	}
-	switch {
-	case m.Meta && m.Alt && !m.Ctrl, m.Ctrl && m.Shift && !m.Meta && !m.Alt:
+	if save {
 		a.saveDocumentBookmark(d, n)
-	case !m.Shift && !m.Alt:
+	} else {
 		a.goBookmark(n)
 	}
 	return true

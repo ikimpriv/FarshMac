@@ -136,7 +136,7 @@ func TestBookmarksStayInTheirWindow(t *testing.T) {
 	setupHome(t)
 	g, a, b := groupWithTwoWindows(t)
 	a.Panels[a.Active].Load(t.TempDir())
-	g.Handle(1, `{"Type":"key","Key":"3","Code":"Digit3","Ctrl":true,"Shift":true}`)
+	g.Handle(1, `{"Type":"key","Key":"£","Code":"Digit3","Meta":true,"Alt":true}`)
 	if a.Bookmarks[3].Path != a.Panels[a.Active].Path {
 		t.Fatal("bookmark not saved", a.Status)
 	}

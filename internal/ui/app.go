@@ -913,10 +913,6 @@ func (a *App) key(m Message) {
 		return
 	}
 	if m.Meta {
-		if n, err := strconv.Atoi(m.Key); err == nil && n >= 1 && n <= 9 {
-			a.function(n)
-			return
-		}
 		switch strings.ToLower(m.Key) {
 		case " ":
 			a.completeCommand()
@@ -1406,7 +1402,7 @@ const help = `FarshMac — native macOS window, Go file manager, persistent shel
 (bash by default; sh or zsh in F9 > Options > Terminal settings)
 
 Ctrl/⌘: shortcuts written Cmd/⌘ also work with Ctrl. Ctrl only: Ctrl+Q,
-Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+1..9, Ctrl+Shift+1..9. Cmd only: ⌘1..9, ⌘+/−/0.
+Ctrl+L, Ctrl+H, Ctrl+E/X. Cmd only: ⌘0..9 and ⌘⌥0..9 bookmarks, ⌘+/−.
 Letter shortcuts follow the physical key on non-Latin keyboard layouts.
 
 Tab                 Switch active panel (skips a hidden panel)
@@ -1444,11 +1440,11 @@ Cmd/Ctrl+Num +/-   Select / deselect same extension
 Alt+Num +/-        Select / deselect same base name
 Shift+Num +/-      Select / deselect all files
 Cmd/Ctrl+M         Restore previous selection
-Cmd+Option+Shift+0..9  Save bookmark: folder and cursor file (also Ctrl+Shift+0..9)
-Cmd+Option+0..9     Go to bookmark (also Ctrl+0..9; keeps cursor positions).
-                    Bookmarks belong to the window and are shared with the
-                    viewer/editor: a document bookmark opens that file at
-                    the saved position (nothing if the file is gone)
+Cmd+Option+0..9     Save bookmark: current folder and the file under the cursor
+Cmd+0..9            Go to bookmark (keeps remembered cursor positions and marks).
+                    The same keys work in the viewer/editor. Bookmarks belong
+                    to the window: a document bookmark opens that file at the
+                    saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
@@ -1481,7 +1477,7 @@ Cmd+Space          Complete filename in command line
 ⌘F1 / ⌘F2     Hide/show left / right panel
 Alt+F1 / Alt+F2    Choose left / right volume
 ⌘Shift+\ or ⌘=  Open active folder in the other panel
-⌘+ / ⌘− / ⌘0    Font size larger / smaller / default (10–24; ⌘= in terminal)
+⌘+ / ⌘−         Font size larger / smaller (10–24; ⌘= and ⌘0 default in terminal)
 ⌃⌘F             Full screen
 Enter on archive  Browse archive; .. returns to parent
 F5 in archive     Copy selected files/folders out; F3 previews

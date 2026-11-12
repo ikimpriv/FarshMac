@@ -376,7 +376,7 @@ func (a *App) fontSizeKey(m Message) bool {
 		size++
 	case m.Key == "-" && !m.Shift:
 		size--
-	case m.Key == "0" && !m.Shift:
+	case m.Key == "0" && !m.Shift && a.TermVisible: // In panels and documents ⌘0 is bookmark 0.
 		size = defaultSettings().FontSize
 	default:
 		return false

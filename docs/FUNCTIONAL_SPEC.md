@@ -62,7 +62,7 @@
 - **Код:** `panel_draw.go: panelRect, drawPanel, loadInfo`.
 
 #### Статусная строка (y = Rows − 3)
-- Gray на Black. Выводит `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys`.
+- Gray на Black. Выводит `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
 - Сбрасывается Esc (при пустой командной строке и отсутствии фоновых чтений). После завершения команды в терминале: `Exit %d · ⌘O panels / terminal`.
 - **Код:** `draw.go: Draw`, `app.go: Poll`.
 
@@ -419,12 +419,12 @@
 
 Десять слотов 0–9 на экземпляр окна: закладка папки (панель) или документа (просмотрщик/редактор). Не сохраняются, другим окнам не видны; при ⌘N новое окно начинает с пустыми слотами. Поля `Settings.Shortcuts/ShortcutRemotes/ShortcutArchives` остались только для чтения старых `setup.json` и не используются.
 
-#### ⌘⌥⇧0…9 (или Ctrl+Shift+0…9) — сохранить папку
-- **Вызов:** ⌘⌥⇧ + цифра или Ctrl+Shift + цифра (⌘ без ⌥ — это F1…F9), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. `Commands → Bookmarks… → Save current folder…` → диалог `Save bookmark`, `Slot 0–9`, значение `1`, ошибка `Choose 0–9`.
+#### ⌘⌥0…9 — сохранить папку
+- **Вызов:** ⌘⌥ + цифра (те же клавиши, что в просмотрщике/редакторе), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. Варианты с Shift и Ctrl не действуют (macOS забирает ⌘⇧3/4/5 под скриншоты и Ctrl+цифра под рабочие столы). ⌘1…9 больше не дублируют F1…F9. `Commands → Bookmarks… → Save current folder…` → диалог `Save bookmark`, `Slot 0–9`, значение `1`, ошибка `Choose 0–9`.
 - **Поведение:** `Bookmarks[n] = {Kind: folder, Path, Cursor: имя файла под курсором (не `..`)}`; для remote — копия конфигурации без пароля/пассфразы/host key с `Directory = Path`; для архива — `Archive = Archive.Path`. Статус `Bookmark %d saved: <path/file>`.
-- **Код:** `bookmarks.go: panelBookmarkKey, saveFolderBookmark`.
+- **Код:** `bookmarks.go: bookmarkKey, panelBookmarkKey, saveFolderBookmark`.
 
-#### ⌘⌥0…9 (или Ctrl+0…9) — перейти
+#### ⌘0…9 — перейти
 - **Поведение:** пустой слот → `Bookmark %d is empty`. Закладка документа → см. раздел «Cmd+0..9 / Cmd+Option+0..9 — закладки» (открывает просмотрщик/редактор). Закладка папки: из документа сначала показываются панели (экраны документов остаются открытыми). Remote: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная → `openArchiveAt(archive, path, cursor)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Bookmark is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `loadSource(path)`. После загрузки курсор ставится на запомненный файл (`placeCursor`; для асинхронной загрузки через `pendingPosition`); если файла нет — курсор как обычно. Запомненные позиции курсора и пометки (`states`) сохраняются.
 - Меню `Bookmarks`: `Save current folder…`, затем `0  <label>` … `9  <label>`: папка — `<путь>/<файл>` (для remote с префиксом `Label()`), документ — `Edit|View <путь>:<строка>`, справка — `Help`.
 - **Код:** `bookmarks.go: goBookmark, goFolderBookmark, bookmarksMenu`.
@@ -1198,7 +1198,7 @@
 
 #### Cmd+0..9 / Cmd+Option+0..9 — закладки
 - **Вызов:** Cmd (или Ctrl) + цифра 0–9: восстановить; Cmd+Option+цифра (или Ctrl+Shift+цифра) — сохранить. Цифра берётся из `m.Code` (`DigitN`), поэтому раскладка и Option не мешают. Cmd+Shift+цифра закладку не ставит: macOS забирает Cmd+Shift+3/4/5 под скриншоты.
-- **Поведение:** сохраняет `bookmark{Kind: document, Path, Edit, Help, ScreenID, Row, Col, View: docPosition}` в `App.Bookmarks[n]` — те же десять слотов окна, что и закладки папок (раздел 9). Статус `Bookmark %d saved`. Переход (из панелей или любого экрана документа): если экран закладки (`ScreenID`) или другой экран с тем же файлом открыт — фокус на него, текущая позиция в `Positions`, затем `restoreBookmark`; иначе файл открывается заново в том же режиме (viewer/editor) и позиция восстанавливается. Закладка папки из документа → панели (см. раздел 9). ⌘0 в документе — сброс размера шрифта, слот 0 — через Ctrl+0. Если текст в точке закладки не изменился — восстанавливается точный вид; иначе курсор ставится на запомненные строку и колонку, а если файл укоротился ниже этой строки — в конец файла. Файла нет или это не обычный файл — статус `Bookmark %d: <path>: <reason>`, ничего не открывается. Нет закладки — `Bookmark %d is empty`; закладка в закрытой справке — `Bookmark %d: help is closed`. Закладки в памяти, не сохраняются.
+- **Поведение:** сохраняет `bookmark{Kind: document, Path, Edit, Help, ScreenID, Row, Col, View: docPosition}` в `App.Bookmarks[n]` — те же десять слотов окна, что и закладки папок (раздел 9). Статус `Bookmark %d saved`. Переход (из панелей или любого экрана документа): если экран закладки (`ScreenID`) или другой экран с тем же файлом открыт — фокус на него, текущая позиция в `Positions`, затем `restoreBookmark`; иначе файл открывается заново в том же режиме (viewer/editor) и позиция восстанавливается. Закладка папки из документа → панели (см. раздел 9). ⌘0 сбрасывает размер шрифта только в терминале. Если текст в точке закладки не изменился — восстанавливается точный вид; иначе курсор ставится на запомненные строку и колонку, а если файл укоротился ниже этой строки — в конец файла. Файла нет или это не обычный файл — статус `Bookmark %d: <path>: <reason>`, ничего не открывается. Нет закладки — `Bookmark %d is empty`; закладка в закрытой справке — `Bookmark %d: help is closed`. Закладки в памяти, не сохраняются.
 - **Код:** `bookmarks.go: documentBookmarkKey, saveDocumentBookmark, goDocumentBookmark, restoreBookmark`.
 
 #### Cmd+Z в просмотрщике — предыдущая позиция
@@ -1404,7 +1404,7 @@ Cmd+F7 / Cmd+H  Search and replace; confirmation or Replace all
 Alt+F8 / Cmd+G  Go to line:column, byte offset, or percentage
 Shift+F8    Codepage chooser     F8 CP866 / Windows-1251
 F9          Encoding-related options, line endings, BOM, read-only
-Cmd+Option+0..9 Save bookmark    Cmd+0..9 Restore bookmark
+Cmd+Option+0..9 Save bookmark    Cmd+0..9 Go to bookmark
 Cmd+B       Toggle key bar      Cmd+Shift+B Toggle status
 Cmd+O       Terminal / document
 
@@ -1508,7 +1508,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
   4. Escape: сначала `cancelReads()` (отмена чтения панели); если нечего отменять — очищает `a.Command` и `a.Status`.
   5. Вставка (`paste` сообщение): управляющие символы заменяются пробелом (`unicode.IsControl → ' '`), затем все `\n` удаляются; результат добавляется к `a.Command`. При активном fast-find вставка уходит в fast-find; при открытой форме — в поле формы; в редакторе — в документ; в диалоге — в поле ввода (если фокус на поле).
   6. `compositionend` (IME) в панельном режиме отправляется как `paste` с `e.data`.
-- **Отрисовка:** предпоследняя строка экрана: `<путь активной панели>>` + команда, курсор `▌` в конце (`draw.go`). Для удалённой панели префикс `local:<локальный путь>`. Длинная строка усекается по хвосту (`tail(prompt, g.W-1)`). Строка статуса над ней: `a.Status` или по умолчанию `Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys`.
+- **Отрисовка:** предпоследняя строка экрана: `<путь активной панели>>` + команда, курсор `▌` в конце (`draw.go`). Для удалённой панели префикс `local:<локальный путь>`. Длинная строка усекается по хвосту (`tail(prompt, g.W-1)`). Строка статуса над ней: `a.Status` или по умолчанию `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
 - **Особые случаи:** Ctrl+U и ⌘U меняют панели местами, не трогая команду. Ctrl+Left/Right при пустой команде меняют ширину панелей (шаг 2 %, диапазон 20–80), Ctrl+Num5 сбрасывает.
 - **Код:** `internal/ui/app.go` `key()` (ветка `default`, `Backspace`, `Escape`, `" "`), `Handle()` case `"paste"`, `internal/ui/draw.go`.
 
@@ -1929,7 +1929,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 - При завершении (`pollTask`): `Status = ""`, ошибка → `a.error(err)` (в статус), а если у задачи `reportError` и ошибка не отмена — дополнительно `confirm("<Label> failed", err, ["OK"])`.
 
 ### Строка статуса и key bar (`draw.go`, `Poll`)
-- Строка `Rows-3`: `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys`.
+- Строка `Rows-3`: `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
 - Строка `Rows-2`: `<path>>` + командная строка; для удалённой панели путь показывается как `local:<локальный путь панели>` (команды выполняются локально).
 - Строка `Rows-1` (если `ShowKeys`): 10 ячеек `1Help 2UserMenu 3View 4Edit 5Copy 6RenMov 7MkFold 8Trash 9Menu 10` (пусто); для удалённой панели 8 → `Delete`. Клик по ячейке вызывает `function(n)`.
 - В режиме терминала `Footer` заменяется: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt` / `⌘O  Panels    ·    ⌘.  Interrupt` / при перезапуске `⌘O  Panels    ·    <Status>`.
@@ -2092,7 +2092,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 
 #### Bookmarks…
 - **Диалог:** список `Bookmarks`: `Save current folder…`, затем `0  <метка>` … `9  <метка>` (папка — `<путь>/<файл>`, для удалённых с префиксом `<label>`; документ — `Edit|View <путь>:<строка>`). Выбор слота → `goBookmark`; `Save current folder…` → prompt `Save bookmark` / `Slot 0–9` (значение `1`), ошибка `Choose 0–9`.
-- **Клавиши:** `⌘⌥0…9` (или `Ctrl+0…9`) — перейти, `⌘⌥⇧0…9` (или `Ctrl+Shift+0…9`) — сохранить папку (не Numpad); в документе `⌘⌥0…9` сохраняет позицию, `⌘0…9` переходит.
+- **Клавиши:** `⌘⌥0…9` — сохранить (в панелях папку и файл под курсором, в документе позицию), `⌘0…9` — перейти (не Numpad). Вариантов с Ctrl или Shift нет.
 - **Хранение:** `App.Bookmarks map[int]bookmark` — только в памяти окна; не сохраняются и другим окнам не видны. Подробности — раздел 9.
 - **Код:** `folder_shortcuts.go`, `panel_options.go` (`folderShortcuts`).
 

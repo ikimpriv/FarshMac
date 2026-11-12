@@ -73,7 +73,7 @@ Local builds automatically reuse the `FarshMac Local Development` code-signing i
 
 ## Keyboard essentials
 
-Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only: Ctrl+Q, Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+0…9, Ctrl+Shift+0…9. ⌘ letter shortcuts follow the physical key on non-Latin keyboard layouts.
+Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only: Ctrl+Q, Ctrl+L, Ctrl+H, Ctrl+E/X. ⌘-only: ⌘0…9 and ⌘⌥0…9 bookmarks, ⌘+ / ⌘−. ⌘ letter shortcuts follow the physical key on non-Latin keyboard layouts.
 
 | Key | Action |
 | --- | --- |
@@ -97,10 +97,10 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
 | Shift+Enter | Open with macOS / Finder |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
-| ⌘⌥⇧0…9 / ⌘⌥0…9 | Save / go to a bookmark (Ctrl+Shift+0…9 / Ctrl+0…9 also work; macOS may take Ctrl+0…9 for switching desktops). A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
+| ⌘⌥0…9 / ⌘0…9 | Save / go to a bookmark, the same keys as in the viewer/editor. A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
 | Cmd+Shift+H | Shell command history (terminal mode): Enter to run, F4 to edit |
-| Cmd++ / Cmd+− / Cmd+0 | Font size larger / smaller / default (10–24); Cmd+= also zooms in terminal mode, in panels it opens the same folder in the other panel |
+| Cmd++ / Cmd+− | Font size larger / smaller (10–24); in terminal mode Cmd+= also zooms in and Cmd+0 resets, in panels Cmd+= opens the same folder in the other panel |
 | Ctrl+Cmd+F | Full screen |
 | Cmd+N / Cmd+W | New window (inherits folders and histories) / close window |
 | Cmd+Q | Quit; F10 closes only the viewer/editor and does nothing in panels |
@@ -117,7 +117,7 @@ In the viewer and editor:
 | F12 | Switch open document screens |
 | Cmd+R | Reload from disk (asks if there are unsaved changes) |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
-| Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark (Ctrl+0…9 / Ctrl+Shift+0…9 also work; Cmd+0 resets the font size, so use Ctrl+0 for bookmark 0). Bookmarks are shared with the panels: a document bookmark reopens the file at the saved position from the panels or any other document (end of file if it shrank, nothing if the file is gone); a folder bookmark returns to the panels |
+| Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark. Bookmarks are shared with the panels: a document bookmark reopens the file at the saved position from the panels or any other document (end of file if it shrank, nothing if the file is gone); a folder bookmark returns to the panels |
 | Ctrl+Insert / Shift+Delete | Copy / cut |
 
 The editor saves atomically and keeps extended attributes, ACLs and hidden/nodump flags; if some cannot be kept it reports "Saved; some attributes were not preserved". A failed save offers Retry / Save as… / Cancel; a file changed or deleted on disk asks before overwriting or recreating it; in an unwritable folder **Save in place** rewrites the file non-atomically and keeps hard links. Opening a file that probably cannot be saved asks View / Edit anyway / Cancel. Saving through a symbolic link writes the link target.

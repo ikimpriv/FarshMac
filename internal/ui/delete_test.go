@@ -19,7 +19,6 @@ func TestDeleteShortcuts(t *testing.T) {
 	}{
 		{"F8", Message{Key: "F8"}, false},
 		{"Delete", Message{Key: "Delete"}, false},
-		{"Cmd8", Message{Key: "8", Meta: true}, false},
 		{"ShiftF8", Message{Key: "F8", Shift: true}, true},
 		{"ShiftDelete", Message{Key: "Delete", Shift: true}, true},
 	} {
