@@ -95,6 +95,9 @@ func (a *App) launch(path string, plan LaunchPlan) {
 // Shift+Enter uses Finder's default application, ignoring Far associations and
 // the command line. Pass the absolute path as one argument, never shell syntax.
 func (a *App) openSystemSelected() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
 	if p.Remote != nil {
 		a.Status = "Copy remote files to a local panel before opening them with macOS"
@@ -113,6 +116,9 @@ func (a *App) openSystemSelected() {
 	a.launch(path, externalPlan(path, "", false))
 }
 func (a *App) openConfigured(edit, alternate, forceInternal bool) {
+	if !a.requireFilePanel() {
+		return
+	}
 	p0 := &a.Panels[a.Active]
 	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir {
 		a.folderSize()
@@ -151,6 +157,10 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 	a.launch(path, a.viewPlan(path, edit, alternate, forceInternal))
 }
 func (a *App) enterFile() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if p := &a.Panels[a.Active]; p.Remote != nil {
 		if len(p.Entries) == 0 {
 			return

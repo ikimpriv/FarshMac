@@ -104,7 +104,7 @@ func (a *App) farPanelKey(m Message) bool {
 			a.error(p.Load(p.Path))
 			return true
 		case "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End":
-			if len(p.Entries) == 0 {
+			if len(p.Entries) == 0 || !a.requireFilePanel() {
 				return true
 			}
 			old := p.Cursor
@@ -160,34 +160,12 @@ func (a *App) farPanelKey(m Message) bool {
 		}
 	}
 	if m.Key == "Insert" && (cmd || m.Alt && m.Shift) {
-		value := a.Command
-		if value == "" || m.Shift || m.Alt {
-			var names []string
-			for _, path := range p.Selected() {
-				if m.Alt {
-					if m.Ctrl {
-						if p.Remote != nil {
-							path = p.Remote.Label() + path
-						} else {
-							resolved, err := filepath.EvalSymlinks(path)
-							if err != nil {
-								a.error(err)
-								return true
-							}
-							path = resolved
-						}
-					}
-					names = append(names, path)
-				} else {
-					names = append(names, filepath.Base(path))
-				}
-			}
-			if len(names) == 0 {
-				names = []string{p.Path}
-			}
-			value = strings.Join(names, "\n")
+		if a.Command != "" && !m.Shift && !m.Alt {
+			value := a.Command
+			a.Clipboard = &value
+			return true
 		}
-		a.Clipboard = &value
+		a.copyPanelNames(m.Alt, m.Alt && m.Ctrl)
 		return true
 	}
 	if !cmd && !m.Alt && !m.Shift && m.Code == "Numpad5" {
@@ -270,17 +248,25 @@ func (a *App) farPanelKey(m Message) bool {
 			a.insertFilename()
 			return true
 		case "f":
-			a.appendPanelValue(p.Current())
+			if a.requireFilePanel() {
+				a.appendPanelValue(p.Current())
+			}
 			return true
 		case ";":
-			a.appendPanelValue(a.Panels[1-a.Active].Current())
+			if other := &a.Panels[1-a.Active]; other.filePanelHidden() {
+				a.Status = "Other panel does not show files"
+			} else {
+				a.appendPanelValue(other.Current())
+			}
 			return true
 		}
 	}
 	if m.Key == "Enter" {
 		if m.Shift {
 			other := &a.Panels[1-a.Active]
-			if len(other.Entries) > 0 {
+			if other.filePanelHidden() {
+				a.Status = "Other panel does not show files"
+			} else if len(other.Entries) > 0 {
 				a.appendPanelValue(other.Entries[other.Cursor].Name)
 			}
 		} else {

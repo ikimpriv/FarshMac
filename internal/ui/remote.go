@@ -162,11 +162,16 @@ func (a *App) disconnectRemote(index int) {
 	}
 	p.cancelPanelLoad()
 	p.cancelTree()
-	local := p.RemoteLocalPath
+	home, _ := os.UserHomeDir()
+	local := accessibleFolder(p.RemoteLocalPath, home)
+	previous := *p
 	p.Remote = nil
 	p.RemoteLocalPath = ""
 	p.states = nil
-	a.error(p.Load(local))
+	if err := p.loadSource(local, previous, "Cannot disconnect: "); err != nil {
+		a.error(err)
+		return
+	}
 	a.Status = "Disconnected"
 }
 func (a *App) remoteMkdir() {

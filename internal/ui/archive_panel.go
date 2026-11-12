@@ -164,17 +164,14 @@ func (a *App) matchOtherPanel() {
 	dst := &a.Panels[1-a.Active]
 	dst.cancelPanelLoad()
 	dst.cancelTree()
-	previous := dst.Archive
-	previousRemote, previousLocal := dst.Remote, dst.RemoteLocalPath
+	previous := *dst
 	dst.Remote, dst.RemoteLocalPath = src.Remote, src.RemoteLocalPath
 	dst.Archive = src.Archive
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
 		dst.View = "Full"
 	}
-	if err := dst.Load(src.Path); err != nil {
-		dst.Archive = previous
-		dst.Remote, dst.RemoteLocalPath = previousRemote, previousLocal
-		a.error(err)
+	if err := dst.loadSource(src.Path, previous, "Other panel kept: "); err != nil {
+		a.Status = "Other panel kept: " + err.Error()
 		return
 	}
 	if len(src.Entries) > 0 {

@@ -53,7 +53,11 @@ func (a *App) fastFindText(text string) {
 func (a *App) fastFindKey(m Message) bool {
 	if a.FastFind == nil {
 		if m.Alt && !m.Ctrl && !m.Meta && utf8.RuneCountInString(m.Key) == 1 {
+			if !a.requireFilePanel() {
+				return true
+			}
 			a.fastFindText(m.Key)
+
 			return true
 		}
 		return false

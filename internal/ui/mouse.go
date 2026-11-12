@@ -1,7 +1,5 @@
 package ui
 
-import "strings"
-
 type mouseSelection struct {
 	active                      bool
 	panel, button, anchor, last int
@@ -203,19 +201,8 @@ func absInt(n int) int {
 func (a *App) copyPanelCommand(cut bool) {
 	s := a.Command
 	if s == "" && !cut {
-		var names []string
-		for _, e := range a.Panels[a.Active].Entries {
-			if e.Name != ".." && a.Panels[a.Active].Marked[e.Name] {
-				names = append(names, e.Name)
-			}
-		}
-		if len(names) == 0 {
-			p := &a.Panels[a.Active]
-			if len(p.Entries) > 0 {
-				names = append(names, p.Entries[p.Cursor].Name)
-			}
-		}
-		s = strings.Join(names, "\n")
+		a.copyPanelNames(false, false)
+		return
 	}
 	if s != "" {
 		a.Clipboard = &s
