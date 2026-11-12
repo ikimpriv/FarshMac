@@ -28,6 +28,7 @@ type Form struct {
 	Choice                    []string
 	Select                    func(int)
 	OnKey                     func(Message) bool // handles list-specific keys first
+	listFilter
 }
 
 func (a *App) form(title string, fields []Field, submit func([]Field)) {
@@ -78,6 +79,9 @@ func (a *App) confirm(title, message string, buttons []string, selectItem func(i
 func (a *App) formKey(m Message) {
 	f := a.Form
 	if f.OnKey != nil && f.OnKey(m) {
+		return
+	}
+	if a.listKey(m) {
 		return
 	}
 	if m.Key == "Escape" {
@@ -156,7 +160,7 @@ func (a *App) formKey(m Message) {
 	case "Enter":
 		a.Form = nil
 		if len(f.Choice) > 0 {
-			f.Select(f.Focus)
+			f.Select(f.choiceIndex(f.Focus))
 		} else if f.Focus == len(f.Fields)+1 {
 			if f.Cancel != nil {
 				f.Cancel()
@@ -341,11 +345,13 @@ func (a *App) formGeometry() formGeometry {
 		start = f.Scroll
 		end = start
 	}
-	if start < f.Scroll {
-		f.Scroll = start
-	}
-	if end > f.Scroll+available {
-		f.Scroll = end - available
+	if !f.freeScroll || len(f.Choice) == 0 {
+		if start < f.Scroll {
+			f.Scroll = start
+		}
+		if end > f.Scroll+available {
+			f.Scroll = end - available
+		}
 	}
 	f.Scroll = max(0, min(f.Scroll, max(0, rows-available)))
 	out := formGeometry{modalRect: r, Top: r.Y + 2, Bottom: bottom, ButtonsY: r.Y + r.H - 4}
@@ -372,7 +378,11 @@ func (a *App) drawForm(g *Grid) {
 		return
 	}
 	box := a.formGeometry()
-	drawModal(g, box.modalRect, f.Title)
+	title := f.Title
+	if f.Query != "" {
+		title += " [" + f.Query + "]"
+	}
+	drawModal(g, box.modalRect, title)
 	keys := f.mnemonics()
 	if len(f.Choice) > 0 {
 		for i := f.Scroll; i < len(f.Choice) && box.Top+i-f.Scroll < box.Bottom; i++ {

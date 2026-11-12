@@ -89,10 +89,11 @@ func (a *App) networkMenu() {
 	})
 	menu := a.Form
 	menu.OnKey = func(m Message) bool {
-		if m.Key != "F8" && m.Key != "Delete" || menu.Focus < 1 || menu.Focus > len(profiles) {
+		i := menu.choiceIndex(menu.Focus)
+		if m.Key != "F8" && m.Key != "Delete" || i < 1 || i > len(profiles) {
 			return false
 		}
-		profile := profiles[menu.Focus-1]
+		profile := profiles[i-1]
 		a.confirm("Delete connection profile", "Remove "+profile.Label()+profile.Directory+" from connections.json?", []string{"Delete", "Cancel"}, func(i int) {
 			if i != 0 {
 				a.networkMenu()
