@@ -1150,12 +1150,34 @@ func (a *App) finishPanelReturn() {
 		return
 	}
 	a.shellPanelReturn = nil
-	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" {
+	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
 		a.error(a.Panels[r.index].Load(a.ShellCwd))
 	}
 }
+
+// shellAtArchive reports whether panel i browses an archive and the shell is
+// still in the archive's folder, so returning from the terminal keeps the
+// position inside the archive. A shell cd elsewhere leaves the archive.
+func (a *App) shellAtArchive(i int) bool {
+	p := &a.Panels[i]
+	if p.Archive == nil || p.Remote != nil {
+		return false
+	}
+	if a.ShellCwd == "" {
+		return true
+	}
+	shell, err := filepath.EvalSymlinks(a.ShellCwd)
+	if err != nil {
+		shell = a.ShellCwd
+	}
+	folder, err := filepath.EvalSymlinks(p.filesystemPath())
+	if err != nil {
+		folder = p.filesystemPath()
+	}
+	return shell == folder
+}
 func (a *App) syncCwd() {
-	if a.Panels[a.Active].Remote != nil {
+	if a.Panels[a.Active].Remote != nil || a.shellAtArchive(a.Active) {
 		return
 	}
 	if a.ShellCwd != "" && a.ShellReady && a.pendingShellCwd == "" {
