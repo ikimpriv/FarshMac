@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -36,6 +37,7 @@ type Session struct {
 	cmd          *exec.Cmd
 	input        chan []byte
 	done         chan struct{}
+	exited       chan struct{}
 	once         sync.Once
 	dir          string
 	commandKey   string
@@ -181,7 +183,7 @@ export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	s := &Session{Shell: shell, Events: make(chan Event, 64), file: f, cmd: cmd, input: make(chan []byte, 32), done: make(chan struct{}), dir: dir, commandKey: commandKey, directoryKey: directoryKey, historyKey: historyKey}
+	s := &Session{Shell: shell, Events: make(chan Event, 64), file: f, cmd: cmd, input: make(chan []byte, 32), done: make(chan struct{}), exited: make(chan struct{}), dir: dir, commandKey: commandKey, directoryKey: directoryKey, historyKey: historyKey}
 	go func() {
 		for {
 			select {
@@ -207,7 +209,10 @@ func (s *Session) send(e Event) bool {
 	}
 }
 func (s *Session) read(token string) {
-	defer s.cmd.Wait()
+	defer func() {
+		_ = s.cmd.Wait()
+		close(s.exited)
+	}()
 	p := parser{prefix: []byte("\x1b]777;" + token + ";")}
 	buf := make([]byte, 32768)
 	for {
@@ -317,12 +322,26 @@ func (s *Session) request(cwd, command, mode, key string) error {
 func (s *Session) Resize(cols, rows int) error {
 	return pty.Setsize(s.file, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
+
+// shellKillGrace is how long Close waits after SIGHUP before SIGKILL.
+const shellKillGrace = 2 * time.Second
+
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.done)
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
+		pid := s.cmd.Process.Pid
+		_ = syscall.Kill(-pid, syscall.SIGHUP)
 		_ = s.file.Close()
 		_ = os.RemoveAll(s.dir)
+		// An interactive bash can survive SIGHUP and the closed PTY (seen with
+		// a pending vi-mode line); never leave it behind as an orphan.
+		go func() {
+			select {
+			case <-s.exited:
+			case <-time.After(shellKillGrace):
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		}()
 	})
 }
 func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

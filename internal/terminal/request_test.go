@@ -54,7 +54,7 @@ func TestLostIntegrationKeyRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer closeAndWait(s)
 	waitReady(t, s)
 	// Simulate a startup file or plugin removing the integration widget.
 	if err = s.Write("bind -r '\\C-x\\C-g'\r"); err != nil {

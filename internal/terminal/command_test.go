@@ -30,7 +30,7 @@ func TestPanelCommandHasCleanOutputAndShellHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer closeAndWait(s)
 			waitReady(t, s)
 			// The panel must replace the whole unfinished line, even with the
 			// cursor in the middle or vi command mode (Ctrl+U does not do that).
@@ -113,7 +113,7 @@ func TestMacLSAutomaticColorAndRedirection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer closeAndWait(s)
 	waitReady(t, s)
 	if err = s.Run(root, "printf '\\nLIST_START\\n'; /bin/ls -1; printf '\\nLIST_END\\n'"); err != nil {
 		t.Fatal(err)

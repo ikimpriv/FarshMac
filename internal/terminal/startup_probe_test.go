@@ -16,7 +16,7 @@ func TestLiveStartupProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer closeAndWait(s)
 	timer := time.NewTimer(20 * time.Second)
 	defer timer.Stop()
 	for {
