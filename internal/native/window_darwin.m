@@ -123,6 +123,14 @@
     if (!message.frameInfo.isMainFrame||![message.body isKindOfClass:[NSDictionary class]])return;
     if ([message.body[@"Type"] isEqual:@"clipboard"]&&[message.body[@"Text"] isKindOfClass:[NSString class]]) {[[NSPasteboard generalPasteboard] clearContents];[[NSPasteboard generalPasteboard] setString:message.body[@"Text"] forType:NSPasteboardTypeString];return;}
     if ([message.body[@"Type"] isEqual:@"pasteRequest"]) {[self.owner pasteText:nil];return;}
+    if ([message.body[@"Type"] isEqual:@"minSize"]) {
+        // Keep the 60x15 cell minimum reachable at large font sizes.
+        CGFloat w=MAX(700,[message.body[@"W"] doubleValue]),h=MAX(400,[message.body[@"H"] doubleValue]);
+        self.window.contentMinSize=NSMakeSize(w,h);
+        NSSize size=[self.window contentRectForFrameRect:self.window.frame].size;
+        if(!(self.window.styleMask&NSWindowStyleMaskFullScreen)&&(size.width<w||size.height<h))[self.window setContentSize:NSMakeSize(MAX(w,size.width),MAX(h,size.height))];
+        return;
+    }
     if ([message.body[@"Type"] isEqual:@"frameDone"]) {self.evaluating=NO;if([message.body[@"More"] boolValue])[self tick:nil];return;}
     NSData *json=[NSJSONSerialization dataWithJSONObject:message.body options:0 error:nil];if(json)[self send:[[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]];
 }

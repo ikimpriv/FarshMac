@@ -13,9 +13,13 @@ let documentOpen=false;
 let mode='panels', cols=120,rows=36;
 // Measure cells once per font change, never from a screen whose resize is pending.
 let cellW=8.5,cellH=18,resizeTimer,frameBusy=false;
+let minSize='';
 function measureCells(){
  const screen=panelEl.querySelector('.xterm-screen');
  if(screen&&screen.clientWidth&&screen.clientHeight){cellW=screen.clientWidth/panels.cols;cellH=screen.clientHeight/panels.rows;}
+ // The native window must fit the 60x15 cell minimum at the current font size.
+ const W=Math.ceil(60*cellW+8-1e-6),H=Math.ceil(15*cellH+8-1e-6);
+ if(W+'x'+H!==minSize){minSize=W+'x'+H;send({Type:'minSize',W,H});}
 }
 function dimensions(){
  const nextCols=Math.max(60,Math.min(300,Math.floor((innerWidth-8)/cellW)));
