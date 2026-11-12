@@ -8,6 +8,11 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  for(const extra of [{key:'F1',metaKey:true},{key:'F2',altKey:true},{key:'|',metaKey:true,shiftKey:true},{key:'=',metaKey:true},{key:'>',code:'Period',metaKey:true,shiftKey:true}]) {
   docListeners.keydown(event(extra));assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,extra.key);
  }
+ // Non-Latin layouts: Cmd/Ctrl letters map to the physical Latin key; Dvorak keeps e.key.
+ docListeners.keydown(event({key:'щ',code:'KeyO',metaKey:true}));assert.equal(sent.at(-1).Key,'o');
+ docListeners.keydown(event({key:'Г',code:'KeyU',metaKey:true,shiftKey:true}));assert.equal(sent.at(-1).Key,'U');
+ docListeners.keydown(event({key:'r',code:'KeyO',metaKey:true}));assert.equal(sent.at(-1).Key,'r');
+ docListeners.keydown(event({key:'щ',code:'KeyO'}));assert.equal(sent.at(-1).Key,'щ','plain typing keeps the layout character');
  docListeners.keydown(event({key:'ç',code:'KeyC',altKey:true}));
  assert.equal(sent.at(-1).Key,'ç');assert.equal(sent.at(-1).Code,'KeyC');assert.equal(sent.at(-1).Alt,true);
  // Document bookmarks read the digit from the physical key: Shift turns Key into a symbol.
@@ -22,6 +27,8 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  panels.events.wheel(event({deltaY:80}));assert.equal(sent.at(-1).Type,'wheel');assert.equal(sent.at(-1).Delta,4);
  context.window.farshmacUpdate({mode:'terminal',shellReady:true,history:{first:0,total:100}});await settle();
  term.key(event({type:'keydown',ctrlKey:true,key:'o'}));assert.equal(sent.at(-1).Key,'o');assert.equal(sent.at(-1).Ctrl,true);
+ for(const key of ['=','+','-','0']){assert.equal(term.key(event({type:'keydown',metaKey:true,key})),false);assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,key);}
+ assert.equal(term.key(event({type:'keydown',metaKey:true,key:'щ',code:'KeyO'})),false);assert.equal(sent.at(-1).Key,'o');assert.equal(sent.at(-1).Meta,true);
  term.selection='hello';term.key(event({type:'keydown',metaKey:true,key:'c'}));assert.equal(sent.at(-1).Text,'hello');
  term.key(event({type:'keydown',metaKey:true,key:'v'}));assert.equal(sent.at(-1).Type,'pasteRequest');
  context.window.farshmacPaste('one\ntwo');assert.equal(term.pasted,'one\ntwo');

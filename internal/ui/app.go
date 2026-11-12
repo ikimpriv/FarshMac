@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
@@ -250,6 +251,7 @@ type Message struct {
 type Update struct {
 	ShellReady         bool                   `json:"shellReady"`
 	Commands           *[]string              `json:"commands,omitempty"`
+	CommandsError      string                 `json:"commandsError,omitempty"`
 	Zoom               bool                   `json:"zoom,omitempty"`
 	Preview            *ImagePreview          `json:"preview,omitempty"`
 	History            terminal.HistoryStatus `json:"history"`
@@ -273,6 +275,7 @@ type Update struct {
 	Quit               bool                   `json:"quit,omitempty"`
 }
 type App struct {
+	shellState
 	shellCommands         *[]string
 	infoJobs              [2]*infoJob
 	infoKeys              [2]string
@@ -365,6 +368,9 @@ func (a *App) startTerminalAt(cwd string) error {
 		return err
 	}
 	a.Term = t
+	a.shellStartedAt = time.Now()
+	a.shellStopped = ""
+	a.integrationSentAt = time.Time{}
 	a.shellRestartAt = time.Time{}
 	a.shellRestartCwd = ""
 	a.shellStarted = false
@@ -455,12 +461,28 @@ func (a *App) prompt(title, msg, value string, fn func(string)) {
 	a.dirty = true
 }
 
-func (a *App) RequestQuit() {
+// RequestQuit asks to quit; RequestClose asks to close only this window.
+func (a *App) RequestQuit()  { a.requestQuit(false) }
+func (a *App) RequestClose() { a.requestQuit(true) }
+func (a *App) requestQuit(closeWindow bool) {
 	if a.Busy {
 		a.Status = "Wait for the file operation to finish"
 		a.dirty = true
 		return
 	}
+	// An open form is cancelled like Esc before the quit confirmation replaces it.
+	if f := a.Form; f != nil {
+		a.Form = nil
+		if f.Cancel != nil {
+			f.Cancel()
+		}
+		if a.Form != nil {
+			a.Status = "Close the open dialog first"
+			a.dirty = true
+			return
+		}
+	}
+	confirmShell := func() { a.confirmQuitShell(closeWindow) }
 	dirty := false
 	for _, d := range append(append([]*Document{}, a.Documents...), a.Doc) {
 		if d != nil && d.Dirty {
@@ -469,24 +491,32 @@ func (a *App) RequestQuit() {
 	}
 	if dirty {
 		a.TermVisible = false
-		a.confirm("Save changes", "Save changes in open documents before quitting?", []string{"Save all", "Discard", "Cancel"}, func(i int) {
+		message := "Save changes in open documents before quitting?"
+		if closeWindow {
+			message = "Save changes in open documents before closing this window?"
+		}
+		a.confirm("Save changes", message, []string{"Save all", "Discard", "Cancel"}, func(i int) {
 			if i == 2 {
 				return
 			}
 			if i == 0 {
-				a.saveAllThen(append(append([]*Document{}, a.Documents...), a.Doc), a.confirmQuitShell)
+				a.saveAllThen(append(append([]*Document{}, a.Documents...), a.Doc), confirmShell)
 				return
 			}
-			a.confirmQuitShell()
+			confirmShell()
 		})
 		return
 	}
-	a.confirmQuitShell()
+	confirmShell()
 }
-func (a *App) confirmQuitShell() {
+func (a *App) confirmQuitShell(closeWindow bool) {
 	if a.Term != nil && !a.ShellReady {
 		a.TermVisible = false
-		a.confirm("Quit", "A command is running. Close the application?", []string{"Yes", "No"}, func(i int) {
+		title, message := "Quit", "A command is running. Close the application?"
+		if closeWindow {
+			title, message = "Close window", "A command is running. Close this window?"
+		}
+		a.confirm(title, message, []string{"Yes", "No"}, func(i int) {
 			if i == 0 {
 				a.Quit = true
 			}
@@ -513,11 +543,18 @@ func (a *App) Handle(raw string) {
 		a.Status = "Terminal renderer: " + m.Text
 		return
 	case "commandHistory":
-		if a.Term != nil && a.ShellReady {
+		// Always answer, so the overlay never waits for a reply that cannot come.
+		if a.Term == nil {
+			a.shellCommands = &[]string{}
+			a.commandsError = "Cannot read shell history: shell unavailable"
+		} else if a.ShellReady {
 			if err := a.Term.RequestCommands(a.ShellCwd); err != nil {
 				a.error(err)
+				a.shellCommands = &[]string{}
+				a.commandsError = "Cannot read shell history: " + err.Error()
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", true)
 			}
 		}
 		return
@@ -527,6 +564,7 @@ func (a *App) Handle(raw string) {
 				a.error(err)
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", false)
 			}
 		}
 		return
@@ -561,6 +599,9 @@ func (a *App) Handle(raw string) {
 	case "quit":
 		a.RequestQuit()
 	case "input":
+		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
+			a.retryShell()
+		}
 		if a.Term != nil {
 			// Reserve the shell as soon as a command line is submitted, before
 			// its preexec marker can arrive from the PTY reader.
@@ -632,7 +673,20 @@ func (a *App) Handle(raw string) {
 		}
 	}
 }
+
+// latinShortcut maps a Cmd/Ctrl letter typed in a non-Latin layout to the
+// Latin letter of its physical key. Latin layouts (Dvorak, Colemak) keep Key.
+func latinShortcut(m Message) Message {
+	if (m.Meta || m.Ctrl) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") && utf8.RuneCountInString(m.Key) == 1 && m.Key[0] >= utf8.RuneSelf {
+		m.Key = strings.ToLower(m.Code[3:])
+		if m.Shift {
+			m.Key = strings.ToUpper(m.Key)
+		}
+	}
+	return m
+}
 func (a *App) key(m Message) {
+	m = latinShortcut(m)
 	if m.Alt && !m.Meta && !m.Ctrl && (a.Form != nil || a.Dialog != nil || a.Busy) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") {
 		m.Key = strings.ToLower(m.Code[3:])
 	}
@@ -650,6 +704,9 @@ func (a *App) key(m Message) {
 	}
 	if m.Meta && strings.EqualFold(m.Key, "q") {
 		a.RequestQuit()
+		return
+	}
+	if a.fontSizeKey(m) {
 		return
 	}
 	if (m.Ctrl && m.Key == "Tab") || (m.Meta && m.Shift && (m.Key == "[" || m.Key == "]" || m.Key == "{" || m.Key == "}")) {
@@ -951,9 +1008,10 @@ func (a *App) key(m Message) {
 		a.Command = ""
 		a.Status = ""
 	case "Enter":
-		if a.Command != "" {
+		if strings.TrimSpace(a.Command) != "" {
 			a.execute()
 		} else {
+			a.Command = ""
 			a.enterFile()
 		}
 	default:
@@ -1053,7 +1111,11 @@ func (a *App) function(n int) {
 }
 func (a *App) execute() {
 	if a.Term == nil {
-		a.Status = "Shell unavailable"
+		if a.retryShell() || !a.shellRestartAt.IsZero() {
+			a.Status = "Shell unavailable; retrying…"
+		} else {
+			a.Status = "Shell unavailable"
+		}
 		return
 	}
 	if !a.ShellReady {
@@ -1072,12 +1134,14 @@ func (a *App) execute() {
 	a.Command = ""
 	a.TermVisible = true
 	a.ShellReady = false
+	a.integrationSent(command, false)
 }
 
 // A directory request waits for the prompt; never send integration keys to a
 // running program (ssh, editors, or commands consuming stdin).
 func (a *App) showTerminal() {
 	a.TermVisible = true
+	a.retryShell()
 	if r := a.shellPanelReturn; r != nil {
 		a.shellPanelReturn = nil
 		if r.index == a.Active && a.Panels[r.index].Path == r.path {
@@ -1103,6 +1167,7 @@ func (a *App) syncShellCwd() {
 		return
 	}
 	a.ShellReady = false
+	a.integrationSent("", false)
 }
 
 type shellPanelReturn struct {
@@ -1125,12 +1190,34 @@ func (a *App) finishPanelReturn() {
 		return
 	}
 	a.shellPanelReturn = nil
-	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" {
+	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
 		a.error(a.Panels[r.index].Load(a.ShellCwd))
 	}
 }
+
+// shellAtArchive reports whether panel i browses an archive and the shell is
+// still in the archive's folder, so returning from the terminal keeps the
+// position inside the archive. A shell cd elsewhere leaves the archive.
+func (a *App) shellAtArchive(i int) bool {
+	p := &a.Panels[i]
+	if p.Archive == nil || p.Remote != nil {
+		return false
+	}
+	if a.ShellCwd == "" {
+		return true
+	}
+	shell, err := filepath.EvalSymlinks(a.ShellCwd)
+	if err != nil {
+		shell = a.ShellCwd
+	}
+	folder, err := filepath.EvalSymlinks(p.filesystemPath())
+	if err != nil {
+		folder = p.filesystemPath()
+	}
+	return shell == folder
+}
 func (a *App) syncCwd() {
-	if a.Panels[a.Active].Remote != nil {
+	if a.Panels[a.Active].Remote != nil || a.shellAtArchive(a.Active) {
 		return
 	}
 	if a.ShellCwd != "" && a.ShellReady && a.pendingShellCwd == "" {
@@ -1227,11 +1314,15 @@ jobsDone:
 				a.pending = append(a.pending, e.Data...)
 				if e.Running {
 					a.ShellReady = false
+					a.integrationSentAt = time.Time{}
 					a.dirty = true
 				}
 				if e.Ready {
+					a.integrationSentAt = time.Time{}
+					a.shellFailures = 0
 					if e.Commands != nil {
 						a.shellCommands = &e.Commands
+						a.commandsError = ""
 					}
 					a.ShellReady = true
 					a.shellStarted = true
@@ -1250,11 +1341,16 @@ jobsDone:
 		}
 	}
 termDone:
+	a.checkIntegrationWatchdog()
 	a.restartShellIfDue()
 	a.syncShellCwd()
 	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil, Clipboard: a.Clipboard}
 	u.ShellReady = a.ShellReady
 	u.Commands = a.shellCommands
+	if u.Commands != nil {
+		u.CommandsError = a.commandsError
+		a.commandsError = ""
+	}
 	a.shellCommands = nil
 	u.Title = a.Panels[a.Active].Path
 	u.DiskAccessSettings = a.DiskAccessSettings
@@ -1269,7 +1365,9 @@ termDone:
 	a.Clipboard = nil
 	if a.TermVisible {
 		u.Mode = "terminal"
-		if !a.shellRestartAt.IsZero() {
+		if a.Term == nil && a.shellStopped != "" {
+			u.Footer = "⌘O  Panels    ·    Shell stopped: " + a.shellStopped + "    ·    Enter: retry"
+		} else if !a.shellRestartAt.IsZero() {
 			u.Footer = "⌘O  Panels    ·    " + a.Status
 		} else if a.ShellReady {
 			u.Footer = "⌘O  Panels    ·    Shell ready    ·    " + a.ShellCwd
