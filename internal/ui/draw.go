@@ -40,6 +40,10 @@ func (a *App) Draw() *Grid {
 	if a.Panels[a.Active].Remote != nil {
 		labels[7] = "Delete"
 	}
+	if a.Panels[a.Active].Archive != nil {
+		// Archives are read-only: F5 extracts, F4/F6/F7/F8 only explain that.
+		labels[3], labels[4], labels[5], labels[6], labels[7] = "", "Extract", "", "", ""
+	}
 	if a.Settings.ShowKeys {
 		for i, label := range labels {
 			x := i * g.W / 10

@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"farshmac/internal/fsops"
 )
 
 func TestFastFindLiteralBracket(t *testing.T) {
@@ -84,6 +87,55 @@ func TestControlPageDownOnlyEntersRealArchives(t *testing.T) {
 	settleJobs(a)
 	if launched || a.Panels[0].Archive != nil || a.Busy || a.Doc != nil {
 		t.Fatal("Ctrl+PgDn on a plain .gz must do nothing", launched)
+	}
+}
+
+func gridLine(g *Grid, y int) string {
+	var b strings.Builder
+	for x := 0; x < g.W; x++ {
+		b.WriteString(g.Cells[y*g.W+x].Text)
+	}
+	return b.String()
+}
+
+func TestKeyBarLabelsForArchivePanel(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "source")
+	if err := os.MkdirAll(src, 0700); err != nil {
+		t.Fatal(err)
+	}
+	arc := filepath.Join(root, "test.zip")
+	if err := fsops.CreateArchive([]string{src}, arc); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Settings.ShowKeys = true
+	bar := gridLine(a.Draw(), a.Rows-1)
+	if !strings.Contains(bar, "RenMov") || !strings.Contains(bar, "Trash") {
+		t.Fatal("regular key bar", bar)
+	}
+	selectEntry(t, &a.Panels[0], "test.zip")
+	a.key(Message{Key: "Enter"})
+	settleJobs(a)
+	if a.Panels[0].Archive == nil {
+		t.Fatal("archive not opened", a.Status)
+	}
+	bar = gridLine(a.Draw(), a.Rows-1)
+	for _, gone := range []string{"Edit", "RenMov", "MkFold", "Trash", "Copy"} {
+		if strings.Contains(bar, gone) {
+			t.Fatalf("archive key bar shows %s: %q", gone, bar)
+		}
+	}
+	if !strings.Contains(bar, "View") || !strings.Contains(bar, "Extract") {
+		t.Fatalf("archive key bar %q", bar)
+	}
+	a.function(8)
+	if !strings.Contains(a.Status, "read-only") {
+		t.Fatal("F8 click must still explain", a.Status)
 	}
 }
 
