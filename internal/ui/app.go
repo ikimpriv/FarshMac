@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
@@ -37,6 +38,8 @@ type Panel struct {
 	Archive                *fsops.ArchiveIndex
 	Async                  bool
 	load                   *panelLoad
+	rollback               *panelRollback
+	loadStatus             string
 	readOperation          *fsops.Operation
 	tree                   *treeLoad
 	treeLabels             map[string]string
@@ -136,7 +139,7 @@ func (p *Panel) Load(path string) error {
 				isDir = target.IsDir()
 			}
 		}
-		if !isDir && !matchesMask(e.Name(), p.Filter, p.MaskGroups) {
+		if !isDir && !matchesMask(e.Name(), p.activeFilter(), p.MaskGroups) {
 			return nil
 		}
 		files = append(files, Entry{e.Name(), info, isDir})
@@ -176,7 +179,7 @@ func (p *Panel) beginLoad(abs string) panelState {
 		}
 	}
 	if changed {
-		p.History = appendUnique(p.History, abs, 200)
+		p.History = appendUnique(p.History, p.historyEntry(abs), 200)
 	}
 	p.Path = abs
 	p.Entries = nil
@@ -234,6 +237,7 @@ type Dialog struct {
 	Title, Message, Input string
 	Confirm               func(string)
 	Error                 string
+	Back                  int // caret position counted from the end of Input
 }
 type Message struct {
 	History                  []json.RawMessage
@@ -248,6 +252,7 @@ type Message struct {
 type Update struct {
 	ShellReady         bool                   `json:"shellReady"`
 	Commands           *[]string              `json:"commands,omitempty"`
+	CommandsError      string                 `json:"commandsError,omitempty"`
 	Zoom               bool                   `json:"zoom,omitempty"`
 	Preview            *ImagePreview          `json:"preview,omitempty"`
 	History            terminal.HistoryStatus `json:"history"`
@@ -271,6 +276,7 @@ type Update struct {
 	Quit               bool                   `json:"quit,omitempty"`
 }
 type App struct {
+	shellState
 	shellCommands         *[]string
 	infoJobs              [2]*infoJob
 	infoKeys              [2]string
@@ -310,6 +316,8 @@ type App struct {
 	Settings                                                  Settings
 	folderHistory                                             []string
 	viewHistory                                               []viewRecord
+	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
+	Image                                                     *imageView       // F3 graphical view of an image or PDF.
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
@@ -336,6 +344,7 @@ type App struct {
 	jobs                                                      chan func()
 	history                                                   []string
 	historyAt                                                 int
+	formState
 }
 
 func New(left, right string) (*App, error)      { return newApp(left, right, false) }
@@ -363,6 +372,9 @@ func (a *App) startTerminalAt(cwd string) error {
 		return err
 	}
 	a.Term = t
+	a.shellStartedAt = time.Now()
+	a.shellStopped = ""
+	a.integrationSentAt = time.Time{}
 	a.shellRestartAt = time.Time{}
 	a.shellRestartCwd = ""
 	a.shellStarted = false
@@ -403,9 +415,7 @@ func (a *App) Close() {
 			}
 		}()
 	}
-	if a.Settings.AutoSave {
-		a.saveSetup()
-	}
+	_ = a.autoSaveSetup()
 	for _, d := range append(a.Documents, a.Doc) {
 		if d != nil {
 			if d.File != nil {
@@ -442,23 +452,42 @@ func (a *App) prompt(title, msg, value string, fn func(string)) {
 		value = a.dialogValues[title]
 	}
 	a.Dialog = &Dialog{Selected: a.Settings.SelectDialogInput, Title: title, Message: msg, Input: value, Confirm: func(s string) {
-		if a.Settings.RememberDialogValues {
+		a.activePrompt = &promptSpec{title, msg, fn}
+		a.promptRejected = false
+		fn(s)
+		// A value rejected by validation is not remembered (P5-15).
+		if a.Settings.RememberDialogValues && !a.promptRejected {
 			if a.dialogValues == nil {
 				a.dialogValues = map[string]string{}
 			}
 			a.dialogValues[title] = s
 		}
-		fn(s)
 	}}
 	a.dirty = true
 }
 
-func (a *App) RequestQuit() {
+// RequestQuit asks to quit; RequestClose asks to close only this window.
+func (a *App) RequestQuit()  { a.requestQuit(false) }
+func (a *App) RequestClose() { a.requestQuit(true) }
+func (a *App) requestQuit(closeWindow bool) {
 	if a.Busy {
 		a.Status = "Wait for the file operation to finish"
 		a.dirty = true
 		return
 	}
+	// An open form is cancelled like Esc before the quit confirmation replaces it.
+	if f := a.Form; f != nil {
+		a.Form = nil
+		if f.Cancel != nil {
+			f.Cancel()
+		}
+		if a.Form != nil {
+			a.Status = "Close the open dialog first"
+			a.dirty = true
+			return
+		}
+	}
+	confirmShell := func() { a.confirmQuitShell(closeWindow) }
 	dirty := false
 	for _, d := range append(append([]*Document{}, a.Documents...), a.Doc) {
 		if d != nil && d.Dirty {
@@ -467,24 +496,32 @@ func (a *App) RequestQuit() {
 	}
 	if dirty {
 		a.TermVisible = false
-		a.confirm("Save changes", "Save changes in open documents before quitting?", []string{"Save all", "Discard", "Cancel"}, func(i int) {
+		message := "Save changes in open documents before quitting?"
+		if closeWindow {
+			message = "Save changes in open documents before closing this window?"
+		}
+		a.confirm("Save changes", message, []string{"Save all", "Discard", "Cancel"}, func(i int) {
 			if i == 2 {
 				return
 			}
 			if i == 0 {
-				a.saveAllThen(append(append([]*Document{}, a.Documents...), a.Doc), a.confirmQuitShell)
+				a.saveAllThen(append(append([]*Document{}, a.Documents...), a.Doc), confirmShell)
 				return
 			}
-			a.confirmQuitShell()
+			confirmShell()
 		})
 		return
 	}
-	a.confirmQuitShell()
+	confirmShell()
 }
-func (a *App) confirmQuitShell() {
+func (a *App) confirmQuitShell(closeWindow bool) {
 	if a.Term != nil && !a.ShellReady {
 		a.TermVisible = false
-		a.confirm("Quit", "A command is running. Close the application?", []string{"Yes", "No"}, func(i int) {
+		title, message := "Quit", "A command is running. Close the application?"
+		if closeWindow {
+			title, message = "Close window", "A command is running. Close this window?"
+		}
+		a.confirm(title, message, []string{"Yes", "No"}, func(i int) {
 			if i == 0 {
 				a.Quit = true
 			}
@@ -511,11 +548,18 @@ func (a *App) Handle(raw string) {
 		a.Status = "Terminal renderer: " + m.Text
 		return
 	case "commandHistory":
-		if a.Term != nil && a.ShellReady {
+		// Always answer, so the overlay never waits for a reply that cannot come.
+		if a.Term == nil {
+			a.shellCommands = &[]string{}
+			a.commandsError = "Cannot read shell history: shell unavailable"
+		} else if a.ShellReady {
 			if err := a.Term.RequestCommands(a.ShellCwd); err != nil {
 				a.error(err)
+				a.shellCommands = &[]string{}
+				a.commandsError = "Cannot read shell history: " + err.Error()
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", true)
 			}
 		}
 		return
@@ -525,6 +569,7 @@ func (a *App) Handle(raw string) {
 				a.error(err)
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", false)
 			}
 		}
 		return
@@ -559,6 +604,9 @@ func (a *App) Handle(raw string) {
 	case "quit":
 		a.RequestQuit()
 	case "input":
+		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
+			a.retryShell()
+		}
 		if a.Term != nil {
 			// Reserve the shell as soon as a command line is submitted, before
 			// its preexec marker can arrive from the PTY reader.
@@ -601,6 +649,11 @@ func (a *App) Handle(raw string) {
 			return
 		}
 		if a.Doc != nil && a.Doc.Edit && a.Dialog == nil {
+			if a.Doc.ReadOnly {
+				a.Status = "Read-only mode (⌘L to unlock)"
+				a.dirty = true
+				return
+			}
 			a.Doc.Insert(m.Text)
 			a.Doc.modified()
 			return
@@ -619,13 +672,26 @@ func (a *App) Handle(raw string) {
 				a.Dialog.Input = ""
 				a.Dialog.Selected = false
 			}
-			a.Dialog.Input += strings.ReplaceAll(m.Text, "\n", "")
+			a.Dialog.insert(strings.ReplaceAll(m.Text, "\n", ""))
 		} else if a.Doc == nil {
 			a.Command += strings.ReplaceAll(m.Text, "\n", "")
 		}
 	}
 }
+
+// latinShortcut maps a Cmd/Ctrl letter typed in a non-Latin layout to the
+// Latin letter of its physical key. Latin layouts (Dvorak, Colemak) keep Key.
+func latinShortcut(m Message) Message {
+	if (m.Meta || m.Ctrl) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") && utf8.RuneCountInString(m.Key) == 1 && m.Key[0] >= utf8.RuneSelf {
+		m.Key = strings.ToLower(m.Code[3:])
+		if m.Shift {
+			m.Key = strings.ToUpper(m.Key)
+		}
+	}
+	return m
+}
 func (a *App) key(m Message) {
+	m = latinShortcut(m)
 	if m.Alt && !m.Meta && !m.Ctrl && (a.Form != nil || a.Dialog != nil || a.Busy) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") {
 		m.Key = strings.ToLower(m.Code[3:])
 	}
@@ -643,6 +709,13 @@ func (a *App) key(m Message) {
 	}
 	if m.Meta && strings.EqualFold(m.Key, "q") {
 		a.RequestQuit()
+		return
+	}
+	if a.fontSizeKey(m) {
+		return
+	}
+	if a.Image != nil && a.Form == nil && a.Dialog == nil && !a.TermVisible {
+		a.imageKey(m)
 		return
 	}
 	if (m.Ctrl && m.Key == "Tab") || (m.Meta && m.Shift && (m.Key == "[" || m.Key == "]" || m.Key == "{" || m.Key == "}")) {
@@ -701,20 +774,19 @@ func (a *App) key(m Message) {
 				d.Focus = 3 - d.Focus
 			} else {
 				d.Selected = false
+				d.moveCaret(m.Key)
 			}
-		case "Backspace":
+		case "Backspace", "Delete":
 			if d.Focus > 0 {
 				return
 			}
 			if d.Selected {
 				d.Input = ""
 				d.Selected = false
+				d.Back = 0
 				return
 			}
-			r := []rune(d.Input)
-			if len(r) > 0 {
-				d.Input = string(r[:len(r)-1])
-			}
+			d.deleteAtCaret(m.Key == "Backspace")
 		default:
 			if d.Focus > 0 {
 				if m.Key == " " {
@@ -728,8 +800,9 @@ func (a *App) key(m Message) {
 				if d.Selected {
 					d.Input = ""
 					d.Selected = false
+					d.Back = 0
 				}
-				d.Input += m.Key
+				d.insert(m.Key)
 			}
 		}
 		return
@@ -755,7 +828,7 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && a.selectionKey(m) {
 		return
 	}
-	if a.Menu == nil && a.folderShortcutKey(m) {
+	if a.Menu == nil && a.panelBookmarkKey(m) {
 		return
 	}
 	if a.Menu == nil && !m.Meta && !m.Ctrl && !m.Alt && (m.Key == "Delete" || m.Key == "F8" && m.Shift) {
@@ -845,10 +918,6 @@ func (a *App) key(m Message) {
 		return
 	}
 	if m.Meta {
-		if n, err := strconv.Atoi(m.Key); err == nil && n >= 1 && n <= 9 {
-			a.function(n)
-			return
-		}
 		switch strings.ToLower(m.Key) {
 		case " ":
 			a.completeCommand()
@@ -887,7 +956,7 @@ func (a *App) key(m Message) {
 	p := &a.Panels[a.Active]
 	switch m.Key {
 	case "Tab":
-		a.Active = 1 - a.Active
+		a.switchPanels()
 	case "ArrowUp":
 		if m.Ctrl {
 			a.historyAt = max(0, a.historyAt-1)
@@ -944,9 +1013,10 @@ func (a *App) key(m Message) {
 		a.Command = ""
 		a.Status = ""
 	case "Enter":
-		if a.Command != "" {
+		if strings.TrimSpace(a.Command) != "" {
 			a.execute()
 		} else {
+			a.Command = ""
 			a.enterFile()
 		}
 	default:
@@ -958,6 +1028,9 @@ func (a *App) key(m Message) {
 	}
 }
 func (a *App) mark() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
 	if len(p.Entries) > 0 {
 		e := p.Entries[p.Cursor]
@@ -999,6 +1072,9 @@ func (a *App) function(n int) {
 	case 5, 6:
 		a.transferDialog(n == 6)
 	case 7:
+		if !a.requireFilePanel() {
+			return
+		}
 		if p.Remote != nil {
 			a.remoteMkdir()
 			return
@@ -1040,7 +1116,11 @@ func (a *App) function(n int) {
 }
 func (a *App) execute() {
 	if a.Term == nil {
-		a.Status = "Shell unavailable"
+		if a.retryShell() || !a.shellRestartAt.IsZero() {
+			a.Status = "Shell unavailable; retrying…"
+		} else {
+			a.Status = "Shell unavailable"
+		}
 		return
 	}
 	if !a.ShellReady {
@@ -1059,12 +1139,14 @@ func (a *App) execute() {
 	a.Command = ""
 	a.TermVisible = true
 	a.ShellReady = false
+	a.integrationSent(command, false)
 }
 
 // A directory request waits for the prompt; never send integration keys to a
 // running program (ssh, editors, or commands consuming stdin).
 func (a *App) showTerminal() {
 	a.TermVisible = true
+	a.retryShell()
 	if r := a.shellPanelReturn; r != nil {
 		a.shellPanelReturn = nil
 		if r.index == a.Active && a.Panels[r.index].Path == r.path {
@@ -1090,6 +1172,7 @@ func (a *App) syncShellCwd() {
 		return
 	}
 	a.ShellReady = false
+	a.integrationSent("", false)
 }
 
 type shellPanelReturn struct {
@@ -1112,12 +1195,34 @@ func (a *App) finishPanelReturn() {
 		return
 	}
 	a.shellPanelReturn = nil
-	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" {
+	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
 		a.error(a.Panels[r.index].Load(a.ShellCwd))
 	}
 }
+
+// shellAtArchive reports whether panel i browses an archive and the shell is
+// still in the archive's folder, so returning from the terminal keeps the
+// position inside the archive. A shell cd elsewhere leaves the archive.
+func (a *App) shellAtArchive(i int) bool {
+	p := &a.Panels[i]
+	if p.Archive == nil || p.Remote != nil {
+		return false
+	}
+	if a.ShellCwd == "" {
+		return true
+	}
+	shell, err := filepath.EvalSymlinks(a.ShellCwd)
+	if err != nil {
+		shell = a.ShellCwd
+	}
+	folder, err := filepath.EvalSymlinks(p.filesystemPath())
+	if err != nil {
+		folder = p.filesystemPath()
+	}
+	return shell == folder
+}
 func (a *App) syncCwd() {
-	if a.Panels[a.Active].Remote != nil {
+	if a.Panels[a.Active].Remote != nil || a.shellAtArchive(a.Active) {
 		return
 	}
 	if a.ShellCwd != "" && a.ShellReady && a.pendingShellCwd == "" {
@@ -1126,6 +1231,9 @@ func (a *App) syncCwd() {
 }
 func (a *App) click(m Message) {
 	if m.Button != 0 && (a.Form != nil || a.Dialog != nil || a.Doc != nil || a.Menu != nil || a.Busy) {
+		return
+	}
+	if a.Image != nil && a.Form == nil && a.Dialog == nil && !a.TermVisible {
 		return
 	}
 	a.FastFind = nil
@@ -1168,6 +1276,10 @@ func (a *App) click(m Message) {
 		a.menuClick(m)
 		return
 	}
+	if m.Y == a.Rows-3 && m.Button == 0 && a.Status != "" {
+		a.showMessages()
+		return
+	}
 	if m.Y == a.Rows-1 && m.Button == 0 {
 		if !a.Settings.ShowKeys {
 			return
@@ -1175,7 +1287,7 @@ func (a *App) click(m Message) {
 		a.function(min(10, m.X*10/a.Cols+1))
 		return
 	}
-	if a.infoPanelClick(m) {
+	if a.infoPanelClick(m) || a.quickViewClick(m) {
 		return
 	}
 	a.panelMouse(m)
@@ -1196,6 +1308,11 @@ jobsDone:
 	for i := range a.Panels {
 		if a.Panels[i].pollTree() || a.Panels[i].pollPanelLoad() {
 			a.dirty = true
+			a.noteInvalidRemoteNames(i)
+		}
+		if s := a.Panels[i].loadStatus; s != "" {
+			a.Panels[i].loadStatus = ""
+			a.Status = s
 		}
 	}
 	if a.Operation != nil {
@@ -1210,17 +1327,21 @@ jobsDone:
 				a.pending = append(a.pending, e.Data...)
 				if e.Running {
 					a.ShellReady = false
+					a.integrationSentAt = time.Time{}
 					a.dirty = true
 				}
 				if e.Ready {
+					a.integrationSentAt = time.Time{}
+					a.shellFailures = 0
 					if e.Commands != nil {
 						a.shellCommands = &e.Commands
+						a.commandsError = ""
 					}
 					a.ShellReady = true
 					a.shellStarted = true
 					a.ShellCwd = e.Cwd
 					a.finishPanelReturn()
-					a.Status = fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status)
+					a.setShellStatus(fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status))
 					a.dirty = true
 				}
 				if e.Exit {
@@ -1233,16 +1354,24 @@ jobsDone:
 		}
 	}
 termDone:
+	a.checkIntegrationWatchdog()
 	a.restartShellIfDue()
 	a.syncShellCwd()
-	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil, Clipboard: a.Clipboard}
+	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Image == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil || a.Image != nil, Clipboard: a.Clipboard}
 	u.ShellReady = a.ShellReady
 	u.Commands = a.shellCommands
+	if u.Commands != nil {
+		u.CommandsError = a.commandsError
+		a.commandsError = ""
+	}
 	a.shellCommands = nil
 	u.Title = a.Panels[a.Active].Path
 	u.DiskAccessSettings = a.DiskAccessSettings
 	if a.Doc != nil {
 		u.Title = filepath.Base(a.Doc.displayPath())
+	}
+	if a.Image != nil {
+		u.Title = filepath.Base(a.Image.Path)
 	}
 	a.historyPage = nil
 	a.NewWindow = false
@@ -1252,7 +1381,9 @@ termDone:
 	a.Clipboard = nil
 	if a.TermVisible {
 		u.Mode = "terminal"
-		if !a.shellRestartAt.IsZero() {
+		if a.Term == nil && a.shellStopped != "" {
+			u.Footer = "⌘O  Panels    ·    Shell stopped: " + a.shellStopped + "    ·    Enter: retry"
+		} else if !a.shellRestartAt.IsZero() {
 			u.Footer = "⌘O  Panels    ·    " + a.Status
 		} else if a.ShellReady {
 			u.Footer = "⌘O  Panels    ·    Shell ready    ·    " + a.ShellCwd
@@ -1278,91 +1409,133 @@ termDone:
 	return u
 }
 
-const help = `FarshMac — native macOS window, Go file manager, persistent zsh terminal
+const help = `FarshMac — native macOS window, Go file manager, persistent shell
+(bash by default; sh or zsh in F9 > Options > Terminal settings)
 
-Tab                 Switch active panel
+Ctrl/⌘: shortcuts written Cmd/⌘ also work with Ctrl. Ctrl only: Ctrl+Q,
+Ctrl+L, Ctrl+H, Ctrl+E/X. Cmd only: ⌘0..9 and ⌘⌥0..9 bookmarks, ⌘+/−.
+Letter shortcuts follow the physical key on non-Latin keyboard layouts.
+
+Tab                 Switch active panel (skips a hidden panel)
 Arrows / PgUp/PgDn   Navigate files
+Shift+arrows/PgUp/PgDn/Home/End  Mark a range of files
+Quick view / Info / Tree / hidden panel: file keys need a file panel (Tab)
 Ctrl+Q             Toggle inactive Quick view (restore previous view)
 Ctrl+L / Ctrl+T    Toggle inactive Info / Tree
 Ctrl+P / Ctrl+B    Toggle inactive panel / key bar
 Ctrl+F3..F11       Sort (name, ext, modified, size, unsorted, created, accessed, description, owner)
-Ctrl+F12           Sort menu; Shift+F12 selected first
+Ctrl+F12           Sort menu; Shift+F12 selected first; Shift+F11 sort groups
+Left/Right menu    Brief, Medium, Full, Wide, Detailed, Info, Tree, Quick view
 Shift+F5/F6        Copy/move only the current item
 Shift+F1/F2/F3     Archive create/extract/commands
 Shift+F9           Save setup
+Alt+F6             Link (symbolic, relative by default / hard); an existing
+                   folder as the name creates the link inside it
+Alt+F7 / Alt+F8    Find file / command history (inserts, does not run)
+Alt+F10            Folder tree
 Alt+F11/F12        View/edit history / folder history
 Ctrl+PgUp/PgDown   Parent / enter folder or archive
 Ctrl+Left/Right    Panel width (empty command); Ctrl+Num5 reset
 Ctrl+E/X/Y         Previous / next command / clear
-Ctrl+F / Ctrl+;    Insert full path from active / inactive panel
-Ctrl+Insert        Copy command or selected names; Alt+Shift+Insert full paths
+Ctrl+↑/↓, ⌘↑/↓     Command history
+Cmd+F / Cmd+;      Insert full path from active / inactive panel
+Ctrl+[ / Ctrl+]    Insert left / right panel path (+Shift: active / inactive)
+Cmd+Enter          Insert current filename; Cmd+Shift+Enter other panel's
+Ctrl+Insert / ⌘C   Copy command or selected names (on .. the panel path)
+Alt+Shift+Insert   Copy full paths; Ctrl+Alt+Insert real paths (links resolved)
 Shift+Insert       Paste text
 Num + / Num -      Select / deselect by masks
 Num *              Invert files; Cmd/Ctrl+Num * includes folders
+Alt+Num *          Invert files and unmark folders
 Cmd/Ctrl+Num +/-   Select / deselect same extension
 Alt+Num +/-        Select / deselect same base name
 Shift+Num +/-      Select / deselect all files
 Cmd/Ctrl+M         Restore previous selection
-Ctrl+Shift+1..9     Save folder shortcut (panels)
-Ctrl+1..9           Go to folder shortcut (panels)
+Cmd+Option+0..9     Save bookmark: current folder and the file under the cursor
+Cmd+0..9            Go to bookmark (keeps remembered cursor positions and marks).
+                    The same keys work in the viewer/editor. Bookmarks belong
+                    to the window: a document bookmark opens that file at the
+                    saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
 
 Enter               Open directory / view file / execute command
-Shift+Enter         Open selected item with macOS (folders in Finder)
-Cmd+Shift+.         Show / hide hidden files (display only)
+Shift+Enter         Open selected item with macOS (folders in Finder, .app launches;
+                    Enter on .app enters the bundle)
+Cmd+Shift+. / Ctrl+H Show / hide hidden files (also in Panel settings)
+Cmd+Shift+S         Human-readable / exact sizes
 Backspace           Delete command-line character; never leave directory
 Space / Insert      Mark file; operations apply to marked files
 F3 on a folder      Calculate marked/current folder sizes; participates in Size sort
+F4 on a folder      File attributes (permissions, modified)
 ⌘Option+F3         Calculate all folder sizes (~ = cached, possibly outdated)
 Info: Ctrl+F12      Configure sections; PgUp/PgDn/wheel scroll; F3/F4 description
 F3 / F4             Viewer / editor (F1 inside for full key reference)
-F5 / F6             Copy / move or rename (no overwriting)
-F7                  New directory
+F3 on image / PDF   Graphical view: black background, picture centred, Esc closes
+Alt+F3 / Alt+F4     Alternate viewer / editor (external vs internal)
+Cmd+Shift+F3/F4     Internal viewer / editor
+Shift+F4            New file
+F5 / F6             Copy / move or rename (asks before overwriting)
+                    Destination ending in / that does not exist: new folder
+F7                  Make folder
 F8 / Delete         Move selected items to Trash
-Shift+F8 / Shift+Del Delete permanently
+Shift+F8 / Shift+Del Delete permanently (always asks)
 F9 / Cmd+9          Main menu (arrows, Enter, Esc)
 Cmd+L              Change directory
-Cmd+Enter          Insert current filename in command line
 F2 / Cmd+2          User menu
-Cmd+R              Refresh panels
+Cmd+R              Re-read active panel (F9 > Left/Right > Re-read)
 Cmd+Space          Complete filename in command line
 ⌘U              Swap panels
 ⌘F1 / ⌘F2     Hide/show left / right panel
 Alt+F1 / Alt+F2    Choose left / right volume
 ⌘Shift+\ or ⌘=  Open active folder in the other panel
+⌘+ / ⌘−         Font size larger / smaller (10–24; ⌘= and ⌘0 default in terminal)
+⌃⌘F             Full screen
 Enter on archive  Browse archive; .. returns to parent
 F5 in archive     Copy selected files/folders out; F3 previews
-File links view   Names, sizes and hard-link counts (names sharing one inode)
-⌘Up / Down      Command history
 ⌘O              Toggle panels and persistent terminal
 Cmd+1 … Cmd+9       Alternatives to F1 … F9 on Mac keyboards
-Cmd+N / Cmd+W      New / close native window
-Cmd+Q              Quit ALL windows; F10 closes only viewer/editor
+Cmd+N / Cmd+W      New / close native window (new windows copy histories)
+Cmd+Q              Quit ALL windows
+F10                Closes the viewer/editor; in panels it does nothing
 Alt+characters     Fast find (Cmd+Enter next; Cmd+Shift+Enter previous)
 F12                Panels and document screens
-Esc during operation  Cancel
+Esc during operation  Cancel the whole operation
+Status line click  Last 20 messages (also F9 > Commands > Last messages)
 
 Type a shell command directly while panels are visible, then press Enter.
 The panels disappear and the SAME window becomes an interactive terminal.
-Commands run in the active panel's directory. zsh keeps its environment,
-history, aliases and jobs. Your .zshrc is loaded at shell startup.
+Commands run in the active panel's directory. The shell keeps its environment,
+history, aliases and jobs. Your shell's startup files are loaded.
 The output stays visible after completion; ⌘O restores the panels.
 ⌘O also works during a command; returning does not stop the job.
 Use Cmd+. (or Ctrl+C) to interrupt, Cmd+C / Cmd+V to copy / paste.
 Scroll the terminal to review output. vim/less use the alternate screen.
+If the shell exits it restarts (1/2/4/8 s backoff; stops after 5 failed
+starts): press Enter or ⌘O to retry.
 
 This is an initial independent implementation, not full Far compatibility.
-Read-only archive panels are supported. No Windows DLL plugins, macros or network VFS yet.
-Cross-volume move is refused. Copy, verify, then delete explicitly.
-Copies preserve permissions, timestamps and links, not ACLs/xattrs.
-The text editor saves atomically, but does not preserve ACLs/xattrs/hardlinks.
+Read-only archive panels are supported. No Windows DLL plugins or macros.
+Cross-volume moves copy each file with metadata, ask before any loss, then
+delete the source.
+Copy options: permissions/ACL, xattrs/flags/timestamps (F5 dialog).
+Symbolic links (F5/F6, local): Smart keeps links pointing at the same object
+(relative links to outside the selection are rewritten), As is copies the
+link text, Copy contents copies what links point to. Hard-linked files
+copied together stay hard links.
+The text editor saves atomically and keeps xattrs, ACLs and hidden/nodump
+flags; it warns "Saved; some attributes were not preserved" otherwise.
+Unwritable folders: "Save in place" (not atomic, keeps hard links).
 Text editing/decoding: 64 MiB limit. Larger files: paged hex/dump viewer.
 Esc returns to the file panels.`
 
 func (a *App) insertFilename() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
+
 	if p.Cursor < 0 || p.Cursor >= len(p.Entries) {
 		return
 	}

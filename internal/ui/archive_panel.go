@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func (p *Panel) loadArchiveDirectory(path string) error {
 		if p.IgnoreDSStore && m.Name() == ".DS_Store" || p.HideHidden && strings.HasPrefix(m.Name(), ".") {
 			continue
 		}
-		if !m.IsDir() && !matchesMask(m.Name(), p.Filter, p.MaskGroups) {
+		if !m.IsDir() && !matchesMask(m.Name(), p.activeFilter(), p.MaskGroups) {
 			continue
 		}
 		files = append(files, Entry{Name: m.Name(), Info: m, Dir: m.IsDir()})
@@ -64,11 +65,15 @@ func (a *App) openArchive(index int, path string) {
 	if p := &a.Panels[index]; p.Archive != nil && p.Archive.Path == path {
 		target = p.Path
 	}
-	a.openArchiveAt(index, path, target)
+	a.openArchiveAt(index, path, target, "")
 }
-func (a *App) openArchiveAt(index int, path, target string) {
+
+// openArchiveAt shows the target folder of an archive in a panel, with the
+// cursor on the named entry when cursor is not empty.
+func (a *App) openArchiveAt(index int, path, target, cursor string) {
 	a.backgroundTask("Opening archive", func(o *fsops.Operation) (func(), func(), error) {
 		catalog, err := fsops.ReadArchiveIndex(path, o)
+		err = archiveFailure(err)
 		return func() {
 			p := &a.Panels[index]
 			p.cancelPanelLoad()
@@ -85,8 +90,28 @@ func (a *App) openArchiveAt(index int, path, target string) {
 				target = catalog.Path
 			}
 			a.error(p.Load(target))
+			p.placeCursor(cursor)
 		}, nil, err
 	})
+	if a.task != nil {
+		a.task.reportError = true // bsdtar diagnostics do not fit the status line.
+	}
+}
+
+// archiveFailure puts the reason first for encrypted archives; bsdtar's own
+// diagnostic stays below it.
+func archiveFailure(err error) error {
+	if err == nil || errors.Is(err, fsops.ErrCancelled) {
+		return err
+	}
+	if errors.Is(err, fsops.ErrEncryptedArchive) {
+		return fmt.Errorf("Encrypted archives are not supported\n%w", err)
+	}
+	detail := strings.ToLower(strings.ReplaceAll(err.Error(), "damaged, encrypted or unsupported archive", ""))
+	if strings.Contains(detail, "passphrase") || strings.Contains(detail, "encrypt") {
+		return fmt.Errorf("Encrypted archives are not supported\n%w", err)
+	}
+	return err
 }
 func (a *App) archiveReadOnly() bool {
 	if a.Panels[a.Active].Archive == nil {
@@ -164,17 +189,14 @@ func (a *App) matchOtherPanel() {
 	dst := &a.Panels[1-a.Active]
 	dst.cancelPanelLoad()
 	dst.cancelTree()
-	previous := dst.Archive
-	previousRemote, previousLocal := dst.Remote, dst.RemoteLocalPath
+	previous := *dst
 	dst.Remote, dst.RemoteLocalPath = src.Remote, src.RemoteLocalPath
 	dst.Archive = src.Archive
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
 		dst.View = "Full"
 	}
-	if err := dst.Load(src.Path); err != nil {
-		dst.Archive = previous
-		dst.Remote, dst.RemoteLocalPath = previousRemote, previousLocal
-		a.error(err)
+	if err := dst.loadSource(src.Path, previous, "Other panel kept: "); err != nil {
+		a.Status = "Other panel kept: " + err.Error()
 		return
 	}
 	if len(src.Entries) > 0 {
@@ -195,6 +217,11 @@ func (a *App) togglePanel(index int) {
 	a.Panels[index].Hidden = !a.Panels[index].Hidden
 	if a.Panels[index].Hidden && a.Active == index && !a.Panels[1-index].Hidden {
 		a.Active = 1 - index
+	}
+	// A read abandoned while hidden would otherwise strand the panel with
+	// only ".." and "Reading folder…" in its footer.
+	if p := &a.Panels[index]; !p.Hidden && p.load == nil && p.tree == nil && strings.HasPrefix(p.Err, "Reading ") {
+		a.error(p.Load(p.Path))
 	}
 }
 

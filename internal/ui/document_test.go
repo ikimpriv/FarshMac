@@ -230,7 +230,7 @@ func TestWrapGotoBookmarksAndRendering(t *testing.T) {
 	if d.ViewStart == 0 {
 		t.Fatal("wrapped navigation failed")
 	}
-	a.key(Message{Key: "3", Meta: true, Shift: true})
+	a.key(Message{Key: "£", Code: "Digit3", Meta: true, Alt: true})
 	saved := d.ViewStart
 	a.key(Message{Key: "Home"})
 	a.key(Message{Key: "3", Meta: true})

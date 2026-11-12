@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -35,6 +37,7 @@ type Session struct {
 	cmd          *exec.Cmd
 	input        chan []byte
 	done         chan struct{}
+	exited       chan struct{}
 	once         sync.Once
 	dir          string
 	commandKey   string
@@ -76,6 +79,7 @@ func StartConfigured(cwd string, cols, rows int, shell string, customPrompt bool
 fi
 function _farshmac_precmd() {
   local farshmac_status=${1:-$?}
+  _farshmac_bindkeys
   printf '\033]777;` + token + `;%s;%s\007' "$farshmac_status" "$PWD"
 }
 precmd_functions+=(_farshmac_precmd)
@@ -126,12 +130,16 @@ function _farshmac_panel_command() {
   zle .accept-line
 }
 zle -N _farshmac_panel_command
-for farshmac_keymap in main emacs viins vicmd; do
-  bindkey -M "$farshmac_keymap" ` + Quote(commandKey) + ` _farshmac_panel_command
-  bindkey -M "$farshmac_keymap" ` + Quote(historyKey) + ` _farshmac_panel_command
-  bindkey -M "$farshmac_keymap" ` + Quote(directoryKey) + ` _farshmac_panel_command
-done
-unset farshmac_keymap
+# Plugins may recreate keymaps after startup; precmd rebinds idempotently.
+function _farshmac_bindkeys() {
+  local farshmac_keymap
+  for farshmac_keymap in main emacs viins vicmd; do
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(commandKey) + ` _farshmac_panel_command
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(historyKey) + ` _farshmac_panel_command
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(directoryKey) + ` _farshmac_panel_command
+  done
+}
+_farshmac_bindkeys
 unsetopt PROMPT_SP
 export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 `
@@ -164,7 +172,7 @@ export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 		}
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(cmd.Env, "SHELL=/bin/"+shell, "BASH_SILENCE_DEPRECATION_WARNING=1")
+	cmd.Env = append(hostTerminalFree(cmd.Env), "TERM_PROGRAM=FarshMac", "SHELL=/bin/"+shell, "BASH_SILENCE_DEPRECATION_WARNING=1")
 	// BSD/macOS ls needs an explicit automatic-color preference in addition to
 	// TERM. Set a session default; startup files may override or unset it.
 	if _, set := os.LookupEnv("CLICOLOR"); !set && os.Getenv("NO_COLOR") == "" {
@@ -175,7 +183,7 @@ export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	s := &Session{Shell: shell, Events: make(chan Event, 64), file: f, cmd: cmd, input: make(chan []byte, 32), done: make(chan struct{}), dir: dir, commandKey: commandKey, directoryKey: directoryKey, historyKey: historyKey}
+	s := &Session{Shell: shell, Events: make(chan Event, 64), file: f, cmd: cmd, input: make(chan []byte, 32), done: make(chan struct{}), exited: make(chan struct{}), dir: dir, commandKey: commandKey, directoryKey: directoryKey, historyKey: historyKey}
 	go func() {
 		for {
 			select {
@@ -201,7 +209,10 @@ func (s *Session) send(e Event) bool {
 	}
 }
 func (s *Session) read(token string) {
-	defer s.cmd.Wait()
+	defer func() {
+		_ = s.cmd.Wait()
+		close(s.exited)
+	}()
 	p := parser{prefix: []byte("\x1b]777;" + token + ";")}
 	buf := make([]byte, 32768)
 	for {
@@ -254,12 +265,43 @@ func (s *Session) ChangeDir(cwd string) error {
 	return s.request(cwd, "", "cd", s.directoryKey)
 }
 
+func requestError(cwd, command string) error {
+	switch {
+	case len(command) > 1024*1024:
+		return fmt.Errorf("command exceeds 1 MiB")
+	case len(cwd) > 1024*1024:
+		return fmt.Errorf("directory path exceeds 1 MiB")
+	case len(cwd)+len(command) > 1024*1024:
+		return fmt.Errorf("command and directory exceed 1 MiB")
+	case !filepath.IsAbs(cwd):
+		return fmt.Errorf("directory must be absolute")
+	case strings.ContainsRune(cwd, 0):
+		return fmt.Errorf("directory contains NUL")
+	case strings.ContainsRune(command, 0):
+		return fmt.Errorf("command contains NUL")
+	}
+	return nil
+}
+
+// CancelRequest discards a panel request the shell never consumed, e.g. when
+// a plugin removed the integration key binding.
+// It reports whether an unconsumed request was removed.
+func (s *Session) CancelRequest() bool {
+	return os.Remove(filepath.Join(s.dir, "panel-command")) == nil
+}
+
 func (s *Session) request(cwd, command, mode, key string) error {
-	if !filepath.IsAbs(cwd) || strings.ContainsRune(cwd, 0) || strings.ContainsRune(command, 0) || len(cwd)+len(command) > 1024*1024 {
-		return fmt.Errorf("invalid panel command or directory")
+	if err := requestError(cwd, command); err != nil {
+		return err
 	}
 	request := filepath.Join(s.dir, "panel-command")
 	f, err := os.OpenFile(request, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		// The shell consumes the file only at a prompt, so a leftover file
+		// always belongs to a lost integration key. Replace it once.
+		_ = os.Remove(request)
+		f, err = os.OpenFile(request, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	}
 	if err != nil {
 		return err
 	}
@@ -280,12 +322,26 @@ func (s *Session) request(cwd, command, mode, key string) error {
 func (s *Session) Resize(cols, rows int) error {
 	return pty.Setsize(s.file, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
+
+// shellKillGrace is how long Close waits after SIGHUP before SIGKILL.
+const shellKillGrace = 2 * time.Second
+
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.done)
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
+		pid := s.cmd.Process.Pid
+		_ = syscall.Kill(-pid, syscall.SIGHUP)
 		_ = s.file.Close()
 		_ = os.RemoveAll(s.dir)
+		// An interactive bash can survive SIGHUP and the closed PTY (seen with
+		// a pending vi-mode line); never leave it behind as an orphan.
+		go func() {
+			select {
+			case <-s.exited:
+			case <-time.After(shellKillGrace):
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		}()
 	})
 }
 func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
@@ -330,6 +386,23 @@ func (p *parser) feed(data []byte) []Event {
 			out = append(out, Event{Ready: parts[0] != "busy", Running: parts[0] == "busy", Status: status, Cwd: parts[1]})
 		}
 		p.pending = bytes.Clone(p.pending[end+1:])
+	}
+	return out
+}
+
+// hostTerminalFree drops variables inherited from the terminal FarshMac was
+// launched from (e.g. `go run` in Terminal.app). Left in place, macOS
+// /etc/bashrc_Apple_Terminal and /etc/zshrc_Apple_Terminal treat the embedded
+// shell as a Terminal.app session: per-session history replaces HISTFILE and
+// session files are written under ~/.bash_sessions.
+func hostTerminalFree(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == "TERM_PROGRAM" || name == "TERM_PROGRAM_VERSION" || name == "TERM_SESSION_ID" {
+			continue
+		}
+		out = append(out, kv)
 	}
 	return out
 }

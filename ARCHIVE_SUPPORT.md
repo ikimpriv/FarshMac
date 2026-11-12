@@ -14,11 +14,21 @@ This document records the archive implementation introduced in 0.11. See the
 | RAR | No | Subject to system libarchive capabilities |
 | CPIO | No | Through system libarchive |
 
+ZIP indexing, selective extraction (F5/F3 from an archive panel) and creation use
+Go; the text listing, whole-archive test and full extraction (Shift+F2 / Archive
+commands) use bsdtar for every format. Ctrl+PgDn and Enter open exactly the
+extensions in this table (including `.war`, `.cpio`, `.tbz`, `.txz`); a bare
+`.gz`/`.bz2`/`.xz` file is not entered as an archive.
+
 **Enter opens an archive as a file panel**, even when the archive has its executable
 bit set. ZIP/JAR/WAR, TAR and compressed TAR, 7z, RAR and CPIO share the same catalog
 interface. Enter or double-click opens directories. `..` returns to the parent;
 at the archive root it restores the ordinary panel with the cursor on the archive.
 Selection, sorting, filters, fast find and nested directory state are supported.
+The key bar shows 3 View and 5 Extract; F4, F6, F7 and F8 are blank. Errors while
+opening or reading an archive are shown in a dialog. Encrypted archives are refused
+with "Encrypted archives are not supported". Quick view of an archive member shows
+"Archive member: press F3 to extract and view".
 
 **F5** extracts the current file, marked files or an entire directory to the ordinary
 filesystem. The destination dialog supports renaming, directory merging, conflict
@@ -28,14 +38,25 @@ directory is removed on success, failure or cancellation. Cancelling a copy reta
 files already completed, just like an ordinary F5 operation.
 
 **F3**, or Enter on an ordinary archive member, opens the read-only viewer. Its
-temporary copy is removed when the document/window closes. Editing, deletion, moving
+temporary copy is removed when the document/window closes. The document is
+read-only: F6 reports "Copy the file out with F5 before editing", `+`/`-` report
+"Return to the archive panel to choose another file", and ⌘R asks you to return
+to the archive panel to reopen the file. Editing, deletion, moving
 out of an archive and writing changes back are not supported: first copy out with
 F5. Nested archives must also be copied out before opening. Passwords and multi-volume
 archives are unsupported. Restart restores the containing directory and selects the
 archive, rather than restoring the temporary archive view.
 
 F9 → Files → Archive commands also provides a text listing, a whole-archive test and
-full extraction. Create archive selects the format from the new filename's extension.
+full extraction. Create archive selects the format from the new filename's extension;
+if that name already exists it offers **Rename** (suggesting `<stem> (1).<ext>`,
+keeping compound extensions) or **Cancel**. Extract archive (Shift+F2) tries any
+file through libarchive, so `.iso`, `.xar`, `.deb` and similar also work; a file that
+is not an archive gives a decoder error, with "(<name> has no known archive
+extension)" added when the extension is unknown. Archives are created and extracted
+on local panels only: Shift+F1/Shift+F2 are refused when the other panel is remote,
+and Shift+F3 → Extract to folder defaults to the active local folder in that case. The F2 user menu refuses archive
+members ("Use F5 to copy this archive item out before running commands on it").
 Cmd+R rereads the archive catalog. Changes to the source archive are checked before
 extraction and before publishing its result.
 

@@ -121,6 +121,9 @@ func (g *WindowGroup) sessionSnapshot() SavedSession {
 	return s
 }
 func (g *WindowGroup) EnableSession(path string, restore bool) error {
+	if !g.lockSession(path) {
+		return errSessionOwned
+	}
 	g.sessionPath = path
 	if !restore {
 		return nil
@@ -134,6 +137,11 @@ func (g *WindowGroup) EnableSession(path string, restore bool) error {
 	}
 	var s SavedSession
 	if e = json.Unmarshal(b, &s); e != nil {
+		if _, statErr := os.Stat(path); statErr == nil {
+			if broken, renameErr := preserveBrokenConfig(path); renameErr == nil {
+				return fmt.Errorf("session.json is damaged; saved as %s", filepath.Base(broken))
+			}
+		}
 		return fmt.Errorf("cannot read window session: %w", e)
 	}
 	if s.Version != 1 {
@@ -156,8 +164,7 @@ func (g *WindowGroup) EnableSession(path string, restore bool) error {
 			if e != nil {
 				continue
 			}
-			b, _ := json.Marshal(first.Settings)
-			_ = json.Unmarshal(b, &a.Settings)
+			a.inheritWindowState(first)
 			g.next++
 			id = g.next
 			g.Apps[id] = a
@@ -184,9 +191,7 @@ func (g *WindowGroup) EnableSession(path string, restore bool) error {
 		}
 		a.Active = max(0, min(1, w.Active))
 		if g.StartShell && a.Term == nil {
-			if err := a.StartTerminal(); err != nil {
-				a.Status = "Shell: " + err.Error()
-			}
+			a.StartTerminalOrRetry()
 		}
 		a.dirty = true
 		if w.Frame.Valid() {

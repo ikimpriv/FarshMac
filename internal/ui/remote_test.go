@@ -22,7 +22,10 @@ func waitNetwork(t *testing.T, a *App) {
 	for time.Now().Before(deadline) {
 		a.Poll()
 		if a.Form != nil && a.Form.Title == "Cannot preserve metadata" {
-			a.Form.Focus = 1
+			a.Form.Focus = 1 // "For all"
+			if a.Form.Choice[0] == "Continue" {
+				a.Form.Focus = 0
+			}
 			a.key(Message{Key: "Enter"})
 		}
 		if !a.Busy && a.Panels[0].load == nil && a.Panels[1].load == nil {
@@ -228,13 +231,21 @@ func TestConnectionProfilesPersistWithoutSaveSetup(t *testing.T) {
 	if b.Form.Title != "FTP / SFTP connection" || b.Form.Fields[1].Value != "demo" {
 		t.Fatal("profile not selected")
 	}
+	c.KeyFile = "/keys/updated"
+	if err := a.saveConnectionProfile(c); err != nil {
+		t.Fatal(err)
+	}
+	b.loadConnectionProfiles()
+	if len(b.Settings.RemoteConnections) != 1 || b.Settings.RemoteConnections[0].KeyFile != "/keys/updated" {
+		t.Fatal("profile update duplicated")
+	}
 	c.Directory = "/updated"
 	if err := a.saveConnectionProfile(c); err != nil {
 		t.Fatal(err)
 	}
 	b.loadConnectionProfiles()
-	if len(b.Settings.RemoteConnections) != 1 || b.Settings.RemoteConnections[0].Directory != "/updated" {
-		t.Fatal("profile update duplicated")
+	if len(b.Settings.RemoteConnections) != 2 || b.Settings.RemoteConnections[1].Directory != "/updated" {
+		t.Fatal("profiles for different folders do not coexist")
 	}
 }
 
@@ -296,6 +307,108 @@ func TestF5LocalToSFTPFileAndDirectory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRemoteCopyAsksMetadataOncePerOperation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := testnet.SFTP(t)
+	local := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := os.WriteFile(filepath.Join(local, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := New(local, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.connectRemote(1, c)
+	waitNetwork(t, a)
+	a.Panels[0].Marked = map[string]bool{"a": true, "b": true, "c": true}
+	a.key(Message{Key: "F5"})
+	a.Form.Fields[1].Checked, a.Form.Fields[2].Checked = true, true
+	a.Form.Fields[3].Value = "1"
+	a.key(Message{Key: "Enter"})
+	asked := 0
+	deadline := time.Now().Add(10 * time.Second)
+	for a.Busy && time.Now().Before(deadline) {
+		a.Poll()
+		if a.Form != nil && a.Form.Title == "Cannot preserve metadata" {
+			asked++
+			if strings.Join(a.Form.Choice, ",") != "Continue,Cancel" || !strings.Contains(a.Form.Message, "keep only mode and modification time") {
+				t.Fatalf("notice %q: %s", a.Form.Choice, a.Form.Message)
+			}
+			chooseOperation(t, a, "Continue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if a.Busy || asked != 1 {
+		t.Fatalf("asked %d times; busy=%v status=%s", asked, a.Busy, a.Status)
+	}
+	f, err := c.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, name := range []string{"a", "b", "c"} {
+		if _, err := f.Lstat("/" + name); err != nil {
+			t.Fatal(name, err, a.Status)
+		}
+	}
+}
+
+type failSetstat struct{ sftp.FileCmder }
+
+func (f failSetstat) Filecmd(r *sftp.Request) error {
+	if r.Method == "Setstat" {
+		return os.ErrPermission
+	}
+	return f.FileCmder.Filecmd(r)
+}
+
+func TestRemoteChmodFailureStillAsksPerFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := testnet.SFTP(t, func(h *sftp.Handlers) { h.FileCmd = failSetstat{h.FileCmd} })
+	local := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		if err := os.WriteFile(filepath.Join(local, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := New(local, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.connectRemote(1, c)
+	waitNetwork(t, a)
+	a.Panels[0].Marked = map[string]bool{"a": true, "b": true}
+	a.key(Message{Key: "F5"})
+	a.Form.Fields[1].Checked, a.Form.Fields[2].Checked = true, false
+	a.Form.Fields[3].Value = "1"
+	a.key(Message{Key: "Enter"})
+	notices, failures := 0, 0
+	deadline := time.Now().Add(10 * time.Second)
+	for a.Busy && time.Now().Before(deadline) {
+		a.Poll()
+		if a.Form != nil && a.Form.Title == "Cannot preserve metadata" {
+			if a.Form.Choice[0] == "Continue" {
+				notices++
+				chooseOperation(t, a, "Continue")
+			} else {
+				failures++
+				if !strings.Contains(a.Form.Message, "permission denied") {
+					t.Fatal("real failure hidden:", a.Form.Message)
+				}
+				chooseOperation(t, a, "Copy anyway")
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if a.Busy || notices != 1 || failures != 2 {
+		t.Fatalf("notices=%d failures=%d busy=%v status=%s", notices, failures, a.Busy, a.Status)
 	}
 }
 

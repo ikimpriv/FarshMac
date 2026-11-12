@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"farshmac/internal/fsops"
 	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -232,7 +234,7 @@ func (a *App) historyMenu(kind string) {
 	}
 	a.folderHistory = paths
 	reverse(paths)
-	a.choose("Folder history", paths, func(i int) { a.error(a.Panels[a.Active].Load(paths[i])) })
+	a.choose("Folder history", paths, func(i int) { a.goFolderHistory(paths[i]) })
 }
 func reverse(s []string) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
@@ -280,12 +282,12 @@ func (a *App) fileAttributes() {
 	a.form("File attributes", []Field{{Label: "Permissions (octal)", Value: fmt.Sprintf("%03o", info.Mode().Perm())}, {Label: "Modified (local)", Value: info.ModTime().Format("2006-01-02 15:04:05")}}, func(f []Field) {
 		mode, e := strconv.ParseUint(f[0].Value, 8, 12)
 		if e != nil || mode > 0777 {
-			a.Status = "Permissions must be 000–777"
+			a.reopenForm(f, 0, "Permissions must be 000–777")
 			return
 		}
 		stamp, e := time.ParseInLocation("2006-01-02 15:04:05", f[1].Value, time.Local)
 		if e != nil {
-			a.error(e)
+			a.reopenForm(f, 1, "Enter the time as YYYY-MM-DD HH:MM:SS")
 			return
 		}
 		a.workProgress("Updating attributes", func(o *fsops.Operation) error {
@@ -313,29 +315,93 @@ func (a *App) fileAttributes() {
 	})
 }
 func (a *App) createLink() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if a.remoteUnsupported() {
 		return
 	}
 	if a.archiveReadOnly() {
 		return
 	}
-	src := a.Panels[a.Active].Current()
-	if src == "" {
+	p := &a.Panels[a.Active]
+	if len(p.Entries) == 0 || p.Entries[p.Cursor].Name == ".." {
+		a.Status = "Choose a file or folder to link to"
 		return
 	}
+	src := p.Current()
 	dst := filepath.Join(a.Panels[1-a.Active].Path, filepath.Base(src))
-	a.form("Create link", []Field{{Label: "Link name", Value: dst}, {Label: "Symbolic link", Toggle: true, Checked: true}}, func(f []Field) {
-		target := expand(f[0].Value, a.Panels[a.Active].Path)
-		var e error
-		if f[1].Checked {
-			e = os.Symlink(src, target)
-		} else {
-			e = os.Link(src, target)
+	fields := []Field{{Label: "Link name", Value: dst}, {Label: "Symbolic link", Toggle: true, Checked: true}, {Label: "Relative path (symbolic link)", Toggle: true, Checked: true}}
+	a.form("Create link", fields, func(f []Field) {
+		if strings.TrimSpace(f[0].Value) == "" {
+			a.reopenForm(f, 0, "Enter a link name")
+			return
 		}
-		a.error(e)
+		message, err := makeLink(src, expand(f[0].Value, p.Path), f[1].Checked, f[2].Checked)
 		a.refresh()
+		if err != nil {
+			a.error(err)
+			return
+		}
+		a.Status = message
 	})
+	a.Form.Selected = a.Settings.SelectDialogInput
 }
+
+// makeLink creates a symbolic (optionally relative) or hard link to src. An
+// existing folder as the name means "inside it, with the source's name", as
+// in Far. It returns the status message.
+func makeLink(src, name string, symbolic, relative bool) (string, error) {
+	if info, err := os.Stat(name); err == nil && info.IsDir() {
+		name = filepath.Join(name, filepath.Base(src))
+	}
+	if _, err := os.Lstat(name); err == nil {
+		return "", fmt.Errorf("cannot create link: %s already exists", name)
+	}
+	if !symbolic {
+		info, err := os.Lstat(src)
+		if err != nil {
+			return "", fmt.Errorf("cannot create hard link: %w", linkCause(err))
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("hard links to folders are not supported; use a symbolic link")
+		}
+		if err = os.Link(src, name); err != nil {
+			if errors.Is(err, syscall.EXDEV) {
+				return "", fmt.Errorf("cannot create hard link: %s and %s are on different volumes", src, filepath.Dir(name))
+			}
+			return "", fmt.Errorf("cannot create hard link %s: %w", name, linkCause(err))
+		}
+		return "Hard link created: " + filepath.Base(name) + " → " + src, nil
+	}
+	target := src
+	if relative {
+		text, err := fsops.RelativeLinkText(src, name)
+		if err != nil {
+			return "", err
+		}
+		target = text
+	}
+	if err := os.Symlink(target, name); err != nil {
+		return "", fmt.Errorf("cannot create link %s: %w", name, linkCause(err))
+	}
+	return "Link created: " + filepath.Base(name) + " → " + target, nil
+}
+
+// linkCause drops the "symlink a b:" prefix already stated by the message.
+func linkCause(err error) error {
+	var link *os.LinkError
+	if errors.As(err, &link) {
+		return link.Err
+	}
+	var path *os.PathError
+	if errors.As(err, &path) {
+		return path.Err
+	}
+	return err
+}
+
 func (a *App) applyCommand() {
 	if a.remoteUnsupported() {
 		return
@@ -367,7 +433,14 @@ func (a *App) runUserCommand(command string) {
 	if a.remoteUnsupported() {
 		return
 	}
-	p := a.Panels[a.Active].Current()
+	panel := &a.Panels[a.Active]
+	p := panel.Current()
+	if panel.Archive != nil {
+		if _, inside := panel.Archive.Relative(p); inside {
+			a.Status = "Use F5 to copy this archive item out before running commands on it"
+			return
+		}
+	}
 	a.Command = strings.ReplaceAll(command, "{}", terminal.Quote(p))
 	a.execute()
 }
@@ -393,11 +466,19 @@ func (a *App) editUserMenu() {
 			c = a.Settings.UserMenu[i-1]
 		}
 		a.form("User command — {} inserts filename", []Field{{Label: "Label", Value: c.Name}, {Label: "Command (empty deletes)", Value: c.Command}}, func(f []Field) {
-			c = UserCommand{f[0].Value, f[1].Value}
-			if i > 0 {
+			c = UserCommand{strings.TrimSpace(f[0].Value), f[1].Value}
+			switch {
+			case strings.TrimSpace(c.Command) == "":
+				if i == 0 {
+					return
+				}
 				a.Settings.UserMenu = append(a.Settings.UserMenu[:i-1], a.Settings.UserMenu[i:]...)
-			}
-			if c.Name != "" && c.Command != "" {
+			case c.Name == "":
+				a.reopenForm(f, 0, "Enter a label")
+				return
+			case i > 0:
+				a.Settings.UserMenu[i-1] = c // keep the F2 menu order
+			default:
 				a.Settings.UserMenu = append(a.Settings.UserMenu, c)
 			}
 			a.saveSetup()
@@ -411,10 +492,7 @@ func (a *App) fileAssociations() {
 	}
 	a.choose("File associations", items, func(i int) {
 		if i == 1 {
-			path := a.Panels[a.Active].Current()
-			if path != "" {
-				a.workProgress("Opening", func(o *fsops.Operation) error { return exec.CommandContext(o.Context(), "/usr/bin/open", path).Run() })
-			}
+			a.openSystemSelected() // Same remote/archive checks and error reporting as Shift+Enter.
 			return
 		}
 		c := Association{}
@@ -422,15 +500,26 @@ func (a *App) fileAssociations() {
 			c = a.Settings.Associations[i-2]
 		}
 		a.form("File association — {} inserts filename", []Field{{Label: "Masks", Value: c.Mask}, {Label: "Run command", Value: c.Command}, {Label: "Viewer command", Value: c.Viewer}, {Label: "Editor command", Value: c.Editor}}, func(f []Field) {
-			if err := validateMasks(f[0].Value, a.Settings.MaskGroups); err != nil {
-				a.error(err)
+			c = Association{Mask: strings.TrimSpace(f[0].Value), Command: f[1].Value, Viewer: f[2].Value, Editor: f[3].Value}
+			if strings.TrimSpace(c.Command+c.Viewer+c.Editor) == "" {
+				if i <= 1 {
+					return
+				}
+				a.Settings.Associations = append(a.Settings.Associations[:i-2], a.Settings.Associations[i-1:]...)
+				a.saveSetup()
 				return
 			}
-			c = Association{Mask: f[0].Value, Command: f[1].Value, Viewer: f[2].Value, Editor: f[3].Value}
-			if i > 1 {
-				a.Settings.Associations = append(a.Settings.Associations[:i-2], a.Settings.Associations[i-1:]...)
+			if c.Mask == "" {
+				a.reopenForm(f, 0, "Enter file masks")
+				return
 			}
-			if c.Mask != "" && (c.Command != "" || c.Viewer != "" || c.Editor != "") {
+			if err := validateMasks(c.Mask, a.Settings.MaskGroups); err != nil {
+				a.reopenForm(f, 0, err.Error())
+				return
+			}
+			if i > 1 {
+				a.Settings.Associations[i-2] = c // keep association priority
+			} else {
 				a.Settings.Associations = append(a.Settings.Associations, c)
 			}
 			a.saveSetup()
@@ -475,7 +564,7 @@ func (a *App) treeMenu() {
 	})
 }
 func (a *App) updatePreview() {
-	if a.Doc != nil || a.TermVisible || a.Busy {
+	if a.Doc != nil || a.Image != nil || a.TermVisible || a.Busy {
 		return
 	}
 	index := -1
@@ -495,6 +584,18 @@ func (a *App) updatePreview() {
 		return
 	}
 	path := source.Current()
+	if path == "" {
+		a.previewKey, a.previewImage = "", ""
+		a.previewText = "No file selected"
+		return
+	}
+	if source.Archive != nil {
+		if _, inside := source.Archive.Relative(path); inside {
+			a.previewKey, a.previewImage = "", ""
+			a.previewText = "Archive member: press F3 to extract and view"
+			return
+		}
+	}
 	key := path
 	if len(source.Entries) > 0 {
 		e := source.Entries[source.Cursor]
@@ -527,7 +628,14 @@ func (a *App) updatePreview() {
 		imageData := ""
 		info, e := os.Stat(path)
 		if e != nil {
-			text = fmt.Sprint(e)
+			if link, le := os.Lstat(path); le == nil && link.Mode()&os.ModeSymlink != 0 {
+				target, _ := os.Readlink(path)
+				text = fmt.Sprintf("%s\nBroken symbolic link → %s", filepath.Base(path), target)
+			} else {
+				text, _ = describeReadError(path, e)
+			}
+		} else if kind := specialFileKind(info.Mode()); kind != "" {
+			text = fmt.Sprintf("%s\n%s (no preview)", filepath.Base(path), kind)
 		} else if info.IsDir() {
 			var entries []os.DirEntry
 			e := fsops.ReadDirectory(path, o, func(entry os.DirEntry) error {
@@ -548,7 +656,11 @@ func (a *App) updatePreview() {
 			}
 			text = fmt.Sprintf("%s\nDirectory (preview, up to 100 entries)\n", path)
 			if e != nil {
-				text += e.Error()
+				footer, hint := describeReadError(path, e)
+				text += footer
+				if hint != "" {
+					text += "\n" + hint
+				}
 			} else {
 				for i, entry := range entries {
 					if i == 100 {

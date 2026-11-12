@@ -6,6 +6,11 @@ import (
 
 func (a *App) Draw() *Grid {
 	g := NewGrid(a.Cols, a.Rows)
+	a.recordStatus()
+	if a.Image != nil && a.Form == nil && a.Dialog == nil {
+		a.drawImage(g)
+		return g
+	}
 	g.Fill(0, 0, g.W, 1, Black, Cyan)
 	for _, section := range a.menuSections() {
 		g.Text(section.X, 0, section.Name, Black, Cyan, len(section.Name))
@@ -25,9 +30,9 @@ func (a *App) Draw() *Grid {
 	g.Fill(0, g.H-3, g.W, 2, Gray, Black)
 	status := a.Status
 	if status == "" {
-		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys"
+		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark"
 	}
-	g.Text(0, g.H-3, status, Gray, Black, g.W)
+	g.Text(0, g.H-3, fitStatus(status, g.W), Gray, Black, g.W)
 	promptPath := a.Panels[a.Active].Path
 	if a.Panels[a.Active].Remote != nil {
 		promptPath = "local:" + a.Panels[a.Active].filesystemPath()
@@ -39,6 +44,10 @@ func (a *App) Draw() *Grid {
 	labels := []string{"Help", "UserMenu", "View", "Edit", "Copy", "RenMov", "MkFold", "Trash", "Menu", ""}
 	if a.Panels[a.Active].Remote != nil {
 		labels[7] = "Delete"
+	}
+	if a.Panels[a.Active].Archive != nil {
+		// Archives are read-only: F5 extracts, F4/F6/F7/F8 only explain that.
+		labels[3], labels[4], labels[5], labels[6], labels[7] = "", "Extract", "", "", ""
 	}
 	if a.Settings.ShowKeys {
 		for i, label := range labels {
@@ -67,7 +76,9 @@ func (a *App) Draw() *Grid {
 	if a.Settings.ColorTheme == "Dark" || a.Settings.ColorTheme == "Light" {
 		palette := map[uint32]uint32{Blue: 0x151b24, LightCyan: 0xc7d7e9, Cyan: 0x486987}
 		if a.Settings.ColorTheme == "Light" {
-			palette = map[uint32]uint32{Blue: 0xf1f3f5, LightCyan: 0x182b49, White: 0x000000, Yellow: 0x885000, Cyan: 0x80b8dd}
+			palette = map[uint32]uint32{Blue: 0xf1f3f5, LightCyan: 0x182b49, White: 0x000000, Yellow: 0x885000, Cyan: 0x80b8dd,
+				// Syntax and marker colors chosen for dark backgrounds.
+				0x55ff55: 0x1d6f1d, 0xaaaaaa: 0x6a6a6a, 0xff88ff: 0x8a2a8a, 0xff8888: 0xa02020}
 		}
 		for i := range g.Cells {
 			c := &g.Cells[i]
@@ -96,7 +107,7 @@ func (a *App) drawDialog(g *Grid) {
 		start := line * lineWidth
 		g.Text(r.X+4, r.Y+2+line, string(msg[start:min(len(msg), start+lineWidth)]), Black, Gray, lineWidth)
 	}
-	modalInput(g, r.X+4, r.Y+r.H-6, r.W-8, d.Input, len([]rune(d.Input)), d.Focus == 0, d.Selected)
+	modalInput(g, r.X+4, r.Y+r.H-6, r.W-8, d.Input, d.caret(), d.Focus == 0, d.Selected)
 	modalRule(g, r, r.Y+r.H-4)
 	drawModalButtons(g, r, r.Y+r.H-3, []string{"OK", "Cancel"}, d.Focus-1, mnemonicKeys([]string{"OK", "Cancel"}))
 }

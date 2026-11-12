@@ -21,10 +21,19 @@ const (
 type Failure struct {
 	Operation, Source, Destination string
 	Err                            error
+	// Fatal marks a step the operation cannot continue without (connecting,
+	// opening the destination): only Retry or Cancel make sense.
+	Fatal bool
 }
 type Collision struct {
 	Source, Destination         string
 	SourceInfo, DestinationInfo os.FileInfo
+	// DestinationLink is the target of an existing symbolic link (file or broken).
+	DestinationLink   string
+	DestinationBroken bool
+	// SourceLink is the text of a source symbolic link.
+	SourceLink   string
+	SourceBroken bool
 }
 type Resolution struct {
 	Action      int
@@ -42,6 +51,15 @@ const (
 // Attempt retries only the supplied step. In particular, a failed source deletion
 // after a committed move must never repeat the copy or append.
 func (o *Operation) Attempt(operation, src, dst string, fn func() error) error {
+	return o.attempt(operation, src, dst, false, fn)
+}
+
+// AttemptRequired is Attempt for a step without which nothing can be done.
+// It never reports ErrSkipped, so a failed step can't end as "Done".
+func (o *Operation) AttemptRequired(operation, src, dst string, fn func() error) error {
+	return o.attempt(operation, src, dst, true, fn)
+}
+func (o *Operation) attempt(operation, src, dst string, fatal bool, fn func() error) error {
 	for {
 		if err := o.Check(); err != nil {
 			return err
@@ -56,10 +74,10 @@ func (o *Operation) Attempt(operation, src, dst string, fn func() error) error {
 		if o == nil || o.Failure == nil {
 			return err
 		}
-		switch o.Failure(Failure{operation, src, dst, err}) {
-		case ErrorRetry:
+		switch action := o.Failure(Failure{operation, src, dst, err, fatal}); {
+		case action == ErrorRetry:
 			continue
-		case ErrorSkip:
+		case action == ErrorSkip && !fatal:
 			o.SkipItem(src)
 			return ErrSkipped
 		default:

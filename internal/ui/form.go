@@ -10,7 +10,41 @@ type Field struct {
 	Label, Value    string
 	Toggle, Checked bool
 	Secret          bool
+	// Options makes a one-line choice (with Toggle set): Value is the selected
+	// option; Space and arrows cycle through them, a click picks one.
+	Options []string
 }
+
+// cycle selects the next (delta 1) or previous (-1) option.
+func (field *Field) cycle(delta int) {
+	if len(field.Options) == 0 {
+		field.Checked = !field.Checked
+		return
+	}
+	at := 0
+	for i, option := range field.Options {
+		if option == field.Value {
+			at = i
+		}
+	}
+	field.Value = field.Options[(at+delta+len(field.Options))%len(field.Options)]
+}
+
+// choiceText renders an option field; starts holds each option's offset.
+func (field *Field) choiceText() (string, []int) {
+	text := field.Label + ": "
+	var starts []int
+	for _, option := range field.Options {
+		mark := "( ) "
+		if option == field.Value {
+			mark = "(•) "
+		}
+		starts = append(starts, utf8.RuneCountInString(text))
+		text += mark + option + "  "
+	}
+	return strings.TrimRight(text, " "), starts
+}
+
 type Form struct {
 	Remember, RememberChecked bool
 	OperationQuestion         bool
@@ -27,6 +61,8 @@ type Form struct {
 	Submit                    func([]Field)
 	Choice                    []string
 	Select                    func(int)
+	OnKey                     func(Message) bool // handles list-specific keys first
+	listFilter
 }
 
 func (a *App) form(title string, fields []Field, submit func([]Field)) {
@@ -35,6 +71,38 @@ func (a *App) form(title string, fields []Field, submit func([]Field)) {
 		cursor = utf8.RuneCountInString(fields[0].Value)
 	}
 	a.Form = &Form{Title: title, Fields: fields, Cursor: cursor, Submit: submit}
+}
+
+// formState holds window-local modal bookkeeping for forms and settings.
+type formState struct {
+	submitting     *Form       // the form whose Submit is running
+	connectNote    string      // appended to the next "Connected" status
+	connectCursor  string      // entry to focus after the next connection (bookmark jump)
+	autoSaveDone   bool        // Save setup on exit already ran for this window
+	activePrompt   *promptSpec // prompt whose Confirm is running
+	promptRejected bool        // the running prompt was reopened by validation
+	statusLog
+}
+
+// reopenForm shows a form again after its Submit rejected the values, keeping
+// everything the user entered and selecting the offending field.
+func (a *App) reopenForm(fields []Field, focus int, status string) {
+	if a.submitting == nil {
+		a.Status = status
+		return
+	}
+	reopened := *a.submitting
+	reopened.Fields = fields
+	reopened.Focus = max(0, min(focus, len(fields)-1))
+	reopened.Cursor = 0
+	reopened.Selected = false
+	if reopened.Focus < len(fields) {
+		reopened.Cursor = utf8.RuneCountInString(fields[reopened.Focus].Value)
+		reopened.Selected = !fields[reopened.Focus].Toggle
+	}
+	a.Form = &reopened
+	a.Status = status
+	a.dirty = true
 }
 func (a *App) choose(title string, choices []string, selectItem func(int)) {
 	if len(choices) == 0 {
@@ -48,6 +116,12 @@ func (a *App) confirm(title, message string, buttons []string, selectItem func(i
 }
 func (a *App) formKey(m Message) {
 	f := a.Form
+	if f.OnKey != nil && f.OnKey(m) {
+		return
+	}
+	if a.listKey(m) {
+		return
+	}
 	if m.Key == "Escape" {
 		a.Form = nil
 		if f.Cancel != nil {
@@ -94,7 +168,7 @@ func (a *App) formKey(m Message) {
 				if i >= len(f.Fields) {
 					a.formKey(Message{Key: "Enter"})
 				} else if f.Fields[i].Toggle {
-					f.Fields[i].Checked = !f.Fields[i].Checked
+					f.Fields[i].cycle(1)
 				} else {
 					f.Cursor = utf8.RuneCountInString(f.Fields[i].Value)
 				}
@@ -124,13 +198,15 @@ func (a *App) formKey(m Message) {
 	case "Enter":
 		a.Form = nil
 		if len(f.Choice) > 0 {
-			f.Select(f.Focus)
+			f.Select(f.choiceIndex(f.Focus))
 		} else if f.Focus == len(f.Fields)+1 {
 			if f.Cancel != nil {
 				f.Cancel()
 			}
 		} else {
+			a.submitting = f
 			f.Submit(f.Fields)
+			a.submitting = nil
 		}
 		return
 	}
@@ -151,8 +227,10 @@ func (a *App) formKey(m Message) {
 	}
 	field := &f.Fields[f.Focus]
 	if field.Toggle {
-		if m.Key == " " || m.Key == "ArrowLeft" || m.Key == "ArrowRight" {
-			field.Checked = !field.Checked
+		if m.Key == " " || m.Key == "ArrowRight" {
+			field.cycle(1)
+		} else if m.Key == "ArrowLeft" {
+			field.cycle(-1)
 		}
 		return
 	}
@@ -203,6 +281,23 @@ func (a *App) formPaste(s string) {
 	field := &f.Fields[f.Focus]
 	if field.Toggle {
 		return
+	}
+	if field.Secret {
+		s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	} else {
+		// Form fields are single-line: a trailing line break is dropped and
+		// inner ones become spaces, like other control characters.
+		s = strings.TrimRight(s, "\r\n")
+		if strings.ContainsAny(s, "\r\n") {
+			a.Status = "Pasted as a single line"
+		}
+		s = strings.ReplaceAll(s, "\r\n", " ")
+		s = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, s)
 	}
 	if f.Selected {
 		field.Value = ""
@@ -290,11 +385,13 @@ func (a *App) formGeometry() formGeometry {
 		start = f.Scroll
 		end = start
 	}
-	if start < f.Scroll {
-		f.Scroll = start
-	}
-	if end > f.Scroll+available {
-		f.Scroll = end - available
+	if !f.freeScroll || len(f.Choice) == 0 {
+		if start < f.Scroll {
+			f.Scroll = start
+		}
+		if end > f.Scroll+available {
+			f.Scroll = end - available
+		}
 	}
 	f.Scroll = max(0, min(f.Scroll, max(0, rows-available)))
 	out := formGeometry{modalRect: r, Top: r.Y + 2, Bottom: bottom, ButtonsY: r.Y + r.H - 4}
@@ -321,7 +418,11 @@ func (a *App) drawForm(g *Grid) {
 		return
 	}
 	box := a.formGeometry()
-	drawModal(g, box.modalRect, f.Title)
+	title := f.Title
+	if f.Query != "" {
+		title += " [" + f.Query + "]"
+	}
+	drawModal(g, box.modalRect, title)
 	keys := f.mnemonics()
 	if len(f.Choice) > 0 {
 		for i := f.Scroll; i < len(f.Choice) && box.Top+i-f.Scroll < box.Bottom; i++ {
@@ -345,16 +446,19 @@ func (a *App) drawForm(g *Grid) {
 			}
 			field := f.Fields[i]
 			if field.Toggle {
-
 				mark := "[ ] "
 				if field.Checked {
 					mark = "[x] "
+				}
+				text := mark + field.Label
+				if len(field.Options) > 0 {
+					text, _ = field.choiceText()
 				}
 				bg := uint32(Gray)
 				if i == f.Focus {
 					bg = Cyan
 				}
-				modalLabel(g, pos.X, pos.Y, mark+field.Label, keys[i], bg, pos.W)
+				modalLabel(g, pos.X, pos.Y, text, keys[i], bg, pos.W)
 			} else {
 				label := field.Label
 				if !strings.HasSuffix(label, ":") {
@@ -533,8 +637,19 @@ func (a *App) formClick(m Message) {
 			f.Focus = i
 			f.Selected = false
 			f.Cursor = utf8.RuneCountInString(f.Fields[i].Value)
-			if f.Fields[i].Toggle {
-				f.Fields[i].Checked = !f.Fields[i].Checked
+			if field := &f.Fields[i]; len(field.Options) > 0 {
+				_, starts := field.choiceText()
+				for j := len(starts) - 1; j >= 0; j-- {
+					if m.X-pos.X >= starts[j] {
+						field.Value = field.Options[j]
+						break
+					}
+				}
+				if m.X-pos.X < starts[0] {
+					field.cycle(1)
+				}
+			} else if field.Toggle {
+				field.Checked = !field.Checked
 			}
 			return
 		}

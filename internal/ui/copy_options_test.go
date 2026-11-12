@@ -29,7 +29,7 @@ func TestCopyOptionsDialogAndPersistence(t *testing.T) {
 	defer a.Close()
 	selectEntry(t, &a.Panels[0], "file")
 	a.key(Message{Key: "F5"})
-	if a.Form == nil || len(a.Form.Fields) != 4 || a.Form.Primary != "Copy" || !a.Form.Selected {
+	if a.Form == nil || len(a.Form.Fields) != 5 || a.Form.Primary != "Copy" || !a.Form.Selected {
 		t.Fatal("missing copy form")
 	}
 	if !a.Form.Fields[1].Checked || !a.Form.Fields[2].Checked {

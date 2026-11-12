@@ -13,6 +13,23 @@ func (a *App) moveMetadataQuestions(o *fsops.Operation) {
 func (a *App) metadataQuestions(o *fsops.Operation, move bool) {
 	allowAll := false
 	skipAll := false
+	noticed := false
+	o.MetadataLimitation = func(notice string) error {
+		o.Questions.Lock()
+		defer o.Questions.Unlock()
+		if cancelled := o.Check(); cancelled != nil {
+			return cancelled
+		}
+		if noticed || allowAll {
+			return nil
+		}
+		// A protocol limitation applies to every file alike: ask once per operation.
+		if a.operationChoice(o, "Cannot preserve metadata", notice+"\nContinue for all files?", []string{"Continue", "Cancel"}) != 0 {
+			return fsops.ErrCancelled
+		}
+		noticed = true
+		return o.Check()
+	}
 	o.MetadataFailure = func(src, dst string, err error) error {
 		o.Questions.Lock()
 		defer o.Questions.Unlock()
