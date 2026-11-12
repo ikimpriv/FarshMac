@@ -64,6 +64,29 @@ func TestTreeEnterOnAppBundleReroots(t *testing.T) {
 	}
 }
 
+func TestControlPageDownOnlyEntersRealArchives(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.gz"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	launched := false
+	a.runExternal = func(context.Context, []string) ([]byte, error) {
+		launched = true
+		return nil, nil
+	}
+	selectEntry(t, &a.Panels[0], "file.gz")
+	a.key(Message{Key: "PageDown", Ctrl: true})
+	settleJobs(a)
+	if launched || a.Panels[0].Archive != nil || a.Busy || a.Doc != nil {
+		t.Fatal("Ctrl+PgDn on a plain .gz must do nothing", launched)
+	}
+}
+
 func settleJobs(a *App) {
 	for i := 0; i < 20; i++ {
 		a.Poll()
