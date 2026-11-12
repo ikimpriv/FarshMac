@@ -34,10 +34,17 @@ func (f *ftpFS) Canonical(p string) (string, error) {
 
 func (c Config) dialFTP(ctx context.Context) (FS, error) {
 	var secure *tls.Config
+	var unknown *UnknownCertificate
 	if c.Protocol == "ftps" {
-		secure = &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12, ClientSessionCache: tls.NewLRUClientSessionCache(8)}
+		// Verification is performed by VerifyConnection (chain + host name, or
+		// the exact certificate the user pinned); it is never skipped.
+		secure = &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12, ClientSessionCache: tls.NewLRUClientSessionCache(8), InsecureSkipVerify: true, VerifyConnection: verifyFTPSCertificate(c.Host, c.CertFingerprint, nil, &unknown)}
 	}
-	return c.dialFTPWithTLS(ctx, secure)
+	f, err := c.dialFTPWithTLS(ctx, secure)
+	if err != nil && unknown != nil {
+		return nil, unknown
+	}
+	return f, err
 }
 
 func (c Config) dialFTPWithTLS(ctx context.Context, secure *tls.Config) (FS, error) {

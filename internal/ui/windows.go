@@ -3,9 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"time"
 )
 
@@ -31,6 +29,7 @@ type WindowGroup struct {
 	sessionError     string
 	sessionErrorAt   time.Time
 	Terminating      bool
+	windowSync
 }
 
 func NewWindowGroup(first *App) *WindowGroup {
@@ -56,17 +55,10 @@ func (g *WindowGroup) NewWindow(parent int) (int, error) {
 		return 0, e
 	}
 	if p != nil {
-		b, _ := json.Marshal(p.Settings)
-		_ = json.Unmarshal(b, &a.Settings)
+		a.inheritWindowState(p)
 		for i := range a.Panels {
 			a.Panels[i].panelOptions = p.Panels[i].panelOptions
 		}
-		// Histories are per window but start from the parent's, as after LoadSetup.
-		a.history = slices.Clone(p.history)
-		a.historyAt = len(a.history)
-		a.folderHistory = slices.Clone(p.folderHistory)
-		a.viewHistory = slices.Clone(p.viewHistory)
-		a.dialogValues = maps.Clone(p.dialogValues)
 		a.refresh()
 	} else {
 		a.LoadSetup()
@@ -130,6 +122,13 @@ func (g *WindowGroup) advanceQuit() {
 		return
 	}
 	g.quitting = false
+	if err := g.quitAutoSave(); err != nil {
+		g.askQuitWithoutSetup(err)
+		return
+	}
+	g.finishQuit()
+}
+func (g *WindowGroup) finishQuit() {
 	g.Terminating = true
 	if e := g.SaveSession(true); e != nil {
 		for _, a := range g.Apps {
@@ -174,11 +173,13 @@ func (g *WindowGroup) Handle(id int, raw string) {
 		a.dirty = true
 		return
 	}
+	g.primeSettings(a)
 	if m.Type == "close" {
 		a.RequestClose()
 	} else {
 		a.Handle(raw)
 	}
+	g.syncSettings(a)
 	g.advanceQuit()
 }
 func (g *WindowGroup) Poll(id int) Update {
@@ -187,7 +188,9 @@ func (g *WindowGroup) Poll(id int) Update {
 		return Update{Quit: true}
 	}
 	g.saveSessionPeriodically(a)
+	g.primeSettings(a)
 	u := a.Poll()
+	g.syncSettings(a)
 	g.advanceQuit()
 	u.QuitApplication = g.Terminating
 	u.AttentionWindow = g.waiting
@@ -221,9 +224,11 @@ func (g *WindowGroup) saveSessionPeriodically(a *App) {
 	g.sessionErrorAt = time.Now()
 }
 func (g *WindowGroup) CloseWindow(id int) {
+	var autoSaveErr error
 	if a := g.Apps[id]; a != nil {
 		s := g.windowSnapshot(id)
 		g.lastWindow = &s
+		autoSaveErr = a.autoSaveSetup()
 		a.Close()
 		if a.historyCleanup != nil {
 			g.historyCleanups = append(g.historyCleanups, a.historyCleanup)
@@ -239,6 +244,12 @@ func (g *WindowGroup) CloseWindow(id int) {
 	delete(g.frames, id)
 	if g.focused == id && len(g.Order) > 0 {
 		g.focused = g.Order[len(g.Order)-1]
+	}
+	if autoSaveErr != nil {
+		if a := g.Apps[g.focused]; a != nil {
+			a.Status = "Setup not saved: " + autoSaveErr.Error()
+			a.dirty = true
+		}
 	}
 	if !g.Terminating {
 		_ = g.SaveSession(true)
@@ -257,4 +268,5 @@ func (g *WindowGroup) CloseAll() {
 		<-done
 	}
 	g.historyCleanups = nil
+	g.unlockSession()
 }

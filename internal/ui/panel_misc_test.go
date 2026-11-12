@@ -148,7 +148,7 @@ func TestSortMenuShowsState(t *testing.T) {
 	}
 	defer a.Close()
 	a.sortMenu(0)
-	if a.Form.Choice[0] != "✓ Name" || a.Form.Choice[6] != "Mix directories and files" || a.Form.Choice[4] != "Reverse order" {
+	if a.Form.Choice[0] != "✓ Name" || a.Form.Choice[6] != "  Mix directories and files" || a.Form.Choice[4] != "  Reverse order" {
 		t.Fatal(a.Form.Choice)
 	}
 	a.Form.Select(6)
@@ -157,7 +157,7 @@ func TestSortMenuShowsState(t *testing.T) {
 	a.Panels[0].Sort = "Size"
 	a.sortMenu(0)
 	c := a.Form.Choice
-	if c[0] != "Name" || c[2] != "✓ Size" || c[4] != "✓ Reverse order" || c[6] != "✓ Mix directories and files" || c[5] != "Case sensitive" || c[7] != "Selected first" {
+	if c[0] != "  Name" || c[2] != "✓ Size" || c[4] != "✓ Reverse order" || c[6] != "✓ Mix directories and files" || c[5] != "  Case sensitive" || c[7] != "  Selected first" {
 		t.Fatal(c)
 	}
 	if !a.Panels[0].MixDirectories {

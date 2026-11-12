@@ -1,14 +1,19 @@
 package ui
 
 import (
+	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
+	"golang.org/x/crypto/ssh"
 )
 
 // remoteLinkResolveLimit bounds the extra round trips per remote listing.
@@ -135,22 +140,50 @@ func (a *App) networkMenu() {
 		}
 		a.connectionDialog(c)
 	})
+	menu := a.Form
+	menu.OnKey = func(m Message) bool {
+		i := menu.choiceIndex(menu.Focus)
+		if m.Key != "F8" && m.Key != "Delete" || i < 1 || i > len(profiles) {
+			return false
+		}
+		profile := profiles[i-1]
+		a.confirm("Delete connection profile", "Remove "+profile.Label()+profile.Directory+" from connections.json?", []string{"Delete", "Cancel"}, func(i int) {
+			if i != 0 {
+				a.networkMenu()
+				return
+			}
+			if err := a.deleteConnectionProfile(profile); err != nil {
+				a.Status = "Profile not deleted: " + err.Error()
+				return
+			}
+			a.networkMenu()
+			a.Status = "Deleted " + profile.Label() + profile.Directory
+		})
+		return true
+	}
 }
 func (a *App) connectionDialog(c remotefs.Config) {
+	a.connectionForm(a.Active, c, 0)
+}
+
+// connectionForm keeps passwords only in this form's memory, so Edit after a
+// failed attempt does not make the user type them again.
+func (a *App) connectionForm(index int, c remotefs.Config, focus int) {
 	address := "sftp://"
 	if c.Host != "" {
 		address = c.ServerURL()
 	}
+	previous := c
 	a.form("FTP / SFTP connection", []Field{
 		{Label: "Server URL (sftp://, ftp://, ftps://)", Value: address},
 		{Label: "User", Value: c.User},
-		{Label: "Password (memory only)", Secret: true},
+		{Label: "Password (memory only)", Value: c.Password, Secret: true},
 		{Label: "SSH private key (blank = default keys + agent)", Value: c.KeyFile},
-		{Label: "Key passphrase (memory only)", Secret: true},
+		{Label: "Key passphrase (memory only)", Value: c.KeyPassphrase, Secret: true},
 	}, func(fields []Field) {
 		config, err := remotefs.Parse(fields[0].Value, fields[1].Value)
 		if err != nil {
-			a.error(err)
+			a.reopenForm(fields, 0, err.Error())
 			return
 		}
 		config.Password = fields[2].Value
@@ -158,27 +191,62 @@ func (a *App) connectionDialog(c remotefs.Config) {
 		if fields[3].Value != "" {
 			config.KeyFile = expand(fields[3].Value, a.Panels[a.Active].filesystemPath())
 		}
-		a.connectRemote(a.Active, config)
+		if config.Protocol == previous.Protocol && config.Address() == previous.Address() {
+			// Trust given in this session (Trust once) survives editing other fields.
+			config.HostKey, config.CertFingerprint = previous.HostKey, previous.CertFingerprint
+			config.PlainFTPAccepted = previous.PlainFTPAccepted
+		}
+		a.connectRemote(index, config)
 	})
 	a.Form.Primary = "Connect"
+	if focus > 0 && focus < len(a.Form.Fields) {
+		a.Form.Focus = focus
+		a.Form.Cursor = utf8.RuneCountInString(a.Form.Fields[focus].Value)
+	}
+}
+func (a *App) plainFTPAccepted(c remotefs.Config) bool {
+	if c.PlainFTPAccepted {
+		return true
+	}
+	for _, p := range a.Settings.RemoteConnections {
+		if p.PlainFTPAccepted && p.Label() == c.Label() {
+			return true
+		}
+	}
+	return false
 }
 func (a *App) connectRemote(index int, c remotefs.Config) {
+	if c.Protocol == "ftp" && !a.plainFTPAccepted(c) {
+		var f *Form
+		a.confirm("Plain FTP", "Passwords and files are sent unencrypted. Continue?", []string{"Continue", "Cancel"}, func(i int) {
+			if i != 0 {
+				a.Status = "Connection cancelled"
+				return
+			}
+			// Without Remember choice the warning is accepted for this attempt only.
+			c.PlainFTPAccepted = f.RememberChecked
+			a.connectRemoteChecked(index, c)
+		})
+		f = a.Form
+		f.Remember = true
+		return
+	}
+	a.connectRemoteChecked(index, c)
+}
+func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
+	note := a.connectNote
+	a.connectNote = ""
 	a.backgroundTask("Connecting to "+c.Label(), func(o *fsops.Operation) (func(), func(), error) {
 		f, err := c.Dial(o.Context())
 		if err == nil {
 			_, err = f.ReadDir(c.Directory)
 			f.Close()
 		}
-		var unknown *remotefs.UnknownHost
-		if errors.As(err, &unknown) {
-			return func() {
-				a.confirm("Unknown SSH host key", unknown.Host+" "+unknown.Fingerprint+". Trust for this connection?", []string{"Trust once", "Cancel"}, func(i int) {
-					if i == 0 {
-						c.HostKey = unknown.Key
-						a.connectRemote(index, c)
-					}
-				})
-			}, nil, nil
+		if err != nil {
+			if o.Check() != nil || errors.Is(err, context.Canceled) {
+				return nil, nil, err
+			}
+			return func() { a.connectFailed(index, c, err) }, nil, nil
 		}
 		return func() {
 			p := &a.Panels[index]
@@ -201,12 +269,92 @@ func (a *App) connectRemote(index int, c remotefs.Config) {
 			p.Offset = 0
 			saveErr := a.saveConnectionProfile(c)
 			a.error(p.Load(c.Directory))
-			a.Status = "Connected: " + c.Label() + " (terminal is local)"
+			a.Status = "Connected: " + c.Label() + " (terminal is local)" + note
 			if saveErr != nil {
 				a.Status += "; profile not saved: " + saveErr.Error()
 			}
-		}, nil, err
+		}, nil, nil
 	})
+	if a.task != nil {
+		a.task.cancelStatus = "Connection cancelled"
+	}
+}
+
+// connectFailed turns a failed connection into a decision the user can act on
+// instead of a truncated status line. Changed or revoked host keys can only
+// be acknowledged; they are never trusted from here.
+func (a *App) connectFailed(index int, c remotefs.Config, err error) {
+	var unknown *remotefs.UnknownHost
+	var changed *remotefs.HostKeyChanged
+	var cert *remotefs.UnknownCertificate
+	var keyFile *remotefs.KeyFileError
+	var missing *ssh.PassphraseMissingError
+	switch {
+	case errors.As(err, &changed):
+		title, status := "SSH host key changed", "Connection refused: host key mismatch"
+		if changed.Revoked {
+			title, status = "SSH host key revoked", "Connection refused: host key revoked"
+		}
+		a.confirm(title, hostKeyWarning(changed), []string{"OK"}, func(int) { a.Status = status })
+	case errors.As(err, &unknown):
+		a.confirm("Unknown SSH host key", unknown.Host+" "+unknown.Type+" "+unknown.Fingerprint+". Trust for this connection?", []string{"Trust once", "Trust and save", "Cancel"}, func(i int) {
+			if i > 1 {
+				return
+			}
+			c.HostKey = unknown.Key
+			if i == 1 {
+				if e := remotefs.AppendKnownHost(remotefs.KnownHostsPath(), unknown.Host, unknown.Key); e != nil {
+					a.connectNote = "; known_hosts not updated: " + e.Error()
+				} else {
+					a.connectNote = "; host key saved to known_hosts"
+				}
+			}
+			a.connectRemote(index, c)
+		})
+	case errors.As(err, &cert):
+		a.confirm("Unknown FTPS certificate", cert.Host+" "+cert.Fingerprint+"\n"+cert.Subject+", valid until "+cert.NotAfter.Format("2006-01-02")+".\n"+cert.Reason+"\nTrust for this connection?", []string{"Trust once", "Cancel"}, func(i int) {
+			if i == 0 {
+				c.CertFingerprint = cert.Fingerprint
+				a.connectRemote(index, c)
+			}
+		})
+	case errors.As(err, &keyFile) && errors.As(err, &missing):
+		a.connectionForm(index, c, 4)
+		a.Status = "Key " + filepath.Base(keyFile.Path) + " is passphrase protected"
+	case errors.As(err, &keyFile) && errors.Is(err, x509.IncorrectPasswordError):
+		a.connectionForm(index, c, 4)
+		a.Status = "Wrong key passphrase"
+	case errors.As(err, &keyFile) && errors.Is(err, fs.ErrNotExist):
+		a.connectionForm(index, c, 3)
+		a.Status = "cannot read SSH private key " + keyFile.Path + ": no such file"
+	default:
+		a.Status = err.Error()
+		a.confirm("Connection failed", c.Label()+"\n"+err.Error(), []string{"Edit", "Retry", "Cancel"}, func(i int) {
+			switch i {
+			case 0:
+				a.connectionForm(index, c, 0)
+			case 1:
+				a.connectRemote(index, c)
+			}
+		})
+	}
+}
+func hostKeyWarning(e *remotefs.HostKeyChanged) string {
+	var where, expected []string
+	for _, w := range e.Want {
+		if w.File != "" {
+			where = append(where, fmt.Sprintf("%s:%d", w.File, w.Line))
+		}
+		expected = append(expected, w.Fingerprint+" ("+w.Type+")")
+	}
+	source := strings.Join(where, ", ")
+	if source == "" {
+		source = "the key trusted for this session"
+	}
+	if e.Revoked {
+		return "WARNING: the host key of " + e.Host + " is revoked in " + source + ".\nReceived: " + e.Fingerprint + " (" + e.Type + ")\nThis key must not be trusted. The connection was refused."
+	}
+	return "WARNING: the host key of " + e.Host + " does not match " + source + ".\nReceived: " + e.Fingerprint + " (" + e.Type + ")\nExpected: " + strings.Join(expected, ", ") + "\nThis may be a man-in-the-middle attack. The connection was refused."
 }
 func (a *App) disconnectRemote(index int) {
 	p := &a.Panels[index]
@@ -215,6 +363,7 @@ func (a *App) disconnectRemote(index int) {
 	}
 	p.cancelPanelLoad()
 	p.cancelTree()
+	profileErr := a.syncRemoteProfiles()
 	home, _ := os.UserHomeDir()
 	local := accessibleFolder(p.RemoteLocalPath, home)
 	previous := *p
@@ -226,6 +375,9 @@ func (a *App) disconnectRemote(index int) {
 		return
 	}
 	a.Status = "Disconnected"
+	if profileErr != nil {
+		a.Status += "; profile not saved: " + profileErr.Error()
+	}
 }
 func (a *App) remoteMkdir() {
 	index := a.Active
@@ -364,4 +516,19 @@ func (a *App) remoteMoveDialog() {
 			return nil
 		})
 	})
+}
+
+// noteInvalidRemoteNames explains garbled names from servers that use a legacy
+// encoding: they are listed, but transfers refuse them.
+func (a *App) noteInvalidRemoteNames(i int) {
+	p := &a.Panels[i]
+	if p.Remote == nil {
+		return
+	}
+	for _, e := range p.Entries {
+		if !utf8.ValidString(e.Name) {
+			a.Status = "Some names are not valid UTF-8; copying them is refused"
+			return
+		}
+	}
 }

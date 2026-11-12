@@ -149,9 +149,13 @@ func (p *Panel) sortEntries(files []Entry) {
 func (a *App) sortMenu(index int) {
 	p := &a.Panels[index]
 	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Mix directories and files", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
+	current := p.Sort
+	if current == "" {
+		current = "Name"
+	}
 	labels := make([]string, len(names))
 	for i, name := range names {
-		var on bool
+		on := name == current
 		switch i {
 		case 4:
 			on = p.Reverse
@@ -161,17 +165,21 @@ func (a *App) sortMenu(index int) {
 			on = p.MixDirectories
 		case 7:
 			on = p.SelectedFirst
-		default:
-			on = p.Sort == name || p.Sort == "" && name == "Name"
 		}
-		labels[i] = name
+		labels[i] = "  " + name
 		if on {
 			labels[i] = "✓ " + name
 		}
 	}
 	a.choose("Sort mode", labels, func(i int) {
 		switch i {
-		case 0, 1, 2, 3, 8, 9, 10, 11, 12:
+		case 9, 10, 11, 12:
+			if p.Remote != nil {
+				a.Status = "This sort mode requires local file metadata"
+				return
+			}
+			p.Sort = names[i]
+		case 0, 1, 2, 3, 8:
 			p.Sort = names[i]
 		case 4:
 			p.Reverse = !p.Reverse
@@ -184,6 +192,11 @@ func (a *App) sortMenu(index int) {
 		}
 		a.error(p.Load(p.Path))
 	})
+	for i, name := range names {
+		if name == current {
+			a.Form.Focus = i
+		}
+	}
 }
 func (a *App) filterPanel(index int) {
 	p := &a.Panels[index]
@@ -415,7 +428,7 @@ func (a *App) folderShortcuts() {
 		a.prompt("Save folder shortcut", "Slot 1–9", "1", func(s string) {
 			i, e := strconv.Atoi(s)
 			if e != nil || i < 1 || i > 9 {
-				a.Status = "Choose 1–9"
+				a.rejectPrompt(s, "Choose 1–9")
 				return
 			}
 			a.saveFolderShortcut(i)

@@ -237,6 +237,7 @@ type Dialog struct {
 	Title, Message, Input string
 	Confirm               func(string)
 	Error                 string
+	Back                  int // caret position counted from the end of Input
 }
 type Message struct {
 	History                  []json.RawMessage
@@ -341,6 +342,7 @@ type App struct {
 	jobs                                                      chan func()
 	history                                                   []string
 	historyAt                                                 int
+	formState
 }
 
 func New(left, right string) (*App, error)      { return newApp(left, right, false) }
@@ -411,9 +413,7 @@ func (a *App) Close() {
 			}
 		}()
 	}
-	if a.Settings.AutoSave {
-		a.saveSetup()
-	}
+	_ = a.autoSaveSetup()
 	for _, d := range append(a.Documents, a.Doc) {
 		if d != nil {
 			if d.File != nil {
@@ -450,13 +450,16 @@ func (a *App) prompt(title, msg, value string, fn func(string)) {
 		value = a.dialogValues[title]
 	}
 	a.Dialog = &Dialog{Selected: a.Settings.SelectDialogInput, Title: title, Message: msg, Input: value, Confirm: func(s string) {
-		if a.Settings.RememberDialogValues {
+		a.activePrompt = &promptSpec{title, msg, fn}
+		a.promptRejected = false
+		fn(s)
+		// A value rejected by validation is not remembered (P5-15).
+		if a.Settings.RememberDialogValues && !a.promptRejected {
 			if a.dialogValues == nil {
 				a.dialogValues = map[string]string{}
 			}
 			a.dialogValues[title] = s
 		}
-		fn(s)
 	}}
 	a.dirty = true
 }
@@ -667,7 +670,7 @@ func (a *App) Handle(raw string) {
 				a.Dialog.Input = ""
 				a.Dialog.Selected = false
 			}
-			a.Dialog.Input += strings.ReplaceAll(m.Text, "\n", "")
+			a.Dialog.insert(strings.ReplaceAll(m.Text, "\n", ""))
 		} else if a.Doc == nil {
 			a.Command += strings.ReplaceAll(m.Text, "\n", "")
 		}
@@ -765,20 +768,19 @@ func (a *App) key(m Message) {
 				d.Focus = 3 - d.Focus
 			} else {
 				d.Selected = false
+				d.moveCaret(m.Key)
 			}
-		case "Backspace":
+		case "Backspace", "Delete":
 			if d.Focus > 0 {
 				return
 			}
 			if d.Selected {
 				d.Input = ""
 				d.Selected = false
+				d.Back = 0
 				return
 			}
-			r := []rune(d.Input)
-			if len(r) > 0 {
-				d.Input = string(r[:len(r)-1])
-			}
+			d.deleteAtCaret(m.Key == "Backspace")
 		default:
 			if d.Focus > 0 {
 				if m.Key == " " {
@@ -792,8 +794,9 @@ func (a *App) key(m Message) {
 				if d.Selected {
 					d.Input = ""
 					d.Selected = false
+					d.Back = 0
 				}
-				d.Input += m.Key
+				d.insert(m.Key)
 			}
 		}
 		return
@@ -1268,6 +1271,10 @@ func (a *App) click(m Message) {
 		a.menuClick(m)
 		return
 	}
+	if m.Y == a.Rows-3 && m.Button == 0 && a.Status != "" {
+		a.showMessages()
+		return
+	}
 	if m.Y == a.Rows-1 && m.Button == 0 {
 		if !a.Settings.ShowKeys {
 			return
@@ -1296,6 +1303,7 @@ jobsDone:
 	for i := range a.Panels {
 		if a.Panels[i].pollTree() || a.Panels[i].pollPanelLoad() {
 			a.dirty = true
+			a.noteInvalidRemoteNames(i)
 		}
 		if s := a.Panels[i].loadStatus; s != "" {
 			a.Panels[i].loadStatus = ""
@@ -1328,7 +1336,7 @@ jobsDone:
 					a.shellStarted = true
 					a.ShellCwd = e.Cwd
 					a.finishPanelReturn()
-					a.Status = fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status)
+					a.setShellStatus(fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status))
 					a.dirty = true
 				}
 				if e.Exit {

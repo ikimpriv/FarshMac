@@ -19,6 +19,7 @@ import (
 type UnknownHost struct {
 	Host, Fingerprint string
 	Key               []byte
+	Type              string
 }
 
 func (e *UnknownHost) Error() string { return "Unknown SSH host " + e.Host + " " + e.Fingerprint }
@@ -29,7 +30,7 @@ func HostKeyCallback(c Config, files ...string) (ssh.HostKeyCallback, error) {
 		if err != nil {
 			return nil, err
 		}
-		return ssh.FixedHostKey(key), nil
+		return pinnedHostKey(key), nil
 	}
 	var existing []string
 	for _, f := range files {
@@ -47,9 +48,13 @@ func HostKeyCallback(c Config, files ...string) (ssh.HostKeyCallback, error) {
 		err := verify(host, addr, key)
 		var unknown *knownhosts.KeyError
 		if errors.As(err, &unknown) && len(unknown.Want) == 0 {
-			return &UnknownHost{host, ssh.FingerprintSHA256(key), key.Marshal()}
+			return &UnknownHost{host, ssh.FingerprintSHA256(key), key.Marshal(), key.Type()}
 		}
-		return err // Known-key mismatch and revoked keys are never auto-accepted.
+		if err != nil {
+			// Known-key mismatch and revoked keys are never auto-accepted.
+			return hostKeyChanged(host, key, err)
+		}
+		return nil
 	}, nil
 }
 
@@ -92,7 +97,7 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 		auth = append(auth, ssh.PublicKeys(keys...))
 	}
 	if c.Password != "" {
-		auth = append(auth, ssh.Password(c.Password))
+		auth = append(auth, ssh.Password(c.Password), ssh.KeyboardInteractive(passwordChallenge(c.Password)))
 	}
 	if len(auth) == 0 {
 		return nil, fmt.Errorf("no usable SSH identity: provide a password, private key or ssh-agent. %s", keyHint)

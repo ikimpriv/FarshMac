@@ -27,6 +27,8 @@ type Form struct {
 	Submit                    func([]Field)
 	Choice                    []string
 	Select                    func(int)
+	OnKey                     func(Message) bool // handles list-specific keys first
+	listFilter
 }
 
 func (a *App) form(title string, fields []Field, submit func([]Field)) {
@@ -35,6 +37,37 @@ func (a *App) form(title string, fields []Field, submit func([]Field)) {
 		cursor = utf8.RuneCountInString(fields[0].Value)
 	}
 	a.Form = &Form{Title: title, Fields: fields, Cursor: cursor, Submit: submit}
+}
+
+// formState holds window-local modal bookkeeping for forms and settings.
+type formState struct {
+	submitting     *Form       // the form whose Submit is running
+	connectNote    string      // appended to the next "Connected" status
+	autoSaveDone   bool        // Save setup on exit already ran for this window
+	activePrompt   *promptSpec // prompt whose Confirm is running
+	promptRejected bool        // the running prompt was reopened by validation
+	statusLog
+}
+
+// reopenForm shows a form again after its Submit rejected the values, keeping
+// everything the user entered and selecting the offending field.
+func (a *App) reopenForm(fields []Field, focus int, status string) {
+	if a.submitting == nil {
+		a.Status = status
+		return
+	}
+	reopened := *a.submitting
+	reopened.Fields = fields
+	reopened.Focus = max(0, min(focus, len(fields)-1))
+	reopened.Cursor = 0
+	reopened.Selected = false
+	if reopened.Focus < len(fields) {
+		reopened.Cursor = utf8.RuneCountInString(fields[reopened.Focus].Value)
+		reopened.Selected = !fields[reopened.Focus].Toggle
+	}
+	a.Form = &reopened
+	a.Status = status
+	a.dirty = true
 }
 func (a *App) choose(title string, choices []string, selectItem func(int)) {
 	if len(choices) == 0 {
@@ -48,6 +81,12 @@ func (a *App) confirm(title, message string, buttons []string, selectItem func(i
 }
 func (a *App) formKey(m Message) {
 	f := a.Form
+	if f.OnKey != nil && f.OnKey(m) {
+		return
+	}
+	if a.listKey(m) {
+		return
+	}
 	if m.Key == "Escape" {
 		a.Form = nil
 		if f.Cancel != nil {
@@ -124,13 +163,15 @@ func (a *App) formKey(m Message) {
 	case "Enter":
 		a.Form = nil
 		if len(f.Choice) > 0 {
-			f.Select(f.Focus)
+			f.Select(f.choiceIndex(f.Focus))
 		} else if f.Focus == len(f.Fields)+1 {
 			if f.Cancel != nil {
 				f.Cancel()
 			}
 		} else {
+			a.submitting = f
 			f.Submit(f.Fields)
+			a.submitting = nil
 		}
 		return
 	}
@@ -203,6 +244,23 @@ func (a *App) formPaste(s string) {
 	field := &f.Fields[f.Focus]
 	if field.Toggle {
 		return
+	}
+	if field.Secret {
+		s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	} else {
+		// Form fields are single-line: a trailing line break is dropped and
+		// inner ones become spaces, like other control characters.
+		s = strings.TrimRight(s, "\r\n")
+		if strings.ContainsAny(s, "\r\n") {
+			a.Status = "Pasted as a single line"
+		}
+		s = strings.ReplaceAll(s, "\r\n", " ")
+		s = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, s)
 	}
 	if f.Selected {
 		field.Value = ""
@@ -290,11 +348,13 @@ func (a *App) formGeometry() formGeometry {
 		start = f.Scroll
 		end = start
 	}
-	if start < f.Scroll {
-		f.Scroll = start
-	}
-	if end > f.Scroll+available {
-		f.Scroll = end - available
+	if !f.freeScroll || len(f.Choice) == 0 {
+		if start < f.Scroll {
+			f.Scroll = start
+		}
+		if end > f.Scroll+available {
+			f.Scroll = end - available
+		}
 	}
 	f.Scroll = max(0, min(f.Scroll, max(0, rows-available)))
 	out := formGeometry{modalRect: r, Top: r.Y + 2, Bottom: bottom, ButtonsY: r.Y + r.H - 4}
@@ -321,7 +381,11 @@ func (a *App) drawForm(g *Grid) {
 		return
 	}
 	box := a.formGeometry()
-	drawModal(g, box.modalRect, f.Title)
+	title := f.Title
+	if f.Query != "" {
+		title += " [" + f.Query + "]"
+	}
+	drawModal(g, box.modalRect, title)
 	keys := f.mnemonics()
 	if len(f.Choice) > 0 {
 		for i := f.Scroll; i < len(f.Choice) && box.Top+i-f.Scroll < box.Bottom; i++ {

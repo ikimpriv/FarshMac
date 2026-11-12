@@ -615,7 +615,7 @@ func TestLightThemeDarkensBrightColors(t *testing.T) {
 func TestFilesMenuListsAlternateAndHistoryKeys(t *testing.T) {
 	a, _ := New(t.TempDir(), t.TempDir())
 	defer a.Close()
-	want := map[string]string{"Alternate viewer": "AltF3", "Alternate editor": "AltF4", "Internal viewer": "⌘⇧F3", "Internal editor": "⌘⇧F4", "File view/edit history": "AltF11"}
+	want := map[string]string{"Alternate viewer": "⌥F3", "Alternate editor": "⌥F4", "Internal viewer": "⌘⇧F3", "Internal editor": "⌘⇧F4", "File view/edit history": "⌥F11"}
 	for _, section := range a.menuSections() {
 		for _, item := range section.Items {
 			if key, ok := want[item.Label]; ok {

@@ -138,6 +138,14 @@ func (a *App) scrollMouse(m Message) {
 	if delta == 0 {
 		return
 	}
+	if a.Form != nil && len(a.Form.Choice) > 0 && !a.Form.Buttons {
+		a.listWheel(delta)
+		return
+	}
+	if a.Form != nil && a.Form.Buttons {
+		a.Form.Scroll = max(0, a.Form.Scroll+delta)
+		return
+	}
 	if a.Form != nil {
 		n := len(a.Form.Choice)
 		if n == 0 {

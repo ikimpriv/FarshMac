@@ -231,13 +231,21 @@ func TestConnectionProfilesPersistWithoutSaveSetup(t *testing.T) {
 	if b.Form.Title != "FTP / SFTP connection" || b.Form.Fields[1].Value != "demo" {
 		t.Fatal("profile not selected")
 	}
+	c.KeyFile = "/keys/updated"
+	if err := a.saveConnectionProfile(c); err != nil {
+		t.Fatal(err)
+	}
+	b.loadConnectionProfiles()
+	if len(b.Settings.RemoteConnections) != 1 || b.Settings.RemoteConnections[0].KeyFile != "/keys/updated" {
+		t.Fatal("profile update duplicated")
+	}
 	c.Directory = "/updated"
 	if err := a.saveConnectionProfile(c); err != nil {
 		t.Fatal(err)
 	}
 	b.loadConnectionProfiles()
-	if len(b.Settings.RemoteConnections) != 1 || b.Settings.RemoteConnections[0].Directory != "/updated" {
-		t.Fatal("profile update duplicated")
+	if len(b.Settings.RemoteConnections) != 2 || b.Settings.RemoteConnections[1].Directory != "/updated" {
+		t.Fatal("profiles for different folders do not coexist")
 	}
 }
 

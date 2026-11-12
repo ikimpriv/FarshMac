@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"farshmac/internal/fsops"
 )
@@ -191,6 +192,9 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			if (source.Remote != nil || target.Remote != nil) && !ValidName(entry.Name()) {
 				return fmt.Errorf("unsafe filename from server")
 			}
+			if err := validUTF8Name(source, entry.Name()); err != nil {
+				return err
+			}
 			return walk(Pair{path.Join(pair.Source, entry.Name()), path.Join(pair.Destination, entry.Name())}, depth+1, entry)
 		}
 		if source.Remote == nil {
@@ -222,6 +226,9 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		return nil
 	}
 	for _, pair := range pairs {
+		if err = validUTF8Name(source, path.Base(pair.Source)); err != nil {
+			break
+		}
 		if source.Remote != nil && target.Remote != nil {
 			if err = validateRemotePair(scan, dest, pair); err != nil {
 				break
@@ -646,4 +653,13 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 		return nil, err
 	}
 	return NewSession(endpoint, ctx, o, f), nil
+}
+
+// Remote servers may send names in a legacy encoding; macOS file systems and
+// the UI cannot represent them faithfully, so copying them is refused.
+func validUTF8Name(source Endpoint, name string) error {
+	if source.Remote != nil && !utf8.ValidString(name) {
+		return fmt.Errorf("filename is not valid UTF-8: %x", name)
+	}
+	return nil
 }

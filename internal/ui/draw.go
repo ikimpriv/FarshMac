@@ -6,6 +6,7 @@ import (
 
 func (a *App) Draw() *Grid {
 	g := NewGrid(a.Cols, a.Rows)
+	a.recordStatus()
 	g.Fill(0, 0, g.W, 1, Black, Cyan)
 	for _, section := range a.menuSections() {
 		g.Text(section.X, 0, section.Name, Black, Cyan, len(section.Name))
@@ -27,7 +28,7 @@ func (a *App) Draw() *Grid {
 	if status == "" {
 		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys"
 	}
-	g.Text(0, g.H-3, status, Gray, Black, g.W)
+	g.Text(0, g.H-3, fitStatus(status, g.W), Gray, Black, g.W)
 	promptPath := a.Panels[a.Active].Path
 	if a.Panels[a.Active].Remote != nil {
 		promptPath = "local:" + a.Panels[a.Active].filesystemPath()
@@ -102,7 +103,7 @@ func (a *App) drawDialog(g *Grid) {
 		start := line * lineWidth
 		g.Text(r.X+4, r.Y+2+line, string(msg[start:min(len(msg), start+lineWidth)]), Black, Gray, lineWidth)
 	}
-	modalInput(g, r.X+4, r.Y+r.H-6, r.W-8, d.Input, len([]rune(d.Input)), d.Focus == 0, d.Selected)
+	modalInput(g, r.X+4, r.Y+r.H-6, r.W-8, d.Input, d.caret(), d.Focus == 0, d.Selected)
 	modalRule(g, r, r.Y+r.H-4)
 	drawModalButtons(g, r, r.Y+r.H-3, []string{"OK", "Cancel"}, d.Focus-1, mnemonicKeys([]string{"OK", "Cancel"}))
 }
