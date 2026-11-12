@@ -788,15 +788,37 @@ func (a *App) documentKey(m Message) {
 func (a *App) copyDocument(cut bool) {
 	if a.Form != nil {
 		f := a.Form
-		if len(f.Fields) == 0 || f.Fields[f.Focus].Toggle {
+		if len(f.Choice) > 0 {
+			s := ""
+			if f.Buttons {
+				s = f.Message
+			} else if f.Focus >= 0 && f.Focus < len(f.Choice) {
+				s = f.Choice[f.Focus]
+			}
+			if s != "" {
+				a.Clipboard = &s
+			}
+			return
+		}
+		if f.Focus < 0 || f.Focus >= len(f.Fields) || f.Fields[f.Focus].Toggle {
 			return
 		}
 		field := &f.Fields[f.Focus]
+		if field.Secret {
+			if cut {
+				field.Value = ""
+				f.Cursor = 0
+				f.Selected = false
+			}
+			a.Status = "Secret fields are not copied"
+			return
+		}
 		s := field.Value
 		a.Clipboard = &s
 		if cut {
 			field.Value = ""
 			f.Cursor = 0
+			f.Selected = false
 		}
 		return
 	}
