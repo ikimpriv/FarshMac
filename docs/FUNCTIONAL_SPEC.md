@@ -1194,8 +1194,8 @@
 - **Поведение:** позиция запоминается (`remember()` → Cmd+Z в просмотрщике вернёт). `NN%`: 0–100, иначе `Enter a percentage from 0 to 100`; в hex → `ByteOffset = (Size-1)*v/100`; в тексте → строка `(lines-1)*v/100`, курсор в её начало, `Offset`/`ViewStart` на неё. Hex: число (десятичное или `0x…`), вне `[0, Size)` → `Offset outside file`. Текст: `row[:col]`, 1-based; ошибка/выход за число строк → `Invalid line / column` (колонка > длины строки — не ошибка, курсор в конец строки); выделение снимается, `Offset = row-1`.
 - **Код:** `document.go: gotoDocument`.
 
-#### Cmd+0..9 / Cmd+Shift+0..9 — закладки
-- **Вызов:** Cmd (или Ctrl) + цифра 0–9: восстановить; с Shift — сохранить. (Shift+цифра на клавиатуре даёт `m.Key` вида `)!@…`? — код проверяет `strconv.Atoi(m.Key)`, т.е. требуется, чтобы рендерер прислал цифру.)
+#### Cmd+0..9 / Cmd+Option+0..9 — закладки
+- **Вызов:** Cmd (или Ctrl) + цифра 0–9: восстановить; Cmd+Option+цифра (или Ctrl+Shift+цифра) — сохранить. Цифра берётся из `m.Code` (`DigitN`), поэтому раскладка и Option не мешают. Cmd+Shift+цифра закладку не ставит: macOS забирает Cmd+Shift+3/4/5 под скриншоты.
 - **Поведение:** сохраняет `docPosition{Cursor, Offset, Column, ViewStart, ByteOffset}` в `Bookmarks[n]`, статус `Bookmark %d saved`. Восстановление: текущая позиция в `Positions`, затем `restore(p)` (курсор ограничивается длиной текста, выделение снимается). Нет закладки — ничего. Закладки — на документ, в памяти, не сохраняются.
 - **Код:** `document.go: documentKey, pos, restore`.
 
@@ -1402,7 +1402,7 @@ Cmd+F7 / Cmd+H  Search and replace; confirmation or Replace all
 Alt+F8 / Cmd+G  Go to line:column, byte offset, or percentage
 Shift+F8    Codepage chooser     F8 CP866 / Windows-1251
 F9          Encoding-related options, line endings, BOM, read-only
-Cmd+Shift+0..9 Save bookmark     Cmd+0..9 Restore bookmark
+Cmd+Option+0..9 Save bookmark    Cmd+0..9 Restore bookmark
 Cmd+B       Toggle key bar      Cmd+Shift+B Toggle status
 Cmd+O       Terminal / document
 
