@@ -148,8 +148,28 @@ func (p *Panel) sortEntries(files []Entry) {
 }
 func (a *App) sortMenu(index int) {
 	p := &a.Panels[index]
-	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Directories first", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
-	a.choose("Sort mode", names, func(i int) {
+	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Mix directories and files", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
+	labels := make([]string, len(names))
+	for i, name := range names {
+		var on bool
+		switch i {
+		case 4:
+			on = p.Reverse
+		case 5:
+			on = p.CaseSensitive
+		case 6:
+			on = p.MixDirectories
+		case 7:
+			on = p.SelectedFirst
+		default:
+			on = p.Sort == name || p.Sort == "" && name == "Name"
+		}
+		labels[i] = name
+		if on {
+			labels[i] = "✓ " + name
+		}
+	}
+	a.choose("Sort mode", labels, func(i int) {
 		switch i {
 		case 0, 1, 2, 3, 8, 9, 10, 11, 12:
 			p.Sort = names[i]

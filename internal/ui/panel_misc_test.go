@@ -139,6 +139,30 @@ func TestKeyBarLabelsForArchivePanel(t *testing.T) {
 	}
 }
 
+func TestSortMenuShowsState(t *testing.T) {
+	a, err := New(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.sortMenu(0)
+	if a.Form.Choice[0] != "✓ Name" || a.Form.Choice[6] != "Mix directories and files" || a.Form.Choice[4] != "Reverse order" {
+		t.Fatal(a.Form.Choice)
+	}
+	a.Form.Select(6)
+	a.Form = nil
+	a.Panels[0].Reverse = true
+	a.Panels[0].Sort = "Size"
+	a.sortMenu(0)
+	c := a.Form.Choice
+	if c[0] != "Name" || c[2] != "✓ Size" || c[4] != "✓ Reverse order" || c[6] != "✓ Mix directories and files" || c[5] != "Case sensitive" || c[7] != "Selected first" {
+		t.Fatal(c)
+	}
+	if !a.Panels[0].MixDirectories {
+		t.Fatal("Mix directories item must toggle MixDirectories")
+	}
+}
+
 func settleJobs(a *App) {
 	for i := 0; i < 20; i++ {
 		a.Poll()
