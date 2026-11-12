@@ -367,7 +367,14 @@ func (a *App) runUserCommand(command string) {
 	if a.remoteUnsupported() {
 		return
 	}
-	p := a.Panels[a.Active].Current()
+	panel := &a.Panels[a.Active]
+	p := panel.Current()
+	if panel.Archive != nil {
+		if _, inside := panel.Archive.Relative(p); inside {
+			a.Status = "Use F5 to copy this archive item out before running commands on it"
+			return
+		}
+	}
 	a.Command = strings.ReplaceAll(command, "{}", terminal.Quote(p))
 	a.execute()
 }
@@ -411,10 +418,7 @@ func (a *App) fileAssociations() {
 	}
 	a.choose("File associations", items, func(i int) {
 		if i == 1 {
-			path := a.Panels[a.Active].Current()
-			if path != "" {
-				a.workProgress("Opening", func(o *fsops.Operation) error { return exec.CommandContext(o.Context(), "/usr/bin/open", path).Run() })
-			}
+			a.openSystemSelected() // Same remote/archive checks and error reporting as Shift+Enter.
 			return
 		}
 		c := Association{}
