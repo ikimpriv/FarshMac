@@ -48,7 +48,7 @@ func TestMenuMarksUnavailableItemsForRemoteAndArchive(t *testing.T) {
 }
 func TestMenuShowsFarShortcuts(t *testing.T) {
 	a := formTestApp(t)
-	want := map[string]string{"Save setup": "⇧F9", "Link…": "⌥F6", "Create archive…": "⇧F1", "Folder history": "⌥F12", "Folder shortcuts…": "⌃1…9", "Quick view on/off": "⌃Q", "Sort modes…": "⌃F12"}
+	want := map[string]string{"Save setup": "⇧F9", "Link…": "⌥F6", "Create archive…": "⇧F1", "Folder history": "⌥F12", "Folder shortcuts…": "⌘⌥1…9", "Quick view on/off": "⌃Q", "Sort modes…": "⌃F12"}
 	for _, section := range a.menuSections() {
 		for _, item := range section.Items {
 			if w, ok := want[item.Label]; ok && item.Shortcut != w {

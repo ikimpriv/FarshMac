@@ -97,7 +97,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
 | Shift+Enter | Open with macOS / Finder |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
-| Ctrl+Shift+1…9 / Ctrl+1…9 | Save / open folder bookmarks |
+| ⌘⌥⇧1…9 / ⌘⌥1…9 | Save / open folder bookmarks (Ctrl+Shift+1…9 / Ctrl+1…9 also work; macOS may take Ctrl+1…9 for switching desktops) |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
 | Cmd+Shift+H | Shell command history (terminal mode): Enter to run, F4 to edit |
 | Cmd++ / Cmd+− / Cmd+0 | Font size larger / smaller / default (10–24); Cmd+= also zooms in terminal mode, in panels it opens the same folder in the other panel |

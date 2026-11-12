@@ -45,7 +45,7 @@ archive plugin or extension.
 ## Commands
 
 - Find file / Find folder: masks, subdirectories, containing text and case sensitivity. Text is streamed; results are capped at 10,000, with unreadable paths counted. Archive search, regex and all Far encodings were not implemented in this search dialog.
-- Command history (⌥F8) inserts without immediate execution. File view/edit history (⌥F11) and Folder history (⌥F12) list recent entries; folder history remembers whether an entry is local, remote or inside an archive. Folder shortcuts provide nine slots, 1–9 (⌃1…9 to jump, ⌃⇧1…9 to save); there is no slot 0.
+- Command history (⌥F8) inserts without immediate execution. File view/edit history (⌥F11) and Folder history (⌥F12) list recent entries; folder history remembers whether an entry is local, remote or inside an archive. Folder shortcuts provide nine slots, 1–9 (⌘⌥1…9 to jump, ⌘⌥⇧1…9 to save; ⌃1…9 / ⌃⇧1…9 as aliases, since macOS may take ⌃1…9 for switching desktops and ⌘1…9 are F1…F9); there is no slot 0.
 - Find folder has no shortcut, as in Far.
 - Folder tree, Swap panels, Panels on/off / terminal and Compare folders. Comparison is nonrecursive and uses names, sizes and times, not content hashes.
 - **F2** opens the user menu. Edit user menu and File associations configure commands with `{}` substitution, saved in `setup.json`. Enter applies associations; opening through macOS is also available. FarMenu.ini, hierarchical user menus and Far's complete substitution language are unsupported.

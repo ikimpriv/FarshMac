@@ -417,12 +417,12 @@
 
 ## 9. Закладки папок (folder shortcuts)
 
-#### Ctrl+Shift+1…9 — сохранить
-- **Вызов:** только Ctrl (не ⌘), не Numpad; код `DigitN` или символ. `Commands → Folder shortcuts… → Save current folder…` → диалог `Save folder shortcut`, `Slot 1–9`, значение `1`, ошибка `Choose 1–9`.
+#### ⌘⌥⇧1…9 (или Ctrl+Shift+1…9) — сохранить
+- **Вызов:** ⌘⌥⇧ + цифра или Ctrl+Shift + цифра (⌘ без ⌥ — это F1…F9), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. ⌘⌥ — основной вариант, потому что macOS может забирать Ctrl+1…9 под переключение рабочих столов. `Commands → Folder shortcuts… → Save current folder…` → диалог `Save folder shortcut`, `Slot 1–9`, значение `1`, ошибка `Choose 1–9`.
 - **Поведение:** `Shortcuts[n] = Path`; для remote сохраняется копия конфигурации без пароля/пассфразы/host key с `Directory = Path`; для архива — `ShortcutArchives[n] = Archive.Path`. Сразу `saveSetup()`; статус `Folder shortcut %d saved: <path>` (если сохранение прошло, иначе — ошибка).
 - **Код:** `folder_shortcuts.go: saveFolderShortcut`.
 
-#### Ctrl+1…9 — перейти
+#### ⌘⌥1…9 (или Ctrl+1…9) — перейти
 - **Поведение:** пустой слот → `Folder shortcut %d is empty`. Remote-закладка: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная закладка → `openArchiveAt(archive, path)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Shortcut is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `Load(path)`. Запомненные позиции курсора и пометки (`states`) сохраняются.
 - Меню `Folder shortcuts`: `Save current folder…`, затем `1  <path>` … `9  <path>` (для remote с префиксом `Label()`).
 - **Код:** `folder_shortcuts.go: goFolderShortcut`, `panel_options.go: folderShortcuts`.
@@ -2090,7 +2090,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 
 #### Folder shortcuts…
 - **Диалог:** список `Folder shortcuts`: `Save current folder…`, затем `1  <путь>` … `9  <путь>` (для удалённых — `<label><путь>`). Выбор слота → `goFolderShortcut`; `Save current folder…` → prompt `Save folder shortcut` / `Slot 1–9` (значение `1`), ошибка `Choose 1–9`.
-- **Клавиши:** `Ctrl+1…9` — перейти, `Ctrl+Shift+1…9` — сохранить (не Numpad).
+- **Клавиши:** `⌘⌥1…9` (или `Ctrl+1…9`) — перейти, `⌘⌥⇧1…9` (или `Ctrl+Shift+1…9`) — сохранить (не Numpad).
 - **Хранение:** `Settings.Shortcuts[10]`, `ShortcutRemotes[10]` (копия `remotefs.Config` без пароля/passphrase/host key, `Directory = путь`), `ShortcutArchives[10]` (путь архива). Сохранение вызывает `saveSetup()`; статус `Folder shortcut N saved: <path>` (если сохранение прошло, т.е. статус был `Setup saved`).
 - **Переход:** пустой слот → `Folder shortcut N is empty`; удалённый слот: если какая-то панель уже подключена к тому же серверу — переподключение к пути без диалога, иначе открывается форма `FTP / SFTP connection` с профилем; архивный — `openArchiveAt`; локальный: проверка `os.Stat`, не папка → `Shortcut is not a directory`; затем сброс `Remote`/`Archive` и загрузка.
 - **Код:** `folder_shortcuts.go`, `panel_options.go` (`folderShortcuts`).

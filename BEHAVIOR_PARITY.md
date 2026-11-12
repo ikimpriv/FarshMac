@@ -83,7 +83,7 @@ are absent. Later Option-input fixes are documented in the changelog.
   (created, accessed, owner, description).
 - ⌘C equals Ctrl+Insert: copies the command line or selected names; on `..` it
   copies the panel path. Ctrl+Alt+Insert copies real paths (links resolved).
-- Ctrl+1…9 bookmark jumps keep remembered cursor positions and marks of visited
+- ⌘⌥1…9 (or Ctrl+1…9) bookmark jumps keep remembered cursor positions and marks of visited
   folders.
 - Ctrl+PgDn enters exactly the archive formats in [ARCHIVE_SUPPORT.md](ARCHIVE_SUPPORT.md);
   a bare `.gz`/`.bz2`/`.xz` is not entered.

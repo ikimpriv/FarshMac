@@ -55,3 +55,30 @@ func TestControlFolderShortcuts(t *testing.T) {
 		t.Fatal("remote shortcut lost")
 	}
 }
+
+func TestCmdOptionFolderShortcuts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	left, right := t.TempDir(), t.TempDir()
+	a, err := New(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	// Option and Shift change e.key ("⁄", "€"); the physical code names the digit.
+	a.key(Message{Key: "⁄", Code: "Digit4", Meta: true, Alt: true, Shift: true})
+	if a.Settings.Shortcuts[4] != left || a.Doc != nil {
+		t.Fatal("Cmd+Option+Shift+4 did not save", a.Settings.Shortcuts[4], a.Status)
+	}
+	a.Active = 1
+	a.key(Message{Key: "¢", Code: "Digit4", Meta: true, Alt: true})
+	if a.Panels[1].Path != left {
+		t.Fatal("Cmd+Option+4 did not open the shortcut", a.Panels[1].Path, a.Status)
+	}
+	// Cmd+digit stays a function key, not a shortcut jump.
+	a.Settings.Shortcuts[5] = right
+	a.Active = 0
+	a.key(Message{Key: "5", Code: "Digit5", Meta: true})
+	if a.Panels[0].Path == right {
+		t.Fatal("Cmd+5 must remain F5, not a folder shortcut")
+	}
+}

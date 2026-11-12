@@ -7,8 +7,13 @@ import (
 	"strings"
 )
 
+// folderShortcutKey: Cmd+Option+1..9 opens and Cmd+Option+Shift+1..9 saves a
+// folder shortcut (macOS may take Ctrl+1..9 for switching desktops, and
+// Cmd+1..9 are F1..F9). Ctrl+1..9 / Ctrl+Shift+1..9 remain as aliases.
 func (a *App) folderShortcutKey(m Message) bool {
-	if !m.Ctrl || m.Meta || m.Alt || strings.HasPrefix(m.Code, "Numpad") {
+	ctrl := m.Ctrl && !m.Meta && !m.Alt
+	cmdOption := m.Meta && m.Alt && !m.Ctrl
+	if !ctrl && !cmdOption || strings.HasPrefix(m.Code, "Numpad") {
 		return false
 	}
 	key := m.Key

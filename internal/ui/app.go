@@ -1443,8 +1443,8 @@ Cmd/Ctrl+Num +/-   Select / deselect same extension
 Alt+Num +/-        Select / deselect same base name
 Shift+Num +/-      Select / deselect all files
 Cmd/Ctrl+M         Restore previous selection
-Ctrl+Shift+1..9     Save folder shortcut (panels)
-Ctrl+1..9           Go to folder shortcut (keeps remembered cursor positions)
+Cmd+Option+Shift+1..9  Save folder shortcut (panels; also Ctrl+Shift+1..9)
+Cmd+Option+1..9     Go to folder shortcut (also Ctrl+1..9; keeps cursor positions)
 Network connections: F9 > Commands > Network connections
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
