@@ -564,7 +564,7 @@ func (a *App) treeMenu() {
 	})
 }
 func (a *App) updatePreview() {
-	if a.Doc != nil || a.TermVisible || a.Busy {
+	if a.Doc != nil || a.Image != nil || a.TermVisible || a.Busy {
 		return
 	}
 	index := -1

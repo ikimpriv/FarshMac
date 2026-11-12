@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"farshmac/internal/fsops"
+	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
 	"fmt"
 	"os"
@@ -154,7 +155,12 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 		}
 		return
 	}
-	a.launch(path, a.viewPlan(path, edit, alternate, forceInternal))
+	plan := a.viewPlan(path, edit, alternate, forceInternal)
+	if plan.Internal && !edit && info.Mode().IsRegular() && preview.Supported(path) {
+		a.openImage(path)
+		return
+	}
+	a.launch(path, plan)
 }
 func (a *App) enterFile() {
 	if !a.requireFilePanel() {
@@ -189,13 +195,8 @@ func (a *App) enterFile() {
 		return
 	}
 	if info.IsDir() {
-		// The tree shows bundles as folders: Enter re-roots there, and
-		// Shift+Enter is the way to launch the application.
-		if strings.EqualFold(filepath.Ext(path), ".app") && p.View != "Tree panel" {
-			a.launch(path, externalPlan(path, "", false))
-		} else {
-			a.error(p.Load(path))
-		}
+		// Bundles (.app) are folders here; Shift+Enter launches them.
+		a.error(p.Load(path))
 		return
 	}
 	if fsops.ArchiveFormat(path) != "" {

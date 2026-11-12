@@ -4,7 +4,7 @@ module.exports=function harness(){
  const sent=[],timers=new Map(),listeners={},docListeners={},docListenerOptions={},writes=[],terminals=[],elements=new Map();let serial=0;
  const screen={clientWidth:1020,clientHeight:648,getBoundingClientRect(){return {left:0,top:0,width:this.clientWidth,height:this.clientHeight}}};
  class Element{
-  constructor(){this.events={};this.style={};this.children=[];this.dataset={};this.classList={add(){},remove(){}};this.textContent='';}
+  constructor(){this.events={};this.style={};this.children=[];this.dataset={};this.classes=new Set();this.classList={add:(c)=>this.classes.add(c),remove:(c)=>this.classes.delete(c),toggle:(c,on)=>{on?this.classes.add(c):this.classes.delete(c);return on},contains:(c)=>this.classes.has(c)};this.textContent='';}
   querySelector(){return screen} addEventListener(name,fn){this.events[name]=fn} append(...c){this.children.push(...c)} replaceChildren(){this.children=[]}
   contains(e){return this===e||this.children.includes(e)} focus(){} blur(){} setPointerCapture(){this.captured=true} hasPointerCapture(){return this.captured} releasePointerCapture(){this.captured=false}
  }

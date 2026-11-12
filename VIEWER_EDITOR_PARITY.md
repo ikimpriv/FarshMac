@@ -33,6 +33,12 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
   end. A folder bookmark used from a document returns to the panels. ⌘0 resets the
   font size only in the terminal.
 - F9 opens document settings in a document and the main menu in panels.
+- F3 on an image or PDF (the quick-view formats: JPEG, PNG, GIF, TIFF, BMP, HEIC, WebP,
+  PDF first page) opens a graphical view instead of the text viewer: black background,
+  picture centred and scaled to fit, Esc (or F3/F10/Enter) closes. Decoding happens in the
+  sandboxed preview helper, bounded to 2048 px on the longer side; a damaged file reports
+  in the status line. ⌘⇧F3 / Alt+F3 still follow the external/internal viewer rules, and
+  the external viewer wins when configured.
 
 ## Implemented features
 

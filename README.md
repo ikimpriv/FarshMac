@@ -80,7 +80,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Tab | Switch active panel (a hidden panel is skipped) |
 | Cmd+O | Switch between panels and terminal; synchronize the folder |
 | Cmd+Option+F3 | Calculate all displayed folder sizes |
-| F3 / F4 | View / edit; F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
+| F3 / F4 | View / edit; F3 on an image or PDF opens a graphical view (black background, picture centred, Esc closes); F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
 | Alt+F6 | Create a symbolic link (relative by default) or hard link; naming an existing folder creates the link inside it |
@@ -95,7 +95,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Cmd+Enter | Insert the selected filename into the command line |
 | Cmd+F / Cmd+; | Insert the full path from the active / inactive panel |
 | Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
-| Shift+Enter | Open with macOS / Finder |
+| Shift+Enter | Open with macOS / Finder (launches `.app` bundles; Enter enters them as folders) |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
 | ⌘⌥0…9 / ⌘0…9 | Save / go to a bookmark, the same keys as in the viewer/editor. A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |

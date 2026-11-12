@@ -233,7 +233,7 @@
 - **Поведение (`enterFile`):**
   - удалённая панель: папка → `Load`, файл → `openRemoteDocument(false)`;
   - архив: `enterArchiveMember` (§10);
-  - локальная: `os.Stat` (ошибка → статус); папка с расширением `.app` → `/usr/bin/open <path>`; другая папка → `Load`; архив по `fsops.ArchiveFormat` (`.tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar .zip .jar .war .7z .rar .cpio`) → `openArchive`; ассоциация с `Command` по маске → запуск в терминале; обычный исполняемый файл (`mode&0111`) → выполняется в терминале как команда (`terminal.Quote(path)`); иначе → `/usr/bin/open <path>` (задача `Opening <name>`).
+  - локальная: `os.Stat` (ошибка → статус); папка (включая `.app`; запуск — Shift+Enter) → `Load`; архив по `fsops.ArchiveFormat` (`.tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar .zip .jar .war .7z .rar .cpio`) → `openArchive`; ассоциация с `Command` по маске → запуск в терминале; обычный исполняемый файл (`mode&0111`) → выполняется в терминале как команда (`terminal.Quote(path)`); иначе → `/usr/bin/open <path>` (задача `Opening <name>`).
 - На `..` — `Current()` = родитель → `Load(parent)`.
 - **Код:** `launch.go: enterFile, externalPlan, launch`.
 
@@ -821,7 +821,7 @@
 #### Enter на элементе панели
 - **Вызов:** `Enter` при пустой командной строке, двойной клик, `Ctrl/Cmd+PageDown` (только каталоги/архивы), выбор в fast find.
 - **Поведение (локальная панель, `enterFile`):**
-  1. Каталог с расширением `.app` (без учёта регистра) → `/usr/bin/open <path>` (запуск приложения); другой каталог → вход.
+  1. Каталог, включая `.app` → вход (запуск приложения — Shift+Enter).
   2. Файл с `ArchiveFormat != ""` → вход в архив.
   3. Первая ассоциация (`Settings.Associations`) с непустым `Command`, чья маска подходит (`matchesMask`, с группами масок) → команда выполняется в терминале: `{}` заменяется на shell-quoted путь, иначе путь добавляется в конец; командная строка пользователя не затирается (`submitCommand(..., record=false)`), панели сменяются терминалом.
   4. Обычный файл с битом исполнения (`0111`) → в терминале выполняется `'<path>'` (quoted).
@@ -836,6 +836,11 @@
 - **Поведение:** всегда `/usr/bin/open <абсолютный путь>` одним аргументом (без shell; ассоциации, exec-бит, viewer-настройки и командная строка игнорируются; черновик команды сохраняется). Каталог открывается в Finder, `.app` запускается, `..` открывает родителя. Выполняется как `workProgress("Opening <name>")` с отменой по Esc; ошибка → статус + диалог `Opening <name> failed` `[OK]` (тест: `No application is registered`).
 - **Ограничения:** удалённая панель → `Copy remote files to a local panel before opening them with macOS`; член архива → `Use F5 to copy this archive item out before opening it with macOS`; пустая панель — ничего.
 - **Код:** `internal/ui/launch.go` (`openSystemSelected`), `system_open_test.go`.
+
+#### F3 на картинке / PDF — графический просмотр
+- **Вызов:** F3 (и Alt+F3 / ⌘⇧F3, когда план — внутренний просмотрщик) на обычном локальном файле с расширением из `preview.Supported` (`.jpg .jpeg .png .gif .tif .tiff .bmp .heic .heif .webp .pdf`).
+- **Поведение:** `App.Image = imageView{Path}`; декодирование в sandbox-helper (`preview.RunSized`, до 2048 px по длинной стороне; фото уходят как JPEG, PNG/GIF/PDF — как PNG; лимит 12 МБ в helper, 20 МБ на чтение, таймаут 8 с). Пока грузится — чёрный экран с подписью `Loading <name>…` по центру; затем `Update.Preview{Full: true, X:0, Y:0, W: Cols, H: Rows}` и рендерер кладёт картинку поверх всей сетки (`#quick-preview.full`, `#panels.image` — чёрный фон, `object-fit: contain`). Заголовок окна — имя файла, `PanelKeys = false`, `Document = true`. Клавиши: Esc, F3, F10, Enter закрывают; остальные игнорируются; мышь игнорируется. Ошибка декодирования: подпись `<name>: cannot be shown (unsupported, damaged or too large)` и тот же текст в статусе; файла нет — `<name>: <reason>`. Quick view на это время не обновляется. Удалённые файлы и члены архивов по-прежнему идут через скачивание/извлечение в текстовый просмотрщик.
+- **Код:** `image_view.go: openImage, closeImage, imageKey, drawImage`, `image_preview.go: imagePreview`, `launch.go: openConfigured`.
 
 #### F3 / F4 — просмотр / правка (выбор внутреннего или внешнего)
 - **Вызов:** `F3`/`F4`, `Cmd+3`/`Cmd+4`, `Numpad5` (=F3), меню `Files → View / folder size`, `Files → Edit`; `Alt+F3`/`Alt+F4` — инвертировать выбор внутренний/внешний; `Cmd/Ctrl+Shift+F3`/`F4` — принудительно внутренний.

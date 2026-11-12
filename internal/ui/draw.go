@@ -7,6 +7,10 @@ import (
 func (a *App) Draw() *Grid {
 	g := NewGrid(a.Cols, a.Rows)
 	a.recordStatus()
+	if a.Image != nil && a.Form == nil && a.Dialog == nil {
+		a.drawImage(g)
+		return g
+	}
 	g.Fill(0, 0, g.W, 1, Black, Cyan)
 	for _, section := range a.menuSections() {
 		g.Text(section.X, 0, section.Name, Black, Cyan, len(section.Name))

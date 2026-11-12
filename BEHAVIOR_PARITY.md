@@ -35,7 +35,7 @@ This historical audit records implemented scenarios and validation limits. See
 
 With an empty command line, Enter:
 
-1. Enters an ordinary directory, or launches an `.app` bundle through macOS.
+1. Enters a directory, including `.app` bundles (Shift+Enter launches them through macOS).
 2. Runs a matching FarshMac Run association.
 3. Runs an executable file, including a symlink to one, using its shell-quoted
    absolute path in the persistent PTY, in the active panel's directory.
@@ -98,7 +98,7 @@ are absent. Later Option-input fixes are documented in the changelog.
   "Archive member: press F3 to extract and view".
 - EPERM from macOS privacy protection reads "Access denied by macOS privacy
   protection" with a Full Disk Access hint.
-- In the Tree panel, Enter on an `.app` re-roots the tree; Shift+Enter opens it.
+- Enter on an `.app` enters the bundle (in the Tree panel it re-roots the tree); Shift+Enter opens it.
 - An invalid panel filter is ignored with a footer note. Deleting a mask group used
   elsewhere asks first.
 - Other keys: Shift+arrows/PgUp/PgDn/Home/End mark a range, Alt+Num* inverts files

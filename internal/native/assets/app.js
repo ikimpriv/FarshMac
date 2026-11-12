@@ -89,6 +89,8 @@ window.farshmacUpdate = state => {
   if(state.grid){
    const img=document.getElementById('quick-preview'), p=state.preview;
    img.hidden=!p;
+   // The F3 image view: the whole grid is black and the picture is centred over it.
+   const full=!!(p&&p.full);img.classList.toggle('full',full);panelEl.classList.toggle('image',full);
    if(p){const r=panelEl.querySelector('.xterm-screen').getBoundingClientRect();
     if(p.data)img.src=p.data;
     img.style.left=(r.left+p.X*r.width/panels.cols)+'px';img.style.top=(r.top+p.Y*r.height/panels.rows)+'px';

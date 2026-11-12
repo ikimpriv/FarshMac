@@ -317,6 +317,7 @@ type App struct {
 	folderHistory                                             []string
 	viewHistory                                               []viewRecord
 	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
+	Image                                                     *imageView       // F3 graphical view of an image or PDF.
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
@@ -711,6 +712,10 @@ func (a *App) key(m Message) {
 		return
 	}
 	if a.fontSizeKey(m) {
+		return
+	}
+	if a.Image != nil && a.Form == nil && a.Dialog == nil && !a.TermVisible {
+		a.imageKey(m)
 		return
 	}
 	if (m.Ctrl && m.Key == "Tab") || (m.Meta && m.Shift && (m.Key == "[" || m.Key == "]" || m.Key == "{" || m.Key == "}")) {
@@ -1228,6 +1233,9 @@ func (a *App) click(m Message) {
 	if m.Button != 0 && (a.Form != nil || a.Dialog != nil || a.Doc != nil || a.Menu != nil || a.Busy) {
 		return
 	}
+	if a.Image != nil && a.Form == nil && a.Dialog == nil && !a.TermVisible {
+		return
+	}
 	a.FastFind = nil
 	if a.Form != nil {
 		a.formClick(m)
@@ -1349,7 +1357,7 @@ termDone:
 	a.checkIntegrationWatchdog()
 	a.restartShellIfDue()
 	a.syncShellCwd()
-	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil, Clipboard: a.Clipboard}
+	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Image == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil || a.Image != nil, Clipboard: a.Clipboard}
 	u.ShellReady = a.ShellReady
 	u.Commands = a.shellCommands
 	if u.Commands != nil {
@@ -1361,6 +1369,9 @@ termDone:
 	u.DiskAccessSettings = a.DiskAccessSettings
 	if a.Doc != nil {
 		u.Title = filepath.Base(a.Doc.displayPath())
+	}
+	if a.Image != nil {
+		u.Title = filepath.Base(a.Image.Path)
 	}
 	a.historyPage = nil
 	a.NewWindow = false
@@ -1450,7 +1461,8 @@ FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
 
 Enter               Open directory / view file / execute command
-Shift+Enter         Open selected item with macOS (folders in Finder)
+Shift+Enter         Open selected item with macOS (folders in Finder, .app launches;
+                    Enter on .app enters the bundle)
 Cmd+Shift+. / Ctrl+H Show / hide hidden files (also in Panel settings)
 Cmd+Shift+S         Human-readable / exact sizes
 Backspace           Delete command-line character; never leave directory
@@ -1460,6 +1472,7 @@ F4 on a folder      File attributes (permissions, modified)
 ⌘Option+F3         Calculate all folder sizes (~ = cached, possibly outdated)
 Info: Ctrl+F12      Configure sections; PgUp/PgDn/wheel scroll; F3/F4 description
 F3 / F4             Viewer / editor (F1 inside for full key reference)
+F3 on image / PDF   Graphical view: black background, picture centred, Esc closes
 Alt+F3 / Alt+F4     Alternate viewer / editor (external vs internal)
 Cmd+Shift+F3/F4     Internal viewer / editor
 Shift+F4            New file

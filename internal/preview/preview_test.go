@@ -10,13 +10,18 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 3 && os.Args[1] == HelperFlag {
-		os.Exit(HelperMain(os.Args[2]))
+	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == HelperFlag {
+		pixels := 0
+		if len(os.Args) == 4 {
+			pixels, _ = strconv.Atoi(os.Args[3])
+		}
+		os.Exit(HelperMain(os.Args[2], pixels))
 	}
 	os.Exit(m.Run())
 }
