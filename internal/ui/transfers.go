@@ -48,7 +48,19 @@ func (a *App) transferDialog(move bool) {
 	if move {
 		label = "Move / rename"
 	}
-	start := func(s string, metadata fsops.MetadataOptions) {
+	// Symbolic-link handling applies only to local-to-local transfers; archive
+	// contents are extracted to a temporary folder and keep their links as is.
+	links := catalog == nil && p.Remote == nil && targetEndpoint.Remote == nil
+	symlinkField := Field{Label: "Symbolic links", Toggle: true, Value: fsops.ParseSymlinkMode(a.Settings.CopySymlinks).String(), Options: []string{fsops.SymlinksSmart.String(), fsops.SymlinksAsIs.String(), fsops.SymlinksContents.String()}}
+	symlinks := func(fields []Field) fsops.SymlinkMode {
+		if !links {
+			return fsops.SymlinksAsIs
+		}
+		mode := fsops.ParseSymlinkMode(fields[len(fields)-1].Value)
+		a.Settings.CopySymlinks = mode.String()
+		return mode
+	}
+	start := func(s string, metadata fsops.MetadataOptions, symlinks fsops.SymlinkMode) {
 		if targetEndpoint.Remote != nil && remoteTilde(s) {
 			a.Status = remoteTildeStatus
 			return
@@ -61,6 +73,7 @@ func (a *App) transferDialog(move bool) {
 		}
 		ask := a.Settings.ConfirmOverwrite
 		a.workProgress(label, func(o *fsops.Operation) error {
+			o.Symlinks = symlinks
 			if move {
 				o.IgnoreDSStore = false
 				a.moveMetadataQuestions(o)
@@ -146,6 +159,7 @@ func (a *App) transferDialog(move bool) {
 				}
 				return remotefs.Copy(sourceEndpoint, targetEndpoint, pairs, remotefs.CopyOptions{Workers: workers, Metadata: metadata, Conflict: conflict}, o)
 			}
+			o.TransferRoots(paths)
 			for _, src := range paths {
 				target := dst
 				if transferIntoDirectory(s, dst, dest, len(paths), isDir) {
@@ -159,15 +173,23 @@ func (a *App) transferDialog(move bool) {
 		})
 	}
 	if move {
-		a.prompt(label, fmt.Sprintf("%d item(s) to", len(paths)), dest, func(s string) { start(s, fsops.MetadataOptions{}) })
+		a.form(label, []Field{{Label: fmt.Sprintf("Move %d item(s) to", len(paths)), Value: dest}, symlinkField}, func(fields []Field) {
+			start(fields[0].Value, fsops.MetadataOptions{}, symlinks(fields))
+		})
+		a.Form.Primary = "Move"
+		a.Form.Selected = a.Settings.SelectDialogInput
 		return
 	}
-	a.form(label, []Field{
+	fields := []Field{
 		{Label: fmt.Sprintf("Copy %d item(s) to", len(paths)), Value: dest},
 		{Label: "Preserve permissions (mode, owner, group, ACL)", Toggle: true, Checked: a.Settings.CopyPermissions},
 		{Label: "Preserve attributes (xattrs, flags, timestamps)", Toggle: true, Checked: a.Settings.CopyAttributes},
 		{Label: "Parallel transfers (1–8)", Value: strconv.Itoa(max(1, min(8, a.Settings.CopyWorkers)))},
-	}, func(fields []Field) {
+	}
+	if links {
+		fields = append(fields, symlinkField)
+	}
+	a.form(label, fields, func(fields []Field) {
 		workers, err := strconv.Atoi(fields[3].Value)
 		if err != nil || workers < 1 || workers > 8 {
 			a.error(fmt.Errorf("parallel transfers must be between 1 and 8"))
@@ -175,7 +197,7 @@ func (a *App) transferDialog(move bool) {
 		}
 		a.Settings.CopyWorkers = workers
 		a.Settings.CopyPermissions, a.Settings.CopyAttributes = fields[1].Checked, fields[2].Checked
-		start(fields[0].Value, fsops.MetadataOptions{Permissions: fields[1].Checked, Attributes: fields[2].Checked})
+		start(fields[0].Value, fsops.MetadataOptions{Permissions: fields[1].Checked, Attributes: fields[2].Checked}, symlinks(fields))
 	})
 	a.Form.Primary = "Copy"
 	a.Form.Selected = a.Settings.SelectDialogInput

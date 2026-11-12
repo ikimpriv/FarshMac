@@ -18,6 +18,7 @@ type Settings struct {
 	CopyWorkers                                                                                      int
 	RemoteConnections                                                                                []remotefs.Config
 	CopyPermissions, CopyAttributes                                                                  bool
+	CopySymlinks                                                                                     string // fsops.SymlinkMode name; empty is Smart
 	Shell                                                                                            string
 	HumanReadableSizes                                                                               bool
 	ExternalViewer, ExternalEditor                                                                   string

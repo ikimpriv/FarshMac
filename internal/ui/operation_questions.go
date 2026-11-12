@@ -163,7 +163,13 @@ func (a *App) collisionQuestions(o *fsops.Operation, ask bool) {
 				} else if c.DestinationInfo != nil && c.DestinationInfo.Mode()&os.ModeSymlink != 0 {
 					existing = "Existing: symbolic link → " + c.DestinationLink
 				}
-				message := "The file already exists\n" + c.Destination + "\n\n" + fileComparison("New", c.SourceInfo) + "\n" + existing
+				incoming := fileComparison("New", c.SourceInfo)
+				if c.SourceBroken {
+					incoming = "New: broken link → " + c.SourceLink
+				} else if c.SourceInfo != nil && c.SourceInfo.Mode()&os.ModeSymlink != 0 {
+					incoming = "New: symbolic link → " + c.SourceLink
+				}
+				message := "The file already exists\n" + c.Destination + "\n\n" + incoming + "\n" + existing
 				a.confirm("Warning", message, buttons, func(i int) {})
 				form := a.Form
 				form.Remember = true

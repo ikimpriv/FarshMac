@@ -10,7 +10,41 @@ type Field struct {
 	Label, Value    string
 	Toggle, Checked bool
 	Secret          bool
+	// Options makes a one-line choice (with Toggle set): Value is the selected
+	// option; Space and arrows cycle through them, a click picks one.
+	Options []string
 }
+
+// cycle selects the next (delta 1) or previous (-1) option.
+func (field *Field) cycle(delta int) {
+	if len(field.Options) == 0 {
+		field.Checked = !field.Checked
+		return
+	}
+	at := 0
+	for i, option := range field.Options {
+		if option == field.Value {
+			at = i
+		}
+	}
+	field.Value = field.Options[(at+delta+len(field.Options))%len(field.Options)]
+}
+
+// choiceText renders an option field; starts holds each option's offset.
+func (field *Field) choiceText() (string, []int) {
+	text := field.Label + ": "
+	var starts []int
+	for _, option := range field.Options {
+		mark := "( ) "
+		if option == field.Value {
+			mark = "(•) "
+		}
+		starts = append(starts, utf8.RuneCountInString(text))
+		text += mark + option + "  "
+	}
+	return strings.TrimRight(text, " "), starts
+}
+
 type Form struct {
 	Remember, RememberChecked bool
 	OperationQuestion         bool
@@ -133,7 +167,7 @@ func (a *App) formKey(m Message) {
 				if i >= len(f.Fields) {
 					a.formKey(Message{Key: "Enter"})
 				} else if f.Fields[i].Toggle {
-					f.Fields[i].Checked = !f.Fields[i].Checked
+					f.Fields[i].cycle(1)
 				} else {
 					f.Cursor = utf8.RuneCountInString(f.Fields[i].Value)
 				}
@@ -192,8 +226,10 @@ func (a *App) formKey(m Message) {
 	}
 	field := &f.Fields[f.Focus]
 	if field.Toggle {
-		if m.Key == " " || m.Key == "ArrowLeft" || m.Key == "ArrowRight" {
-			field.Checked = !field.Checked
+		if m.Key == " " || m.Key == "ArrowRight" {
+			field.cycle(1)
+		} else if m.Key == "ArrowLeft" {
+			field.cycle(-1)
 		}
 		return
 	}
@@ -409,16 +445,19 @@ func (a *App) drawForm(g *Grid) {
 			}
 			field := f.Fields[i]
 			if field.Toggle {
-
 				mark := "[ ] "
 				if field.Checked {
 					mark = "[x] "
+				}
+				text := mark + field.Label
+				if len(field.Options) > 0 {
+					text, _ = field.choiceText()
 				}
 				bg := uint32(Gray)
 				if i == f.Focus {
 					bg = Cyan
 				}
-				modalLabel(g, pos.X, pos.Y, mark+field.Label, keys[i], bg, pos.W)
+				modalLabel(g, pos.X, pos.Y, text, keys[i], bg, pos.W)
 			} else {
 				label := field.Label
 				if !strings.HasSuffix(label, ":") {
@@ -597,8 +636,19 @@ func (a *App) formClick(m Message) {
 			f.Focus = i
 			f.Selected = false
 			f.Cursor = utf8.RuneCountInString(f.Fields[i].Value)
-			if f.Fields[i].Toggle {
-				f.Fields[i].Checked = !f.Fields[i].Checked
+			if field := &f.Fields[i]; len(field.Options) > 0 {
+				_, starts := field.choiceText()
+				for j := len(starts) - 1; j >= 0; j-- {
+					if m.X-pos.X >= starts[j] {
+						field.Value = field.Options[j]
+						break
+					}
+				}
+				if m.X-pos.X < starts[0] {
+					field.cycle(1)
+				}
+			} else if field.Toggle {
+				field.Checked = !field.Checked
 			}
 			return
 		}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"farshmac/internal/fsops"
 	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -323,23 +325,83 @@ func (a *App) createLink() {
 	if a.archiveReadOnly() {
 		return
 	}
-	src := a.Panels[a.Active].Current()
-	if src == "" {
+	p := &a.Panels[a.Active]
+	if len(p.Entries) == 0 || p.Entries[p.Cursor].Name == ".." {
+		a.Status = "Choose a file or folder to link to"
 		return
 	}
+	src := p.Current()
 	dst := filepath.Join(a.Panels[1-a.Active].Path, filepath.Base(src))
-	a.form("Create link", []Field{{Label: "Link name", Value: dst}, {Label: "Symbolic link", Toggle: true, Checked: true}}, func(f []Field) {
-		target := expand(f[0].Value, a.Panels[a.Active].Path)
-		var e error
-		if f[1].Checked {
-			e = os.Symlink(src, target)
-		} else {
-			e = os.Link(src, target)
+	fields := []Field{{Label: "Link name", Value: dst}, {Label: "Symbolic link", Toggle: true, Checked: true}, {Label: "Relative path (symbolic link)", Toggle: true, Checked: true}}
+	a.form("Create link", fields, func(f []Field) {
+		if strings.TrimSpace(f[0].Value) == "" {
+			a.reopenForm(f, 0, "Enter a link name")
+			return
 		}
-		a.error(e)
+		message, err := makeLink(src, expand(f[0].Value, p.Path), f[1].Checked, f[2].Checked)
 		a.refresh()
+		if err != nil {
+			a.error(err)
+			return
+		}
+		a.Status = message
 	})
+	a.Form.Selected = a.Settings.SelectDialogInput
 }
+
+// makeLink creates a symbolic (optionally relative) or hard link to src. An
+// existing folder as the name means "inside it, with the source's name", as
+// in Far. It returns the status message.
+func makeLink(src, name string, symbolic, relative bool) (string, error) {
+	if info, err := os.Stat(name); err == nil && info.IsDir() {
+		name = filepath.Join(name, filepath.Base(src))
+	}
+	if _, err := os.Lstat(name); err == nil {
+		return "", fmt.Errorf("cannot create link: %s already exists", name)
+	}
+	if !symbolic {
+		info, err := os.Lstat(src)
+		if err != nil {
+			return "", fmt.Errorf("cannot create hard link: %w", linkCause(err))
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("hard links to folders are not supported; use a symbolic link")
+		}
+		if err = os.Link(src, name); err != nil {
+			if errors.Is(err, syscall.EXDEV) {
+				return "", fmt.Errorf("cannot create hard link: %s and %s are on different volumes", src, filepath.Dir(name))
+			}
+			return "", fmt.Errorf("cannot create hard link %s: %w", name, linkCause(err))
+		}
+		return "Hard link created: " + filepath.Base(name) + " → " + src, nil
+	}
+	target := src
+	if relative {
+		text, err := fsops.RelativeLinkText(src, name)
+		if err != nil {
+			return "", err
+		}
+		target = text
+	}
+	if err := os.Symlink(target, name); err != nil {
+		return "", fmt.Errorf("cannot create link %s: %w", name, linkCause(err))
+	}
+	return "Link created: " + filepath.Base(name) + " → " + target, nil
+}
+
+// linkCause drops the "symlink a b:" prefix already stated by the message.
+func linkCause(err error) error {
+	var link *os.LinkError
+	if errors.As(err, &link) {
+		return link.Err
+	}
+	var path *os.PathError
+	if errors.As(err, &path) {
+		return path.Err
+	}
+	return err
+}
+
 func (a *App) applyCommand() {
 	if a.remoteUnsupported() {
 		return

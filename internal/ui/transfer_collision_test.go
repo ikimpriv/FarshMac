@@ -105,7 +105,7 @@ func TestMoveDialogRenamesFolderCase(t *testing.T) {
 	defer a.Close()
 	selectEntry(t, &a.Panels[0], "Folder")
 	a.key(Message{Key: "F6"})
-	a.Dialog.Input = filepath.Join(left, "folder")
+	a.Form.Fields[0].Value = filepath.Join(left, "folder")
 	a.key(Message{Key: "Enter"})
 	waitWork(t, a)
 	entries, e := os.ReadDir(left)

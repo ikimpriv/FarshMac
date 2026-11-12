@@ -263,3 +263,9 @@ func replaceLink(path, text string, o *Operation) error {
 	}
 	return nil
 }
+
+// RelativeLinkText is the text of a relative symbolic link at link pointing
+// to target, measured from the folder the kernel resolves it against.
+func RelativeLinkText(target, link string) (string, error) {
+	return filepath.Rel(physicalDir(filepath.Dir(link)), physicalPath(target))
+}
