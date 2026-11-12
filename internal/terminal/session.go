@@ -170,7 +170,7 @@ export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 		}
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(cmd.Env, "SHELL=/bin/"+shell, "BASH_SILENCE_DEPRECATION_WARNING=1")
+	cmd.Env = append(hostTerminalFree(cmd.Env), "TERM_PROGRAM=FarshMac", "SHELL=/bin/"+shell, "BASH_SILENCE_DEPRECATION_WARNING=1")
 	// BSD/macOS ls needs an explicit automatic-color preference in addition to
 	// TERM. Set a session default; startup files may override or unset it.
 	if _, set := os.LookupEnv("CLICOLOR"); !set && os.Getenv("NO_COLOR") == "" {
@@ -367,6 +367,23 @@ func (p *parser) feed(data []byte) []Event {
 			out = append(out, Event{Ready: parts[0] != "busy", Running: parts[0] == "busy", Status: status, Cwd: parts[1]})
 		}
 		p.pending = bytes.Clone(p.pending[end+1:])
+	}
+	return out
+}
+
+// hostTerminalFree drops variables inherited from the terminal FarshMac was
+// launched from (e.g. `go run` in Terminal.app). Left in place, macOS
+// /etc/bashrc_Apple_Terminal and /etc/zshrc_Apple_Terminal treat the embedded
+// shell as a Terminal.app session: per-session history replaces HISTFILE and
+// session files are written under ~/.bash_sessions.
+func hostTerminalFree(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == "TERM_PROGRAM" || name == "TERM_PROGRAM_VERSION" || name == "TERM_SESSION_ID" {
+			continue
+		}
+		out = append(out, kv)
 	}
 	return out
 }
