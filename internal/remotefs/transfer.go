@@ -592,7 +592,7 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 	if endpoint.Remote != nil {
 		name = endpoint.Remote.Label()
 	}
-	err := o.Attempt("connect", name, "", func() error {
+	err := o.AttemptRequired("connect", name, "", func() error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

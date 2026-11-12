@@ -48,7 +48,7 @@ func (a *App) operationQuestions(o *fsops.Operation) {
 		if o.Check() != nil {
 			return fsops.ErrorCancel
 		}
-		if skipErrors {
+		if skipErrors && !f.Fatal {
 			return fsops.ErrorSkip
 		}
 		message := "Cannot " + f.Operation + "\n" + f.Source
@@ -56,6 +56,13 @@ func (a *App) operationQuestions(o *fsops.Operation) {
 			message += "\nTo: " + f.Destination
 		}
 		message += "\n\n" + f.Err.Error()
+		if f.Fatal {
+			// Nothing can be skipped when the operation itself cannot start.
+			if a.operationChoice(o, "Error", message, []string{"Retry", "Cancel"}) == 0 {
+				return fsops.ErrorRetry
+			}
+			return fsops.ErrorCancel
+		}
 		choice := a.operationChoice(o, "Error", message, []string{"Retry", "Skip", "Skip all", "Cancel"})
 		switch choice {
 		case 0:

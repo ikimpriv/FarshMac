@@ -82,12 +82,12 @@ func (a *App) transferDialog(move bool) {
 				o.Streaming() // Same-volume rename must not enumerate the tree first.
 			}
 			var destination remotefs.FS
-			err := o.Attempt("open destination", dst, "", func() error { var e error; destination, e = targetEndpoint.Open(o.Context()); return e })
+			err := o.AttemptRequired("open destination", dst, "", func() error { var e error; destination, e = targetEndpoint.Open(o.Context()); return e })
 			if err != nil {
 				return err
 			}
 			var info os.FileInfo
-			err = o.Attempt("read destination", dst, "", func() error {
+			err = o.AttemptRequired("read destination", dst, "", func() error {
 				var e error
 				info, e = destination.Lstat(dst)
 				if os.IsNotExist(e) {
