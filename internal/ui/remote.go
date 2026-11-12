@@ -218,6 +218,7 @@ func (a *App) remoteDelete() {
 			if err != nil {
 				return err
 			}
+			f = remotefs.NewSession(remotefs.Endpoint{Remote: &config}, o.Context(), o, f)
 			defer f.Close()
 			for _, p := range paths {
 				if err = remotefs.RemoveTree(f, p, o); err != nil {
@@ -261,6 +262,7 @@ func (a *App) remoteMoveDialog() {
 			if err != nil {
 				return err
 			}
+			f = remotefs.NewSession(remotefs.Endpoint{Remote: &config}, o.Context(), o, f)
 			defer f.Close()
 			info, err := f.Lstat(dst)
 			if err != nil && !os.IsNotExist(err) {

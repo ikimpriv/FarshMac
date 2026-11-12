@@ -106,7 +106,12 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 				if source.Remote == nil && target.Remote == nil {
 					err = fsops.Transfer(task.Source, task.Destination, false, options.Conflict, child)
 				} else {
-					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error { return copyFile(s, d, source, target, task, options, child) }))
+					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error {
+						e := copyFile(s, d, source, target, task, options, child)
+						Observe(s, e) // Retry dials again after a lost connection.
+						Observe(d, e)
+						return e
+					}))
 				}
 				o.Worker(-1)
 				child.Cancel()
@@ -598,5 +603,8 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 		}
 		return e
 	})
-	return f, err
+	if err != nil {
+		return nil, err
+	}
+	return NewSession(endpoint, ctx, o, f), nil
 }
