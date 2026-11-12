@@ -152,8 +152,21 @@ func (a *App) transferDialog(move bool) {
 	a.Form.Primary = "Copy"
 	a.Form.Selected = a.Settings.SelectDialogInput
 }
+
+const archiveRemoteStatus = "Archives are extracted and created on local panels. Use F5 to transfer the result afterwards"
+
+// archiveRemoteTarget refuses archive output into a remote opposite panel; its
+// filesystemPath is the hidden local folder from before connecting.
+func (a *App) archiveRemoteTarget() bool {
+	if a.Panels[1-a.Active].Remote == nil {
+		return false
+	}
+	a.Status = archiveRemoteStatus
+	return true
+}
+
 func (a *App) archiveCreate() {
-	if a.remoteUnsupported() || a.Panels[1-a.Active].Remote != nil {
+	if a.remoteUnsupported() || a.archiveRemoteTarget() {
 		return
 	}
 	if a.archiveReadOnly() {
@@ -172,7 +185,7 @@ func (a *App) archiveCreate() {
 	})
 }
 func (a *App) archiveExtract() {
-	if a.remoteUnsupported() || a.Panels[1-a.Active].Remote != nil {
+	if a.remoteUnsupported() || a.archiveRemoteTarget() {
 		return
 	}
 	p := &a.Panels[a.Active]
@@ -187,6 +200,9 @@ func (a *App) archiveExtractPath(src string) {
 		return
 	}
 	base := a.Panels[1-a.Active].filesystemPath()
+	if a.Panels[1-a.Active].Remote != nil {
+		base = a.Panels[a.Active].filesystemPath() // Never the remote panel's hidden local folder.
+	}
 	dst := filepath.Join(base, fsops.ArchiveStem(filepath.Base(src)))
 	a.prompt("Extract archive", "New destination folder", dst, func(s string) {
 		a.workProgress("Extracting archive", func(o *fsops.Operation) error {
