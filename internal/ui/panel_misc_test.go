@@ -2,9 +2,11 @@ package ui
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,6 +162,77 @@ func TestSortMenuShowsState(t *testing.T) {
 	}
 	if !a.Panels[0].MixDirectories {
 		t.Fatal("Mix directories item must toggle MixDirectories")
+	}
+}
+
+func panelFooter(a *App, index int) string {
+	g := a.Draw()
+	x, w := a.panelRect(index)
+	line := []rune(gridLine(g, a.Rows-5))
+	return strings.TrimSpace(string(line[x+1 : x+w-1]))
+}
+
+func TestFolderSizeVisibleInBriefFooter(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dir", "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dir", "sub", "f"), []byte("12345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Panels[0].View = "Brief"
+	selectEntry(t, &a.Panels[0], "dir")
+	a.key(Message{Key: "F3"})
+	waitWork(t, a)
+	if !strings.HasSuffix(a.Status, " · dir: 5 bytes (1 files, 2 dirs)") {
+		t.Fatalf("status %q", a.Status)
+	}
+	if footer := panelFooter(a, 0); footer != "5 bytes in dir" {
+		t.Fatalf("footer %q", footer)
+	}
+	selectEntry(t, &a.Panels[0], "..")
+	if footer := panelFooter(a, 0); strings.Contains(footer, " in dir") {
+		t.Fatalf("footer for an unmeasured entry %q", footer)
+	}
+}
+
+func TestTreePanelFolderSizeInFooter(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "a", "b"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a", "b", "f"), []byte("123"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.setView(0, "Tree panel")
+	p := &a.Panels[0]
+	waitTree(t, p)
+	selectEntry(t, p, filepath.Join("a", "b"))
+	a.key(Message{Key: "F3"})
+	waitWork(t, a)
+	if footer := panelFooter(a, 0); footer != "3 bytes in a/b" {
+		t.Fatalf("footer %q (status %q)", footer, a.Status)
+	}
+}
+
+func TestFolderSizeCountsPrivacyDenials(t *testing.T) {
+	walk := func(root string, o *fsops.Operation, visit fs.WalkDirFunc) error {
+		visit(root, nil, &fs.PathError{Op: "open", Path: root, Err: syscall.EPERM})
+		return visit(root+"/x", nil, &fs.PathError{Op: "open", Path: root + "/x", Err: syscall.EACCES})
+	}
+	r, err := measureFolder("/x", fsops.NewOperation("test"), walk)
+	if err != nil || r.Unreadable != 2 || r.privacyDenied != 1 {
+		t.Fatal(r, err)
 	}
 }
 

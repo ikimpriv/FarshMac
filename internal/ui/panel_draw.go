@@ -272,6 +272,11 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	if p.Err != "" {
 		status = p.Err
 	}
+	// The tree keeps its scan summary in Err; a real error or a running
+	// read still takes precedence over the calculated folder size.
+	if size, ok := p.folderSizeFooter(a.Settings.HumanReadableSizes); ok && p.load == nil && p.tree == nil && (p.Err == "" || p.View == "Tree panel") {
+		status = size
+	}
 	g.Text(x+2, divider+1, status, LightCyan, Blue, w-4)
 }
 func panelSize(n int64, human bool) string {
