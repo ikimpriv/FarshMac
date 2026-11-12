@@ -3,6 +3,7 @@ package fsops
 import (
 	"archive/tar"
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,6 +50,11 @@ func (a *ArchiveIndex) Relative(path string) (string, bool) {
 	rel, err := filepath.Rel(a.Path, filepath.Clean(path))
 	return rel, err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
+
+// ErrEncryptedArchive: archives are never opened with a password prompt.
+var ErrEncryptedArchive = errors.New("encrypted archives are not supported")
+
+const zipEncrypted = 0x1 // General-purpose flag bit 0.
 
 func ReadArchiveIndex(src string, o *Operation) (*ArchiveIndex, error) {
 	src, err := filepath.Abs(src)
@@ -130,6 +136,9 @@ func ReadArchiveIndex(src string, o *Operation) (*ArchiveIndex, error) {
 			return nil, fmt.Errorf("archive exceeds %d entries", archiveEntryLimit)
 		}
 		for _, f := range z.File {
+			if f.Flags&zipEncrypted != 0 {
+				return nil, fmt.Errorf("%w: %s", ErrEncryptedArchive, src)
+			}
 			if err = add(ArchiveMember{Path: f.Name, Bytes: f.FileInfo().Size(), FileMode: f.Mode(), Modified: f.Modified}, true); err != nil {
 				return nil, err
 			}
