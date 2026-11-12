@@ -42,7 +42,7 @@ func (p *Panel) loadArchiveDirectory(path string) error {
 		if p.IgnoreDSStore && m.Name() == ".DS_Store" || p.HideHidden && strings.HasPrefix(m.Name(), ".") {
 			continue
 		}
-		if !m.IsDir() && !matchesMask(m.Name(), p.Filter, p.MaskGroups) {
+		if !m.IsDir() && !matchesMask(m.Name(), p.activeFilter(), p.MaskGroups) {
 			continue
 		}
 		files = append(files, Entry{Name: m.Name(), Info: m, Dir: m.IsDir()})

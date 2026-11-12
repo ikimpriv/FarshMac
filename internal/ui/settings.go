@@ -131,6 +131,7 @@ func (a *App) configurePanel(i int) {
 	p.SortGroups = a.Settings.SortGroups
 	p.MaskGroups = a.Settings.MaskGroups
 	p.DescriptionFile = a.Settings.DescriptionFile
+	a.warnInvalidFilter(i)
 }
 func (a *App) saveSetup() {
 	a.normalizeSettings()
@@ -372,14 +373,29 @@ func (a *App) settingsMenu(kind string) {
 					a.error(err)
 					return
 				}
-				delete(a.Settings.MaskGroups, old)
-				if v != "" {
-					a.Settings.MaskGroups[k] = v
+				apply := func() {
+					delete(a.Settings.MaskGroups, old)
+					if v != "" {
+						a.Settings.MaskGroups[k] = v
+					}
+					for i := range a.Panels {
+						a.configurePanel(i)
+					}
+					a.refresh()
 				}
-				for i := range a.Panels {
-					a.configurePanel(i)
+				// Deleting or renaming a referenced group would silently
+				// invalidate filters, sort groups or associations.
+				if old != "" && (v == "" || k != old) {
+					if use := a.maskGroupUse(old); use != "" {
+						a.confirm("Mask group", "Group "+old+" is used by "+use+". Delete anyway?", []string{"Delete", "Cancel"}, func(i int) {
+							if i == 0 {
+								apply()
+							}
+						})
+						return
+					}
 				}
-				a.refresh()
+				apply()
 			})
 		})
 	default:

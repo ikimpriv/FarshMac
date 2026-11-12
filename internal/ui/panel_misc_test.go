@@ -236,6 +236,81 @@ func TestFolderSizeCountsPrivacyDenials(t *testing.T) {
 	}
 }
 
+func TestInvalidPanelFilterShowsAllAndWarns(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.go", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	p := &a.Panels[0]
+	p.Filter = "<src>"
+	a.configurePanel(0)
+	a.error(p.Load(root))
+	if len(p.Entries) != 3 {
+		t.Fatal("invalid filter must show all files", p.Entries)
+	}
+	if a.Status != invalidFilterStatus {
+		t.Fatalf("status %q", a.Status)
+	}
+	if footer := panelFooter(a, 0); footer != "[<src>] invalid filter — showing all" {
+		t.Fatalf("footer %q", footer)
+	}
+	a.Settings.MaskGroups["src"] = "*.go"
+	a.configurePanel(0)
+	a.error(p.Load(root))
+	if len(p.Entries) != 2 || !strings.HasPrefix(panelFooter(a, 0), "[<src>] ") {
+		t.Fatal("valid filter not applied", p.Entries, panelFooter(a, 0))
+	}
+}
+
+func TestDeleteMaskGroupInUseAsksConfirmation(t *testing.T) {
+	a, err := New(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Settings.MaskGroups = map[string]string{"src": "*.go"}
+	a.Panels[1].Filter = "<src>"
+	a.configurePanel(1)
+	edit := func(name, masks string) {
+		a.settingsMenu("Groups of file masks")
+		f := a.Form
+		a.Form = nil
+		f.Select(1)
+		f = a.Form
+		f.Fields[0].Value, f.Fields[1].Value = name, masks
+		a.Form = nil
+		f.Submit(f.Fields)
+	}
+	edit("src", "")
+	if a.Form == nil || a.Form.Message != "Group src is used by a panel filter. Delete anyway?" {
+		t.Fatal("no confirmation", a.Form)
+	}
+	a.Form.Select(1) // Cancel
+	if a.Settings.MaskGroups["src"] != "*.go" {
+		t.Fatal("cancel deleted the group")
+	}
+	edit("renamed", "*.go")
+	if a.Form == nil {
+		t.Fatal("rename of a used group must confirm")
+	}
+	a.Form.Select(0) // Delete
+	if _, ok := a.Settings.MaskGroups["src"]; ok || a.Settings.MaskGroups["renamed"] != "*.go" {
+		t.Fatal("confirmed rename not applied", a.Settings.MaskGroups)
+	}
+	a.Panels[1].Filter = ""
+	edit("renamed", "")
+	if a.Form != nil || len(a.Settings.MaskGroups) != 0 {
+		t.Fatal("unused group must be deleted without confirmation", a.Settings.MaskGroups)
+	}
+}
+
 func settleJobs(a *App) {
 	for i := 0; i < 20; i++ {
 		a.Poll()

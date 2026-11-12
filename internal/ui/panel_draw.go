@@ -266,9 +266,7 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	if marked > 0 {
 		status = fmt.Sprintf("%d selected · %s", marked, status)
 	}
-	if p.Filter != "" {
-		status = "[" + p.Filter + "] " + status
-	}
+	status = p.filterFooter(status)
 	if p.Err != "" {
 		status = p.Err
 	}

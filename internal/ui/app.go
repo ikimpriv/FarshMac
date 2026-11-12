@@ -138,7 +138,7 @@ func (p *Panel) Load(path string) error {
 				isDir = target.IsDir()
 			}
 		}
-		if !isDir && !matchesMask(e.Name(), p.Filter, p.MaskGroups) {
+		if !isDir && !matchesMask(e.Name(), p.activeFilter(), p.MaskGroups) {
 			return nil
 		}
 		files = append(files, Entry{e.Name(), info, isDir})

@@ -44,7 +44,7 @@ func (p *Panel) loadRemote(path string) error {
 		if p.IgnoreDSStore && name == ".DS_Store" || p.HideHidden && strings.HasPrefix(name, ".") {
 			continue
 		}
-		if !info.IsDir() && !matchesMask(name, p.Filter, p.MaskGroups) {
+		if !info.IsDir() && !matchesMask(name, p.activeFilter(), p.MaskGroups) {
 			continue
 		}
 		files = append(files, Entry{Name: name, Info: info, Dir: info.IsDir()})
