@@ -18,6 +18,10 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  // Document bookmarks read the digit from the physical key: Shift turns Key into a symbol.
  docListeners.keydown(event({key:'#',code:'Digit3',metaKey:true,shiftKey:true}));
  assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,'#');assert.equal(sent.at(-1).Code,'Digit3');assert.equal(sent.at(-1).Shift,true);
+ // Cmd+Option+digit saves a bookmark: Option turns Key into a symbol, Code keeps the digit.
+ const optionDigit=event({key:'£',code:'Digit3',metaKey:true,altKey:true});
+ docListeners.keydown(optionDigit);assert.equal(optionDigit.prevented,true);
+ assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Code,'Digit3');assert.equal(sent.at(-1).Meta,true);assert.equal(sent.at(-1).Alt,true);
  panels.events.pointerdown(event({button:2,buttons:2}));assert.equal(sent.at(-1).Button,2);
  panels.events.pointermove(event({button:2,buttons:2,clientY:90}));panels.events.pointermove(event({button:2,buttons:2,clientY:100}));
  assert.equal(sent.filter(m=>m.Type==='drag').length,0);flushTimers();assert.equal(sent.filter(m=>m.Type==='drag').length,1);

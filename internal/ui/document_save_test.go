@@ -524,12 +524,18 @@ func TestPagedViewerReportsReadError(t *testing.T) {
 	}
 }
 
-func TestBookmarkSavedWithShiftedKeySymbol(t *testing.T) {
+func TestBookmarkSavedWithOptionKeySymbol(t *testing.T) {
 	a := textApp(t, "one\ntwo\nthree\n", false)
 	a.Doc.Offset = 2
+	// macOS reserves Cmd+Shift+3/4/5 for screenshots: Cmd+Shift no longer saves.
 	a.key(Message{Key: "#", Code: "Digit3", Meta: true, Shift: true})
+	if _, ok := a.Doc.Bookmarks[3]; ok {
+		t.Fatal("Cmd+Shift+3 saved a bookmark")
+	}
+	// Option turns the key into a symbol ("£" on US); the code names the digit.
+	a.key(Message{Key: "£", Code: "Digit3", Meta: true, Alt: true})
 	if _, ok := a.Doc.Bookmarks[3]; !ok || a.Status != "Bookmark 3 saved" {
-		t.Fatal("shifted bookmark", a.Status)
+		t.Fatal("Cmd+Option bookmark", a.Status)
 	}
 	a.Doc.Offset = 0
 	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
@@ -538,7 +544,12 @@ func TestBookmarkSavedWithShiftedKeySymbol(t *testing.T) {
 	}
 	a.key(Message{Key: "№", Code: "Digit5", Ctrl: true, Shift: true})
 	if _, ok := a.Doc.Bookmarks[5]; !ok {
-		t.Fatal("non-Latin shifted bookmark")
+		t.Fatal("Ctrl+Shift alias")
+	}
+	a.Doc.Offset = 1
+	a.key(Message{Key: "5", Code: "Digit5", Ctrl: true})
+	if a.Doc.Offset != 2 {
+		t.Fatal("Ctrl restore", a.Doc.Offset)
 	}
 }
 

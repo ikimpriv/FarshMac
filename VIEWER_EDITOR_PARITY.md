@@ -21,8 +21,9 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
 - Primary shortcuts use ⌘: C/X/V for the system clipboard, F for search, H for
   replace, G for goto, S for save and R for reload. Ctrl works as ⌘ in the
   viewer/editor, which matters for external keyboards.
-- macOS reserves ⌘⇧3/4/5 for screenshots, so bookmarks 3–5 are set with
-  Ctrl+Shift+3/4/5. Bookmark digits use the physical key on every layout.
+- Bookmarks are set with ⌘⌥0…9 (Far's Ctrl+Shift+digit, which also works) and
+  restored with ⌘0…9 or Ctrl+0…9. ⌘⇧digit is not used because macOS takes
+  ⌘⇧3/4/5 for screenshots. Bookmark digits use the physical key on every layout.
 - F9 opens document settings in a document and the main menu in panels.
 
 ## Implemented features
@@ -40,7 +41,7 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
 | Encodings | Shift+F8: UTF-8, UTF-16LE/BE, Windows-1251/1252, CP866, ISO-8859-1, KOI8-R. F8 toggles CP866/1251 (from any other code page the first press selects CP866, as Far's DOS/Win). On paged large files F8 changes only the code page; a viewer holding unsaved edits reports "Save edited text before reinterpreting bytes". |
 | Encoding on save | Viewer reinterprets original bytes; editor selects output encoding. Unrepresentable characters prevent saving. F9 selects BOM and LF/CRLF/CR. |
 | Viewer ↔ editor | F6 preserves text, position, and dirty state. Encoding failure does not display stale content. |
-| Bookmarks | ⌘Shift+0…9 sets; ⌘0…9 jumps; scoped to the open document. |
+| Bookmarks | ⌘⌥0…9 (or Ctrl+Shift+0…9) sets; ⌘0…9 jumps; scoped to the open document. |
 | Viewer position undo | ⌘Z restores the position before search, goto, or a bookmark jump. |
 | Adjacent files | `+` / `-` in the viewer only (in the editor they are ordinary input); always opens the internal viewer. Unsaved changes require a decision before switching. |
 | Alternate / internal | Alt+F3 / Alt+F4 open the alternate viewer/editor (external if internal is the default, and vice versa); ⌘⇧F3 / ⌘⇧F4 force the internal one. Both are also in the Files menu. |

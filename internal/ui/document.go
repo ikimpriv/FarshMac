@@ -859,20 +859,25 @@ func (a *App) documentKey(m Message) {
 	}
 	if command {
 		digit := key
-		// With Shift the key is the shifted symbol ("#", "№"); the
+		// With Shift or Option the key is a symbol ("#", "№", "¡", "™"); the
 		// physical key code names the digit on every layout.
 		if len(m.Code) == 6 && strings.HasPrefix(m.Code, "Digit") {
 			digit = m.Code[5:]
 		} else if len(m.Code) == 7 && strings.HasPrefix(m.Code, "Numpad") {
 			digit = m.Code[6:]
 		}
-		if n, err := strconv.Atoi(digit); err == nil && !m.Alt && len(digit) == 1 && n >= 0 && n < 10 {
-			if m.Shift {
+		if n, err := strconv.Atoi(digit); err == nil && len(digit) == 1 && n >= 0 && n < 10 {
+			// Cmd+Option+digit saves (macOS takes Cmd+Shift+3/4/5 for
+			// screenshots); Ctrl+Shift+digit is an alias. Cmd/Ctrl+digit restores.
+			switch {
+			case m.Meta && m.Alt && !m.Ctrl, m.Ctrl && m.Shift && !m.Meta && !m.Alt:
 				d.Bookmarks[n] = d.pos()
 				a.Status = fmt.Sprintf("Bookmark %d saved", n)
-			} else if p, ok := d.Bookmarks[n]; ok {
-				d.remember()
-				d.restore(p)
+			case !m.Shift && !m.Alt:
+				if p, ok := d.Bookmarks[n]; ok {
+					d.remember()
+					d.restore(p)
+				}
 			}
 			return
 		}
@@ -1117,8 +1122,8 @@ Alt+F8 / Cmd+G  Go to line:column, byte offset, or percentage
 Shift+F8    Codepage chooser     F8 CP866 / Windows-1251 (first press: CP866)
 F9          Encoding, line endings, BOM, read-only; Syntax, Auto indent,
             Tab width and Expand tabs change app settings, not the document
-Cmd+Shift+0..9 Save bookmark     Cmd+0..9 Restore bookmark
-            Cmd+Shift+3/4/5 are taken by macOS screenshots; use Ctrl+Shift+3/4/5
+Cmd+Option+0..9 Save bookmark    Cmd+0..9 Restore bookmark
+            (Ctrl+Shift+0..9 also saves, Ctrl+0..9 also restores)
 Cmd+L       Toggle read-only    Cmd+U Clear selection
 Cmd+B       Toggle key bar      Cmd+Shift+B Toggle status
 Cmd+O       Terminal / document

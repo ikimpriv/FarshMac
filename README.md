@@ -116,7 +116,7 @@ In the viewer and editor:
 | F12 | Switch open document screens |
 | Cmd+R | Reload from disk (asks if there are unsaved changes) |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
-| Cmd+0…9 / Cmd+Shift+0…9 | Go to / set a bookmark; use Ctrl+Shift+3/4/5 because macOS takes Cmd+Shift+3/4/5 for screenshots |
+| Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark (Ctrl+0…9 / Ctrl+Shift+0…9 also work) |
 | Ctrl+Insert / Shift+Delete | Copy / cut |
 
 The editor saves atomically and keeps extended attributes, ACLs and hidden/nodump flags; if some cannot be kept it reports "Saved; some attributes were not preserved". A failed save offers Retry / Save as… / Cancel; a file changed or deleted on disk asks before overwriting or recreating it; in an unwritable folder **Save in place** rewrites the file non-atomically and keeps hard links. Opening a file that probably cannot be saved asks View / Edit anyway / Cancel. Saving through a symbolic link writes the link target.
