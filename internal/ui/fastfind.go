@@ -5,12 +5,18 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type FastFind struct{ Query string }
 
+// fastMatch keeps * and ? as wildcards, but [ and \ are literal so names such
+// as "[Unreleased].md" can be found. Both sides are NFC-normalized: macOS and
+// other programs may store "é" decomposed (NFD).
 func fastMatch(name, query string) bool {
-	ok, _ := filepath.Match(strings.ToLower(query)+"*", strings.ToLower(filepath.Base(name)))
+	query = strings.NewReplacer(`\`, `\\`, `[`, `\[`).Replace(norm.NFC.String(strings.ToLower(query)))
+	ok, _ := filepath.Match(query+"*", norm.NFC.String(strings.ToLower(filepath.Base(name))))
 	return ok
 }
 func (a *App) findPrefix(query string, step int) bool {
