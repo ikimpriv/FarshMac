@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"farshmac/internal/remotefs"
 	"fmt"
 	"io"
@@ -50,6 +51,14 @@ type Document struct {
 	MatchStart, MatchEnd            int64
 	ViewStart                       int
 	Help                            bool
+
+	SaveStrategy     fsops.SaveStrategy // Predicted when editing starts; a hint, never a ban.
+	saveChecked      bool               // SaveStrategy/saveBlocked are current for this document.
+	saveBlocked      string             // Why saving is expected to fail, if it is.
+	inplaceConfirmed string             // Path the user agreed to rewrite non-atomically.
+	infoLost         bool               // Saved, but the result could not be examined.
+	notice           string             // Status to show when the document appears.
+	readError        bool               // A paged read failed; reported once.
 }
 type docPosition struct {
 	Cursor, Offset, Column int
@@ -94,7 +103,16 @@ func (d *Document) dataAt(at int64, n int) []byte {
 	}
 	if d.File != nil {
 		b := make([]byte, n)
-		read, _ := d.File.ReadAt(b, at)
+		read, err := d.File.ReadAt(b, at)
+		if errors.Is(err, io.EOF) && at+int64(read) < d.Size {
+			// The file shrank: page within what is really there.
+			if info, e := d.File.Stat(); e == nil {
+				d.Size = info.Size()
+			}
+		} else if err != nil && !errors.Is(err, io.EOF) && !d.readError {
+			d.readError = true
+			d.notice = "read error: " + errorReason(err)
+		}
 		return b[:read]
 	}
 	if at >= int64(len(d.Raw)) {
@@ -158,76 +176,93 @@ func (a *App) openDocument(path string, edit bool) {
 		a.openDocumentAsync(path, edit, nil)
 		return
 	}
+	d, err := a.loadDocument(path, edit)
+	if err != nil {
+		a.openFailed(path, edit, err)
+		return
+	}
+	a.recordView(d.Path, edit)
+	a.presentDocument(d, a.showDocument)
+}
+func (a *App) recordView(path string, edit bool) {
+	a.viewHistory = append(a.viewHistory, viewRecord{path, edit})
+	if limit := a.Settings.HistoryLimit; limit > 0 && len(a.viewHistory) > limit {
+		a.viewHistory = a.viewHistory[len(a.viewHistory)-limit:]
+	}
+}
+
+// loadDocument reads a local file without touching the window, so it can run
+// on a worker. Expected refusals are openRefusal; anything else is a failure
+// worth a dialog. For the editor it also predicts whether saving can work.
+func (a *App) loadDocument(path string, edit bool) (*Document, error) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		a.error(err)
-		return
+		return nil, err
 	}
 	f, err := os.Open(resolved)
 	if err != nil {
-		a.error(err)
-		return
+		return nil, err
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		a.error(err)
-		return
+		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		f.Close()
-		a.Status = "Choose a regular file"
-		return
+		return nil, openRefusal("Choose a regular file")
 	}
 	d := newDocument(resolved, "")
 	d.Info = info
 	d.Size = info.Size()
 	d.Edit = edit
 	d.Wrap = a.Settings.ViewerWrap
-	a.viewHistory = append(a.viewHistory, viewRecord{resolved, edit})
-	if len(a.viewHistory) > a.Settings.HistoryLimit {
-		a.viewHistory = a.viewHistory[len(a.viewHistory)-a.Settings.HistoryLimit:]
+	if edit {
+		d.checkSaveAccess()
 	}
 	if info.Size() > maxTextBytes {
 		if edit {
 			f.Close()
-			a.Status = "Editor limit is 64 MiB. Large files open in paged hex/dump viewer."
-			return
+			return nil, openRefusal("Editor limit is 64 MiB. Large files open in paged hex/dump viewer.")
 		}
 		d.File = f
 		d.Mode = "hex"
 		d.markSaved()
-		a.showDocument(d)
-		return
+		return d, nil
 	}
 	raw, err := io.ReadAll(a.Operation.Reader(io.LimitReader(f, maxTextBytes+1)))
 	f.Close()
 	if err != nil {
-		a.error(err)
-		return
+		return nil, err
 	}
 	if len(raw) > maxTextBytes {
-		a.Status = "File grew while opening; reopen it"
-		return
+		return nil, openRefusal("File grew while opening; reopen it")
 	}
 	d.Raw = raw
 	d.Codepage = textfile.Detect(raw)
-	decoded, bom, err := textfile.Decode(raw, d.Codepage)
-	if err != nil {
-		a.error(err)
-		return
+	decoded, bom, decodeErr := textfile.Decode(raw, d.Codepage)
+	if decodeErr != nil {
+		if edit {
+			return nil, openRefusal(decodeErr.Error() + "; open with F3")
+		}
+		// Truncated UTF-16 and similar damage must stay inspectable: every
+		// byte is representable in ISO-8859-1, and hex shows the real bytes.
+		d.Codepage = "ISO-8859-1"
+		if decoded, bom, err = textfile.Decode(raw, d.Codepage); err != nil {
+			return nil, decodeErr
+		}
+		d.Mode = "hex"
+		d.notice = decodeErr.Error() + "; shown as hex"
 	}
 	binary := strings.ContainsRune(decoded, 0)
 	if edit {
 		roundTrip, e := textfile.Encode(decoded, d.Codepage, bom)
 		if e != nil || !bytes.Equal(roundTrip, raw) {
-			a.Status = "Encoding is not lossless; inspect in viewer and choose a codepage before editing"
-			return
+			return nil, openRefusal("Encoding is not lossless; inspect in viewer and choose a codepage before editing")
 		}
 	}
 	if edit && binary {
-		a.Status = "Binary data: open with F3 in hex/dump mode"
-		return
+		return nil, openRefusal("Binary data: open with F3 in hex/dump mode")
 	}
 	d.BOM = bom
 	d.EOL = textfile.DetectEOL(decoded)
@@ -237,53 +272,89 @@ func (a *App) openDocument(path string, edit bool) {
 	}
 	d.markSaved()
 	d.Lines()
-	a.showDocument(d)
+	return d, nil
 }
 func (a *App) save() {
 	if a.Doc != nil && a.Doc.Edit {
 		a.saveDocumentThen(a.Doc, a.Doc.Path, false, nil)
 	}
 }
+
+// statSavedFile is replaced by tests to simulate a file that vanishes right
+// after a successful save.
+var statSavedFile = os.Stat
+
 func (a *App) saveDocument(d *Document, path string, overwrite bool) error {
+	if d.ArchiveSource && path == d.Path {
+		return saveRefusal("Copy the file out with F5 before editing")
+	}
 	if d.ReadOnly {
-		return fmt.Errorf("editor is read-only")
+		return saveRefusal("Read-only mode (⌘L to unlock)")
 	}
 	data, err := textfile.Encode(textfile.Endings(d.Text, d.EOL), d.Codepage, d.BOM)
 	if err != nil {
-		return err
+		return saveRefusal(err.Error())
 	}
 	if d.Info != nil && d.Text == d.SavedText && d.Codepage == d.SavedCP && d.EOL == d.SavedEOL && d.BOM == d.SavedBOM {
 		data = d.SavedRaw
 	}
-	if path == d.Path && d.Info != nil {
-		err = fsops.Save(path, data, d.Info, a.Operation)
-	} else if overwrite {
+	var result fsops.SaveResult
+	switch {
+	case path == d.Path && (d.Info != nil || d.infoLost):
+		original := d.Info
+		if d.infoLost {
+			// The last save succeeded but its result could not be examined;
+			// whatever is on disk now is that save.
+			if original, err = os.Lstat(path); err != nil {
+				return err
+			}
+		}
+		result, err = a.saveExisting(d, path, data, original)
+	case overwrite:
 		info, e := os.Lstat(path)
 		if e != nil {
 			return e
 		}
-		err = fsops.Save(path, data, info, a.Operation)
-	} else {
+		result, err = a.saveExisting(d, path, data, info)
+	default:
 		err = fsops.Create(path, data, 0644, a.Operation)
 	}
 	if err != nil {
-		a.Status = err.Error()
 		return err
 	}
+	// The data is on disk: never report this save as failed. Without a
+	// fresh stat the next save re-reads the file instead of recreating it.
+	info, statErr := statSavedFile(path)
 	d.Path = path
-	d.Info, err = os.Stat(path)
-	if err != nil {
-		return err
+	d.Info, d.infoLost = info, statErr != nil
+	if statErr != nil {
+		d.Info = nil
 	}
 	d.Raw = data
 	d.Size = int64(len(data))
 	d.markSaved()
-	a.Status = "Saved"
+	switch {
+	case result.MetadataLost != nil:
+		a.Status = "Saved; some attributes were not preserved"
+	case result.InPlace:
+		a.Status = "Saved (in place)"
+	default:
+		a.Status = "Saved"
+	}
 	a.dirty = true
 	return nil
 }
+func (a *App) saveExisting(d *Document, path string, data []byte, original os.FileInfo) (fsops.SaveResult, error) {
+	result, err := fsops.SaveWith(path, data, original, fsops.SaveOptions{}, a.Operation)
+	if errors.Is(err, fsops.ErrInPlaceRequired) && d.inplaceConfirmed == path {
+		result, err = fsops.SaveWith(path, data, original, fsops.SaveOptions{InPlace: true}, a.Operation)
+	}
+	return result, err
+}
 func (a *App) saveAs() {
-	d := a.Doc
+	a.saveAsThen(a.Doc, nil)
+}
+func (a *App) saveAsThen(d *Document, done func()) {
 	initial, base := d.Path, a.Panels[a.Active].filesystemPath()
 	if d.Remote != nil {
 		initial = filepath.Join(base, filepath.Base(d.RemotePath))
@@ -291,18 +362,56 @@ func (a *App) saveAs() {
 	a.prompt("Save as", "Local file name", initial, func(s string) {
 		path := expand(s, base)
 		if path == d.Path {
-			a.saveDocumentThen(d, path, false, nil)
+			a.saveDocumentThen(d, path, false, done)
 			return
 		}
-		if _, err := os.Lstat(path); err == nil {
-			a.confirm("Overwrite", filepath.Base(path)+" already exists. Replace it?", []string{"Overwrite", "Cancel"}, func(i int) {
+		info, err := os.Lstat(path)
+		if err != nil {
+			a.saveDocumentThen(d, path, false, done)
+			return
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				a.Status = path + " is a broken symbolic link"
+				return
+			}
+			if target == d.Path {
+				a.saveDocumentThen(d, target, false, done)
+				return
+			}
+			if info, err = os.Stat(target); err != nil {
+				a.error(err)
+				return
+			}
+			if info.IsDir() {
+				a.Status = path + " is a directory"
+				return
+			}
+			if !info.Mode().IsRegular() {
+				a.Status = path + " is not a regular file"
+				return
+			}
+			a.confirm("Overwrite", filepath.Base(path)+" is a link to "+target+". Replace the target file?", []string{"Overwrite", "Cancel"}, func(i int) {
 				if i == 0 {
-					a.saveDocumentThen(d, path, true, nil)
+					a.saveDocumentThen(d, target, true, done)
 				}
 			})
-		} else {
-			a.saveDocumentThen(d, path, false, nil)
+			return
 		}
+		if info.IsDir() {
+			a.Status = path + " is a directory"
+			return
+		}
+		if !info.Mode().IsRegular() {
+			a.Status = path + " is not a regular file"
+			return
+		}
+		a.confirm("Overwrite", filepath.Base(path)+" already exists. Replace it?", []string{"Overwrite", "Cancel"}, func(i int) {
+			if i == 0 {
+				a.saveDocumentThen(d, path, true, done)
+			}
+		})
 	})
 }
 func (a *App) newFile() {
@@ -324,9 +433,10 @@ func (a *App) newFile() {
 			d.Edit = true
 			d.Codepage = a.Settings.DefaultCodepage
 			d.markSaved()
-			a.showDocument(d)
+			d.checkSaveAccess()
+			a.presentDocument(d, a.showDocument)
 		} else {
-			a.error(err)
+			a.openFailed(path, true, err)
 		}
 	})
 }
@@ -458,6 +568,10 @@ func (a *App) searchDocument(replace bool) {
 		a.Status = "Search in paged files larger than 64 MiB is not implemented yet"
 		return
 	}
+	if replace && d.ReadOnly {
+		a.Status = "Read-only mode (⌘L to unlock)"
+		return
+	}
 	fields := []Field{{Label: "Search", Value: d.Search.Query}, {Label: "Case sensitive", Toggle: true, Checked: d.Search.Case}, {Label: "Whole words", Toggle: true, Checked: d.Search.Whole}, {Label: "Regex (Go/RE2)", Toggle: true, Checked: d.Search.Regex}, {Label: "Backwards", Toggle: true}, {Label: "Hex bytes", Toggle: true, Checked: d.Mode == "hex" && !d.Edit}}
 	if replace {
 		fields = append(fields, Field{Label: "Replace with"}, Field{Label: "Replace all", Toggle: true})
@@ -468,6 +582,12 @@ func (a *App) searchDocument(replace bool) {
 		if f[5].Checked {
 			if replace {
 				a.Status = "Hex replacement is not available in text editor"
+				return
+			}
+			if d.Edit {
+				// d.Raw holds the bytes last loaded or saved, not the text
+				// being edited, so a byte search here would be wrong.
+				a.Status = "Hex search is available in the viewer (F6)"
 				return
 			}
 			b, err := hex.DecodeString(strings.Join(strings.Fields(f[0].Value), ""))
@@ -528,6 +648,11 @@ func (a *App) findDocument(backward bool) bool {
 		return false
 	}
 	d := a.Doc
+	if d.Edit && len(d.HexQuery) > 0 {
+		d.HexQuery = nil
+		a.Status = "Hex search is available in the viewer (F6)"
+		return false
+	}
 	d.remember()
 	if len(d.HexQuery) > 0 {
 		at := int(min(d.ByteOffset, int64(len(d.Raw))))
@@ -586,7 +711,26 @@ func (a *App) documentKey(m Message) {
 		return
 	}
 	a.Doc.ManualScroll = false
-	if a.Async && (m.Key == "F6" || m.Key == "F8" && !m.Alt && !m.Shift) {
+	if d := a.Doc; m.Key == "F6" && !d.Edit && !d.Help && d.File == nil && !d.saveChecked {
+		// Switching to the editor is when saving starts to matter.
+		d.checkSaveAccess()
+		if d.SaveStrategy == fsops.SaveNone && d.saveBlocked != "" {
+			a.saveWarning(d, "Read-only", func(i int) {
+				switch i {
+				case 0:
+					d.ReadOnly = true
+					a.documentKey(m)
+				case 1:
+					d.notice = "Saving may fail: " + d.saveBlocked
+					a.documentKey(m)
+				default:
+					d.saveChecked = false
+				}
+			})
+			return
+		}
+	}
+	if a.Async && (m.Key == "F6" || m.Key == "F8" && !m.Alt && !m.Shift && (a.Doc.Edit || !a.Doc.Dirty && a.Doc.File == nil)) {
 		a.transformDocument("Converting document", func(worker *App) { worker.documentKey(m) })
 		return
 	}
@@ -658,6 +802,9 @@ func (a *App) documentKey(m Message) {
 		if !d.Edit {
 			d.Offset = d.Pos(d.Cursor).Row
 			d.ViewStart = d.Cursor
+		} else if d.notice != "" {
+			a.Status = d.notice
+			d.notice = ""
 		}
 		return
 	}
@@ -686,7 +833,12 @@ func (a *App) documentKey(m Message) {
 				}
 				d.Codepage = cp
 				d.modified()
-			} else if d.File == nil && !d.Dirty {
+			} else if d.Dirty {
+				a.Status = "Save edited text before reinterpreting bytes"
+			} else if d.File != nil {
+				d.Codepage = cp
+				a.Status = "Code page: " + cp
+			} else {
 				s, bom, err := textfile.Decode(d.Raw, cp)
 				if err == nil {
 					d.Buffer = textfile.New(s)
@@ -706,7 +858,15 @@ func (a *App) documentKey(m Message) {
 		return
 	}
 	if command {
-		if n, err := strconv.Atoi(key); err == nil && n >= 0 && n < 10 {
+		digit := key
+		// With Shift the key is the shifted symbol ("#", "№"); the
+		// physical key code names the digit on every layout.
+		if len(m.Code) == 6 && strings.HasPrefix(m.Code, "Digit") {
+			digit = m.Code[5:]
+		} else if len(m.Code) == 7 && strings.HasPrefix(m.Code, "Numpad") {
+			digit = m.Code[6:]
+		}
+		if n, err := strconv.Atoi(digit); err == nil && !m.Alt && len(digit) == 1 && n >= 0 && n < 10 {
 			if m.Shift {
 				d.Bookmarks[n] = d.pos()
 				a.Status = fmt.Sprintf("Bookmark %d saved", n)
@@ -766,6 +926,12 @@ func (a *App) documentKey(m Message) {
 			return
 		case "l":
 			d.ReadOnly = !d.ReadOnly
+			return
+		case "r":
+			a.reloadDocument()
+			return
+		case "insert":
+			a.copyDocument(false)
 			return
 		case "b":
 			if m.Shift {

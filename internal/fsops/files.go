@@ -209,39 +209,81 @@ func createCopyTemp(dir string, mode os.FileMode) (*os.File, error) {
 // Save atomically replaces an existing regular file if its identity and timestamp
 // still match the version opened by the editor. Symlinks are resolved by caller.
 func Save(path string, content []byte, original os.FileInfo, ops ...*Operation) error {
-	o := operation(ops)
+	_, err := SaveWith(path, content, original, SaveOptions{}, operation(ops))
+	return err
+}
+
+// SaveWith saves like Save. Without InPlace a folder that refuses the
+// temporary file yields ErrInPlaceRequired when the file itself is writable,
+// so the caller can ask before rewriting it non-atomically.
+func SaveWith(path string, content []byte, original os.FileInfo, options SaveOptions, o *Operation) (SaveResult, error) {
 	if err := o.Check(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	current, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return SaveResult{}, err
 	}
-	if !current.Mode().IsRegular() || !os.SameFile(current, original) || current.Size() != original.Size() || !current.ModTime().Equal(original.ModTime()) {
-		return fmt.Errorf("file changed on disk; reopen it before saving")
+	if !current.Mode().IsRegular() {
+		return SaveResult{}, fmt.Errorf("%s is not a regular file", path)
+	}
+	if original == nil || !os.SameFile(current, original) || current.Size() != original.Size() || !current.ModTime().Equal(original.ModTime()) {
+		return SaveResult{}, ErrChangedOnDisk
+	}
+	if options.InPlace {
+		return SaveResult{InPlace: true}, saveInPlace(path, content, o)
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".farshmac-save-*")
 	if err != nil {
-		return err
+		if denied(err) && syscall.Access(path, accessWrite) == nil && immutableFlags(current) == 0 {
+			return SaveResult{}, fmt.Errorf("%w: %w", ErrInPlaceRequired, err)
+		}
+		return SaveResult{}, err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
 	if _, err = copyProgress(f, bytes.NewReader(content), o); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = f.Chmod(current.Mode().Perm()); err != nil {
-		return err
+		return SaveResult{}, err
 	}
+	// Tags, comments, ACLs and user flags belong to the document, not to the
+	// inode that happens to hold it. Losing them is reported, never fatal.
+	metadataErr := copySaveMetadata(path, f)
 	if err = f.Sync(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = f.Close(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = o.Check(); err != nil {
+		return SaveResult{}, err
+	}
+	if err = os.Rename(f.Name(), path); err != nil {
+		return SaveResult{}, err
+	}
+	return SaveResult{MetadataLost: metadataErr}, nil
+}
+
+// saveInPlace rewrites the existing inode. It is not atomic: a failed write
+// leaves the file truncated, which the error states explicitly.
+func saveInPlace(path string, content []byte, o *Operation) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	_, err = copyProgress(f, bytes.NewReader(content), o)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("%w (file may be truncated; retry or save elsewhere)", err)
+	}
+	return nil
 }
 
 // Create publishes a completed file without replacing an existing path.

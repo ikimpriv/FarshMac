@@ -10,6 +10,9 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  }
  docListeners.keydown(event({key:'ç',code:'KeyC',altKey:true}));
  assert.equal(sent.at(-1).Key,'ç');assert.equal(sent.at(-1).Code,'KeyC');assert.equal(sent.at(-1).Alt,true);
+ // Document bookmarks read the digit from the physical key: Shift turns Key into a symbol.
+ docListeners.keydown(event({key:'#',code:'Digit3',metaKey:true,shiftKey:true}));
+ assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,'#');assert.equal(sent.at(-1).Code,'Digit3');assert.equal(sent.at(-1).Shift,true);
  panels.events.pointerdown(event({button:2,buttons:2}));assert.equal(sent.at(-1).Button,2);
  panels.events.pointermove(event({button:2,buttons:2,clientY:90}));panels.events.pointermove(event({button:2,buttons:2,clientY:100}));
  assert.equal(sent.filter(m=>m.Type==='drag').length,0);flushTimers();assert.equal(sent.filter(m=>m.Type==='drag').length,1);

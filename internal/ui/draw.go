@@ -71,7 +71,9 @@ func (a *App) Draw() *Grid {
 	if a.Settings.ColorTheme == "Dark" || a.Settings.ColorTheme == "Light" {
 		palette := map[uint32]uint32{Blue: 0x151b24, LightCyan: 0xc7d7e9, Cyan: 0x486987}
 		if a.Settings.ColorTheme == "Light" {
-			palette = map[uint32]uint32{Blue: 0xf1f3f5, LightCyan: 0x182b49, White: 0x000000, Yellow: 0x885000, Cyan: 0x80b8dd}
+			palette = map[uint32]uint32{Blue: 0xf1f3f5, LightCyan: 0x182b49, White: 0x000000, Yellow: 0x885000, Cyan: 0x80b8dd,
+				// Syntax and marker colors chosen for dark backgrounds.
+				0x55ff55: 0x1d6f1d, 0xaaaaaa: 0x6a6a6a, 0xff88ff: 0x8a2a8a, 0xff8888: 0xa02020}
 		}
 		for i := range g.Cells {
 			c := &g.Cells[i]

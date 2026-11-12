@@ -20,11 +20,13 @@ func (a *App) openDocumentAsync(path string, edit bool, opened func(*Document)) 
 	settings := a.Settings
 	a.backgroundTask("Opening file", func(o *fsops.Operation) (func(), func(), error) {
 		worker := &App{Settings: settings, Operation: o}
-		worker.openDocument(path, edit)
-		if worker.Doc == nil {
-			return nil, nil, fmt.Errorf("%s", worker.Status)
+		d, err := worker.loadDocument(path, edit)
+		if err != nil {
+			if isCancelled(err) {
+				return nil, nil, err
+			}
+			return func() { a.openFailed(path, edit, err) }, nil, nil
 		}
-		d := worker.Doc
 		d.ScreenID = 0 // Allocate the screen ID in the owning window, not the worker.
 		retained := false
 		cleanup := func() {
@@ -34,27 +36,24 @@ func (a *App) openDocumentAsync(path string, edit bool, opened func(*Document)) 
 		}
 		return func() {
 			retained = true
-			a.viewHistory = append(a.viewHistory, viewRecord{d.Path, edit})
-			if len(a.viewHistory) > settings.HistoryLimit {
-				a.viewHistory = a.viewHistory[len(a.viewHistory)-settings.HistoryLimit:]
-			}
+			a.recordView(d.Path, edit)
+			show := a.showDocument
 			if opened != nil {
-				opened(d)
-			} else {
-				a.showDocument(d)
+				show = opened
 			}
+			a.presentDocument(d, show)
 		}, cleanup, nil
 	})
 }
 
 func (a *App) saveDocumentThen(d *Document, path string, overwrite bool, done func()) {
 	if d.Remote != nil && path == d.Path {
-		a.saveRemoteDocument(d, done)
+		a.saveRemoteDocument(d, done, false)
 		return
 	}
 	if !a.Async {
 		if err := a.saveDocument(d, path, overwrite); err != nil {
-			a.error(err)
+			a.saveFailed(d, path, overwrite, done, err)
 		} else {
 			if d.Remote != nil {
 				d.Remote = nil
@@ -76,9 +75,13 @@ func (a *App) saveDocumentThen(d *Document, path string, overwrite bool, done fu
 	a.backgroundTask("Saving file", func(o *fsops.Operation) (func(), func(), error) {
 		worker := &App{Operation: o}
 		err := worker.saveDocument(copy, path, overwrite)
+		if err != nil && !isCancelled(err) {
+			return func() { a.saveFailed(d, path, overwrite, done, err) }, nil, nil
+		}
+		status := worker.Status
 		return func() {
 			*d = *copy
-			a.Status = "Saved"
+			a.Status = status
 			if done != nil && o.Check() == nil {
 				done()
 			}
