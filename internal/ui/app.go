@@ -248,6 +248,7 @@ type Message struct {
 type Update struct {
 	ShellReady         bool                   `json:"shellReady"`
 	Commands           *[]string              `json:"commands,omitempty"`
+	CommandsError      string                 `json:"commandsError,omitempty"`
 	Zoom               bool                   `json:"zoom,omitempty"`
 	Preview            *ImagePreview          `json:"preview,omitempty"`
 	History            terminal.HistoryStatus `json:"history"`
@@ -271,6 +272,7 @@ type Update struct {
 	Quit               bool                   `json:"quit,omitempty"`
 }
 type App struct {
+	shellState
 	shellCommands         *[]string
 	infoJobs              [2]*infoJob
 	infoKeys              [2]string
@@ -363,6 +365,9 @@ func (a *App) startTerminalAt(cwd string) error {
 		return err
 	}
 	a.Term = t
+	a.shellStartedAt = time.Now()
+	a.shellStopped = ""
+	a.integrationSentAt = time.Time{}
 	a.shellRestartAt = time.Time{}
 	a.shellRestartCwd = ""
 	a.shellStarted = false
@@ -511,11 +516,18 @@ func (a *App) Handle(raw string) {
 		a.Status = "Terminal renderer: " + m.Text
 		return
 	case "commandHistory":
-		if a.Term != nil && a.ShellReady {
+		// Always answer, so the overlay never waits for a reply that cannot come.
+		if a.Term == nil {
+			a.shellCommands = &[]string{}
+			a.commandsError = "Cannot read shell history: shell unavailable"
+		} else if a.ShellReady {
 			if err := a.Term.RequestCommands(a.ShellCwd); err != nil {
 				a.error(err)
+				a.shellCommands = &[]string{}
+				a.commandsError = "Cannot read shell history: " + err.Error()
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", true)
 			}
 		}
 		return
@@ -525,6 +537,7 @@ func (a *App) Handle(raw string) {
 				a.error(err)
 			} else {
 				a.ShellReady = false
+				a.integrationSent("", false)
 			}
 		}
 		return
@@ -559,6 +572,9 @@ func (a *App) Handle(raw string) {
 	case "quit":
 		a.RequestQuit()
 	case "input":
+		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
+			a.retryShell()
+		}
 		if a.Term != nil {
 			// Reserve the shell as soon as a command line is submitted, before
 			// its preexec marker can arrive from the PTY reader.
@@ -944,9 +960,10 @@ func (a *App) key(m Message) {
 		a.Command = ""
 		a.Status = ""
 	case "Enter":
-		if a.Command != "" {
+		if strings.TrimSpace(a.Command) != "" {
 			a.execute()
 		} else {
+			a.Command = ""
 			a.enterFile()
 		}
 	default:
@@ -1040,7 +1057,11 @@ func (a *App) function(n int) {
 }
 func (a *App) execute() {
 	if a.Term == nil {
-		a.Status = "Shell unavailable"
+		if a.retryShell() || !a.shellRestartAt.IsZero() {
+			a.Status = "Shell unavailable; retrying…"
+		} else {
+			a.Status = "Shell unavailable"
+		}
 		return
 	}
 	if !a.ShellReady {
@@ -1059,12 +1080,14 @@ func (a *App) execute() {
 	a.Command = ""
 	a.TermVisible = true
 	a.ShellReady = false
+	a.integrationSent(command, false)
 }
 
 // A directory request waits for the prompt; never send integration keys to a
 // running program (ssh, editors, or commands consuming stdin).
 func (a *App) showTerminal() {
 	a.TermVisible = true
+	a.retryShell()
 	if r := a.shellPanelReturn; r != nil {
 		a.shellPanelReturn = nil
 		if r.index == a.Active && a.Panels[r.index].Path == r.path {
@@ -1090,6 +1113,7 @@ func (a *App) syncShellCwd() {
 		return
 	}
 	a.ShellReady = false
+	a.integrationSent("", false)
 }
 
 type shellPanelReturn struct {
@@ -1210,11 +1234,15 @@ jobsDone:
 				a.pending = append(a.pending, e.Data...)
 				if e.Running {
 					a.ShellReady = false
+					a.integrationSentAt = time.Time{}
 					a.dirty = true
 				}
 				if e.Ready {
+					a.integrationSentAt = time.Time{}
+					a.shellFailures = 0
 					if e.Commands != nil {
 						a.shellCommands = &e.Commands
+						a.commandsError = ""
 					}
 					a.ShellReady = true
 					a.shellStarted = true
@@ -1233,11 +1261,16 @@ jobsDone:
 		}
 	}
 termDone:
+	a.checkIntegrationWatchdog()
 	a.restartShellIfDue()
 	a.syncShellCwd()
 	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil, Clipboard: a.Clipboard}
 	u.ShellReady = a.ShellReady
 	u.Commands = a.shellCommands
+	if u.Commands != nil {
+		u.CommandsError = a.commandsError
+		a.commandsError = ""
+	}
 	a.shellCommands = nil
 	u.Title = a.Panels[a.Active].Path
 	u.DiskAccessSettings = a.DiskAccessSettings
@@ -1252,7 +1285,9 @@ termDone:
 	a.Clipboard = nil
 	if a.TermVisible {
 		u.Mode = "terminal"
-		if !a.shellRestartAt.IsZero() {
+		if a.Term == nil && a.shellStopped != "" {
+			u.Footer = "⌘O  Panels    ·    Shell stopped: " + a.shellStopped + "    ·    Enter: retry"
+		} else if !a.shellRestartAt.IsZero() {
 			u.Footer = "⌘O  Panels    ·    " + a.Status
 		} else if a.ShellReady {
 			u.Footer = "⌘O  Panels    ·    Shell ready    ·    " + a.ShellCwd

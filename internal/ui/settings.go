@@ -205,6 +205,9 @@ func (a *App) settingsMenu(kind string) {
 				a.Status = "History entries must be 1–10000"
 				return
 			}
+			if shell != a.Settings.Shell || f[4].Checked != a.Settings.ShellCustomPrompt {
+				a.shellFailures = 0 // New configuration: restart backoff starts over.
+			}
 			a.Settings.Shell = shell
 			a.Settings.HistoryLimit = n
 			a.Settings.CompleteFiles = f[2].Checked

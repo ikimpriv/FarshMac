@@ -184,9 +184,7 @@ func (g *WindowGroup) EnableSession(path string, restore bool) error {
 		}
 		a.Active = max(0, min(1, w.Active))
 		if g.StartShell && a.Term == nil {
-			if err := a.StartTerminal(); err != nil {
-				a.Status = "Shell: " + err.Error()
-			}
+			a.StartTerminalOrRetry()
 		}
 		a.dirty = true
 		if w.Frame.Valid() {

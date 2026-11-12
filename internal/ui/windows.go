@@ -61,9 +61,7 @@ func (g *WindowGroup) NewWindow(parent int) (int, error) {
 		a.LoadSetup()
 	}
 	if g.StartShell && a.Term == nil {
-		if err := a.StartTerminal(); err != nil {
-			a.Status = "Shell: " + err.Error()
-		}
+		a.StartTerminalOrRetry()
 	}
 	g.next++
 	g.Apps[g.next] = a

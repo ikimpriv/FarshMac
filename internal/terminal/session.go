@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,6 +77,7 @@ func StartConfigured(cwd string, cols, rows int, shell string, customPrompt bool
 fi
 function _farshmac_precmd() {
   local farshmac_status=${1:-$?}
+  _farshmac_bindkeys
   printf '\033]777;` + token + `;%s;%s\007' "$farshmac_status" "$PWD"
 }
 precmd_functions+=(_farshmac_precmd)
@@ -126,12 +128,16 @@ function _farshmac_panel_command() {
   zle .accept-line
 }
 zle -N _farshmac_panel_command
-for farshmac_keymap in main emacs viins vicmd; do
-  bindkey -M "$farshmac_keymap" ` + Quote(commandKey) + ` _farshmac_panel_command
-  bindkey -M "$farshmac_keymap" ` + Quote(historyKey) + ` _farshmac_panel_command
-  bindkey -M "$farshmac_keymap" ` + Quote(directoryKey) + ` _farshmac_panel_command
-done
-unset farshmac_keymap
+# Plugins may recreate keymaps after startup; precmd rebinds idempotently.
+function _farshmac_bindkeys() {
+  local farshmac_keymap
+  for farshmac_keymap in main emacs viins vicmd; do
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(commandKey) + ` _farshmac_panel_command
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(historyKey) + ` _farshmac_panel_command
+    builtin bindkey -M "$farshmac_keymap" ` + Quote(directoryKey) + ` _farshmac_panel_command
+  done
+}
+_farshmac_bindkeys
 unsetopt PROMPT_SP
 export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"
 `
@@ -254,12 +260,43 @@ func (s *Session) ChangeDir(cwd string) error {
 	return s.request(cwd, "", "cd", s.directoryKey)
 }
 
+func requestError(cwd, command string) error {
+	switch {
+	case len(command) > 1024*1024:
+		return fmt.Errorf("command exceeds 1 MiB")
+	case len(cwd) > 1024*1024:
+		return fmt.Errorf("directory path exceeds 1 MiB")
+	case len(cwd)+len(command) > 1024*1024:
+		return fmt.Errorf("command and directory exceed 1 MiB")
+	case !filepath.IsAbs(cwd):
+		return fmt.Errorf("directory must be absolute")
+	case strings.ContainsRune(cwd, 0):
+		return fmt.Errorf("directory contains NUL")
+	case strings.ContainsRune(command, 0):
+		return fmt.Errorf("command contains NUL")
+	}
+	return nil
+}
+
+// CancelRequest discards a panel request the shell never consumed, e.g. when
+// a plugin removed the integration key binding.
+// It reports whether an unconsumed request was removed.
+func (s *Session) CancelRequest() bool {
+	return os.Remove(filepath.Join(s.dir, "panel-command")) == nil
+}
+
 func (s *Session) request(cwd, command, mode, key string) error {
-	if !filepath.IsAbs(cwd) || strings.ContainsRune(cwd, 0) || strings.ContainsRune(command, 0) || len(cwd)+len(command) > 1024*1024 {
-		return fmt.Errorf("invalid panel command or directory")
+	if err := requestError(cwd, command); err != nil {
+		return err
 	}
 	request := filepath.Join(s.dir, "panel-command")
 	f, err := os.OpenFile(request, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		// The shell consumes the file only at a prompt, so a leftover file
+		// always belongs to a lost integration key. Replace it once.
+		_ = os.Remove(request)
+		f, err = os.OpenFile(request, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	}
 	if err != nil {
 		return err
 	}

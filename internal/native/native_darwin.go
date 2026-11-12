@@ -137,9 +137,7 @@ func Run(a *ui.App, restoreSession ...bool) error {
 		a.Status = e.Error()
 	}
 	if a.Term == nil {
-		if e := a.StartTerminal(); e != nil {
-			a.Status = "Shell: " + e.Error()
-		}
+		a.StartTerminalOrRetry()
 	}
 	defer func() { windows.CloseAll(); windows = nil }()
 	path := C.CString(filepath.Join(dir, "assets", "index.html"))
