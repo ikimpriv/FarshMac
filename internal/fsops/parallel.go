@@ -14,6 +14,7 @@ func (o *Operation) Fork(ctx context.Context) *Operation {
 		child.CopyMetadata = &options
 	}
 	child.MetadataFailure = o.MetadataFailure
+	child.MetadataLimitation = o.MetadataLimitation
 	child.Failure = o.Failure
 	child.BeforeDelete = o.BeforeDelete
 	child.Collision = o.Collision

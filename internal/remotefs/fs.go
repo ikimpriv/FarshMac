@@ -82,6 +82,8 @@ func (c Config) Label() string {
 type FS interface {
 	ReadDir(string) ([]os.FileInfo, error)
 	Lstat(string) (os.FileInfo, error)
+	// Stat follows a final symbolic link.
+	Stat(string) (os.FileInfo, error)
 	Open(string) (io.ReadCloser, error)
 	Create(string) (io.WriteCloser, error)
 	Mkdir(string) error
@@ -98,6 +100,18 @@ type FS interface {
 // link to a folder can be told apart from a link to a file.
 type Stater interface {
 	Stat(string) (os.FileInfo, error)
+}
+
+// FollowDir lets a symbolic link to a directory act as that directory, as in
+// Far Manager. Links to files and broken links keep their Lstat information.
+func FollowDir(f FS, p string, info os.FileInfo) os.FileInfo {
+	if info == nil || info.Mode()&os.ModeSymlink == 0 {
+		return info
+	}
+	if target, err := f.Stat(p); err == nil && target.IsDir() {
+		return target
+	}
+	return info
 }
 
 func (c Config) Dial(ctx context.Context) (FS, error) {

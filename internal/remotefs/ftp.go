@@ -150,16 +150,17 @@ func (f *ftpFS) Lstat(p string) (os.FileInfo, error) {
 	return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
 }
 
-// Stat follows symbolic links as far as FTP allows: a path the server lets
-// us change into is a folder; anything else is described by Lstat.
+// Stat follows symbolic links as far as FTP allows: listings do not reveal
+// link targets, so a link is a folder only if the server lets us change into it.
 func (f *ftpFS) Stat(p string) (os.FileInfo, error) {
-	if err := SafePath(p); err != nil {
-		return nil, err
+	info, err := f.Lstat(p)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return info, err
 	}
-	if err := f.client.ChangeDir(p); err == nil {
-		return ftpInfo{&ftp.Entry{Name: path.Base(p), Type: ftp.EntryTypeFolder}}, nil
+	if err = f.client.ChangeDir(p); err != nil {
+		return info, nil
 	}
-	return f.Lstat(p)
+	return ftpInfo{&ftp.Entry{Name: path.Base(p), Type: ftp.EntryTypeFolder, Time: info.ModTime()}}, nil
 }
 func (f *ftpFS) Open(p string) (io.ReadCloser, error) {
 	if err := SafePath(p); err != nil {
@@ -211,10 +212,22 @@ func (f *ftpFS) Rename(a, b string) error {
 	if err := SafePath(a + b); err != nil {
 		return err
 	}
-	return f.client.Rename(a, b)
+	err := f.client.Rename(a, b)
+	if FTPStatus(err) == 550 {
+		if _, statErr := f.Lstat(b); statErr == nil && exists(f, a) {
+			return replaceError(b, "RNTO refused", err)
+		}
+	}
+	return err
 }
+
+// ErrNoPermissions is FTP's known inability to set permissions.
+var ErrNoPermissions = errors.New("FTP does not provide portable permission preservation")
+
+func exists(f FS, p string) bool { _, err := f.Lstat(p); return err == nil }
+
 func (f *ftpFS) Chmod(string, os.FileMode) error {
-	return errors.New("FTP does not provide portable permission preservation")
+	return ErrNoPermissions
 }
 func (f *ftpFS) Chtimes(p string, t time.Time) error {
 	if err := SafePath(p); err != nil {

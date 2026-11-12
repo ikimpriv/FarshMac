@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"farshmac/internal/fsops"
@@ -24,15 +25,12 @@ func (a *App) deleteSelected(permanent bool) {
 	if len(paths) == 0 {
 		return
 	}
-	names := make([]string, len(paths))
-	for i, path := range paths {
-		names[i] = filepath.Base(path)
-	}
+	subject := deleteSubject(paths)
 	title, action, progress := "Move to Trash", "Move to Trash", "Moving to Trash"
-	message := "Move " + strings.Join(names, ", ") + " to Trash?"
+	message := "Move " + subject + " to Trash?"
 	if permanent {
 		title, action, progress = "Delete permanently", "Delete", "Deleting permanently"
-		message = "Permanently delete " + strings.Join(names, ", ") + "?"
+		message = "Permanently delete " + subject + "?"
 	}
 	trash := a.trashItem
 	if trash == nil {
@@ -75,7 +73,9 @@ func (a *App) deleteSelected(permanent bool) {
 			return nil
 		})
 	}
-	if a.Settings.ConfirmDelete {
+	// "Confirm deletion" covers only Trash; irreversible deletion always asks,
+	// as remote deletion does.
+	if a.Settings.ConfirmDelete || permanent {
 		a.confirm(title, message, []string{action, "Cancel"}, func(i int) {
 			if i == 0 {
 				remove()
@@ -84,4 +84,21 @@ func (a *App) deleteSelected(permanent bool) {
 	} else {
 		remove()
 	}
+}
+
+// deleteSubject names one item, or counts several like Far ("3 items"),
+// so a large selection cannot stretch the confirmation over pages.
+func deleteSubject(paths []string) string {
+	if len(paths) == 1 {
+		return strings.NewReplacer("\r", "\\r", "\n", "\\n", "\t", "\\t").Replace(filepath.Base(paths[0]))
+	}
+	return groupDigits(len(paths)) + " items"
+}
+
+func groupDigits(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }

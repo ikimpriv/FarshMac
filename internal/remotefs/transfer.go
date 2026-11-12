@@ -71,13 +71,16 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		if err == nil {
 			return
 		}
+		// A worker stopped by our own cancel() must not turn the first real
+		// error into a user cancellation of the whole operation.
+		stopped := ctx.Err() != nil
 		errMu.Lock()
 		if first == nil {
 			first = err
 		}
 		errMu.Unlock()
 		cancel()
-		if errors.Is(err, fsops.ErrCancelled) {
+		if errors.Is(err, fsops.ErrCancelled) && !stopped {
 			o.Cancel()
 		}
 	}
@@ -106,7 +109,12 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 				if source.Remote == nil && target.Remote == nil {
 					err = fsops.Transfer(task.Source, task.Destination, false, options.Conflict, child)
 				} else {
-					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error { return copyFile(s, d, source, target, task, options, child) }))
+					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error {
+						e := copyFile(s, d, source, target, task, options, child)
+						Observe(s, e) // Retry dials again after a lost connection.
+						Observe(d, e)
+						return e
+					}))
 				}
 				o.Worker(-1)
 				child.Cancel()
@@ -165,7 +173,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 					e = dest.Mkdir(pair.Destination)
 				}
 				created = e == nil
-			} else if e == nil && !existing.IsDir() {
+			} else if e == nil && !FollowDir(dest, pair.Destination, existing).IsDir() {
 				return fmt.Errorf("destination is not a directory: %s", pair.Destination)
 			}
 			return e
@@ -223,6 +231,9 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			a, b := path.Clean(pair.Source), path.Clean(pair.Destination)
 			if a == b || strings.HasPrefix(b, a+"/") {
 				err = fmt.Errorf("destination is inside source")
+				if info, e := scan.Lstat(pair.Source); a == b && e == nil && !info.IsDir() {
+					err = fmt.Errorf("cannot copy a file onto itself: %s", a)
+				}
 				break
 			}
 		}
@@ -275,7 +286,7 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 	}
 	appendMode := false
 	if exists {
-		resolution := o.Resolve(fsops.Collision{Source: j.Source, Destination: j.Destination, SourceInfo: j.Info, DestinationInfo: before}, options.Conflict)
+		resolution := o.Resolve(linkCollision(d, fsops.Collision{Source: j.Source, Destination: j.Destination, SourceInfo: j.Info, DestinationInfo: before}), options.Conflict)
 		switch resolution.Action {
 		case fsops.Skip:
 			o.SkipItem(j.Source)
@@ -429,6 +440,15 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 	return nil
 }
 
+func linkCollision(f FS, c fsops.Collision) fsops.Collision {
+	if c.DestinationInfo != nil && c.DestinationInfo.Mode()&os.ModeSymlink != 0 {
+		c.DestinationLink, _ = f.Readlink(c.Destination)
+		_, err := f.Stat(c.Destination)
+		c.DestinationBroken = err != nil
+	}
+	return c
+}
+
 func applyPortableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {
 	for {
 		err := portableMetadata(d, src, dst, info, options, o)
@@ -440,34 +460,52 @@ func applyPortableMetadata(d FS, src, dst string, info os.FileInfo, options Copy
 		}
 	}
 }
+
+// MetadataNotice explains what remote transfers never carry over.
+const MetadataNotice = "Remote transfers keep only mode and modification time.\nOwner/group, ACL, xattrs, flags, creation time and link metadata are not transferred."
+
 func portableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {
+	if !options.Metadata.Permissions && !options.Metadata.Attributes {
+		return nil
+	}
+	// Known protocol limits are announced once per operation, not per file.
+	var limits []error
 	var problems []error
 	if info.Mode()&os.ModeSymlink != 0 {
 		// Chmod/Chtimes would follow the link and change its target.
-		if !options.Metadata.Permissions && !options.Metadata.Attributes {
-			return nil
+		limits = append(limits, fmt.Errorf("remote transfer cannot preserve symbolic-link metadata"))
+	} else {
+		if options.Metadata.Permissions {
+			mode := info.Mode().Perm()
+			if options.PermissionsMode != nil {
+				mode = *options.PermissionsMode
+			}
+			if err := d.Chmod(dst, mode); errors.Is(err, ErrNoPermissions) {
+				limits = append(limits, err)
+			} else if err != nil {
+				problems = append(problems, err)
+			}
+			limits = append(limits, fmt.Errorf("remote transfer cannot preserve owner/group and ACL"))
 		}
-		err := fmt.Errorf("remote transfer cannot preserve symbolic-link metadata")
-		if o.MetadataFailure != nil {
-			return o.MetadataFailure(src, dst, err)
+		if options.Metadata.Attributes {
+			if err := d.Chtimes(dst, info.ModTime()); err != nil {
+				problems = append(problems, err)
+			}
+			limits = append(limits, fmt.Errorf("remote transfer cannot preserve xattrs, flags and creation time"))
 		}
-		return err
 	}
-	if options.Metadata.Permissions {
-		mode := info.Mode().Perm()
-		if options.PermissionsMode != nil {
-			mode = *options.PermissionsMode
+	if o.MetadataLimitation != nil {
+		notice := MetadataNotice
+		for _, limit := range limits {
+			if errors.Is(limit, ErrNoPermissions) {
+				notice += "\nFTP cannot set permissions."
+			}
 		}
-		if err := d.Chmod(dst, mode); err != nil {
-			problems = append(problems, err)
+		if err := o.MetadataLimitation(notice); err != nil {
+			return err
 		}
-		problems = append(problems, fmt.Errorf("remote transfer cannot preserve owner/group and ACL"))
-	}
-	if options.Metadata.Attributes {
-		if err := d.Chtimes(dst, info.ModTime()); err != nil {
-			problems = append(problems, err)
-		}
-		problems = append(problems, fmt.Errorf("remote transfer cannot preserve xattrs, flags and creation time"))
+	} else {
+		problems = append(problems, limits...)
 	}
 	if err := errors.Join(problems...); err != nil {
 		if o.MetadataFailure != nil {
@@ -528,6 +566,8 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 	if err != nil {
 		return err
 	}
+	o.Add(p, regularSize(info))
+	o.Begin(p, regularSize(info))
 	if o.BeforeDelete != nil {
 		switch o.BeforeDelete(p, info) {
 		case fsops.Skip:
@@ -541,6 +581,11 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 		entries, err := f.ReadDir(p)
 		if err != nil {
 			return err
+		}
+		for _, entry := range entries {
+			if ValidName(entry.Name()) {
+				o.Add(path.Join(p, entry.Name()), regularSize(entry)) // Count the folder's items at once.
+			}
 		}
 		skipped := false
 		for _, entry := range entries {
@@ -567,9 +612,17 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 	}
 	err = f.Remove(p, info.IsDir())
 	if err == nil {
+		o.Advance(regularSize(info))
 		o.Complete(p)
 	}
 	return err
+}
+
+func regularSize(info os.FileInfo) int64 {
+	if info.Mode().IsRegular() {
+		return info.Size()
+	}
+	return 0
 }
 
 func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Operation) (FS, error) {
@@ -578,7 +631,7 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 	if endpoint.Remote != nil {
 		name = endpoint.Remote.Label()
 	}
-	err := o.Attempt("connect", name, "", func() error {
+	err := o.AttemptRequired("connect", name, "", func() error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -589,5 +642,8 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 		}
 		return e
 	})
-	return f, err
+	if err != nil {
+		return nil, err
+	}
+	return NewSession(endpoint, ctx, o, f), nil
 }
