@@ -136,6 +136,7 @@ func (g *WindowGroup) Handle(id int, raw string) {
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return
 	}
+	m = latinShortcut(m)
 	if m.Type == "quit" || (m.Type == "key" && m.Meta && (m.Key == "q" || m.Key == "Q")) {
 		g.BeginQuit()
 		return

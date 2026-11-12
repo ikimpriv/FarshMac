@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
@@ -641,7 +642,20 @@ func (a *App) Handle(raw string) {
 		}
 	}
 }
+
+// latinShortcut maps a Cmd/Ctrl letter typed in a non-Latin layout to the
+// Latin letter of its physical key. Latin layouts (Dvorak, Colemak) keep Key.
+func latinShortcut(m Message) Message {
+	if (m.Meta || m.Ctrl) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") && utf8.RuneCountInString(m.Key) == 1 && m.Key[0] >= utf8.RuneSelf {
+		m.Key = strings.ToLower(m.Code[3:])
+		if m.Shift {
+			m.Key = strings.ToUpper(m.Key)
+		}
+	}
+	return m
+}
 func (a *App) key(m Message) {
+	m = latinShortcut(m)
 	if m.Alt && !m.Meta && !m.Ctrl && (a.Form != nil || a.Dialog != nil || a.Busy) && len(m.Code) == 4 && strings.HasPrefix(m.Code, "Key") {
 		m.Key = strings.ToLower(m.Code[3:])
 	}
