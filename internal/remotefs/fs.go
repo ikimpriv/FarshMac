@@ -22,6 +22,8 @@ type Config struct {
 	Password                                 string `json:"-"`
 	KeyPassphrase                            string `json:"-"`
 	HostKey                                  []byte `json:"-"` // Explicitly trusted for this connection only.
+	CertFingerprint                          string `json:"-"` // FTPS certificate trusted for this connection only.
+	PlainFTPAccepted                         bool   `json:",omitempty"`
 }
 
 func Parse(address, user string) (Config, error) {
@@ -62,6 +64,9 @@ func Parse(address, user string) (Config, error) {
 	if strings.ContainsAny(c.Host+c.User+c.Directory, "\x00\r\n") {
 		return Config{}, fmt.Errorf("invalid control character in address")
 	}
+	if c.Host, err = hostToASCII(c.Host); err != nil {
+		return Config{}, err
+	}
 	return c, nil
 }
 
@@ -76,7 +81,11 @@ func (c Config) Label() string {
 	if c.User != "" {
 		u.User = url.User(c.User)
 	}
-	return u.String()
+	label := u.String()
+	if display := hostToUnicode(c.Host); display != c.Host {
+		label = strings.Replace(label, c.Address(), net.JoinHostPort(display, strconv.Itoa(c.Port)), 1)
+	}
+	return label
 }
 
 type FS interface {

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -121,11 +122,20 @@ func TestExplicitFTPSProtectsDataConnection(t *testing.T) {
 	c := Config{Protocol: "ftps", Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, User: "demo", Password: "secret"}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if f, err := c.Dial(ctx); err == nil {
+	f, err := c.Dial(ctx)
+	var unknown *UnknownCertificate
+	if err == nil {
 		f.Close()
 		t.Fatal("untrusted certificate accepted")
 	}
-	f, err := c.dialFTPWithTLS(ctx, &tls.Config{ServerName: c.Host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+	if !errors.As(err, &unknown) || unknown.Fingerprint != CertificateFingerprint(der) || !strings.Contains(unknown.Subject, "localhost") {
+		t.Fatal("untrusted certificate not described", err)
+	}
+	if err := verifyFTPSCertificate(c.Host, "", roots, new(*UnknownCertificate))(tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}); err != nil {
+		t.Fatal("trusted root rejected", err)
+	}
+	c.CertFingerprint = unknown.Fingerprint
+	f, err = c.Dial(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
