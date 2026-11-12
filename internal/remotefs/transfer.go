@@ -454,34 +454,52 @@ func applyPortableMetadata(d FS, src, dst string, info os.FileInfo, options Copy
 		}
 	}
 }
+
+// MetadataNotice explains what remote transfers never carry over.
+const MetadataNotice = "Remote transfers keep only mode and modification time.\nOwner/group, ACL, xattrs, flags, creation time and link metadata are not transferred."
+
 func portableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {
+	if !options.Metadata.Permissions && !options.Metadata.Attributes {
+		return nil
+	}
+	// Known protocol limits are announced once per operation, not per file.
+	var limits []error
 	var problems []error
 	if info.Mode()&os.ModeSymlink != 0 {
 		// Chmod/Chtimes would follow the link and change its target.
-		if !options.Metadata.Permissions && !options.Metadata.Attributes {
-			return nil
+		limits = append(limits, fmt.Errorf("remote transfer cannot preserve symbolic-link metadata"))
+	} else {
+		if options.Metadata.Permissions {
+			mode := info.Mode().Perm()
+			if options.PermissionsMode != nil {
+				mode = *options.PermissionsMode
+			}
+			if err := d.Chmod(dst, mode); errors.Is(err, ErrNoPermissions) {
+				limits = append(limits, err)
+			} else if err != nil {
+				problems = append(problems, err)
+			}
+			limits = append(limits, fmt.Errorf("remote transfer cannot preserve owner/group and ACL"))
 		}
-		err := fmt.Errorf("remote transfer cannot preserve symbolic-link metadata")
-		if o.MetadataFailure != nil {
-			return o.MetadataFailure(src, dst, err)
+		if options.Metadata.Attributes {
+			if err := d.Chtimes(dst, info.ModTime()); err != nil {
+				problems = append(problems, err)
+			}
+			limits = append(limits, fmt.Errorf("remote transfer cannot preserve xattrs, flags and creation time"))
 		}
-		return err
 	}
-	if options.Metadata.Permissions {
-		mode := info.Mode().Perm()
-		if options.PermissionsMode != nil {
-			mode = *options.PermissionsMode
+	if o.MetadataLimitation != nil {
+		notice := MetadataNotice
+		for _, limit := range limits {
+			if errors.Is(limit, ErrNoPermissions) {
+				notice += "\nFTP cannot set permissions."
+			}
 		}
-		if err := d.Chmod(dst, mode); err != nil {
-			problems = append(problems, err)
+		if err := o.MetadataLimitation(notice); err != nil {
+			return err
 		}
-		problems = append(problems, fmt.Errorf("remote transfer cannot preserve owner/group and ACL"))
-	}
-	if options.Metadata.Attributes {
-		if err := d.Chtimes(dst, info.ModTime()); err != nil {
-			problems = append(problems, err)
-		}
-		problems = append(problems, fmt.Errorf("remote transfer cannot preserve xattrs, flags and creation time"))
+	} else {
+		problems = append(problems, limits...)
 	}
 	if err := errors.Join(problems...); err != nil {
 		if o.MetadataFailure != nil {

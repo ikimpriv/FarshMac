@@ -34,17 +34,20 @@ type Operation struct {
 	// MetadataFailure is invoked by the worker before accepting a lossy move.
 	// Return nil to continue, or an error to retain the source and stop.
 	MetadataFailure func(src, dst string, err error) error
-	metadataCopier  func(src, dst string, o *Operation) error
-	moving          bool
-	hardlinks       map[fileIdentity]copiedLink
-	ctx             context.Context
-	stop            context.CancelFunc
-	pauseWake       chan struct{}
-	mu              sync.Mutex
-	state           Progress
-	sizes           map[string]int64
-	completed       map[string]bool
-	cancel          atomic.Bool
+	// MetadataLimitation reports a known protocol limitation (not a failure)
+	// once per operation. Return nil to continue, or an error to stop.
+	MetadataLimitation func(notice string) error
+	metadataCopier     func(src, dst string, o *Operation) error
+	moving             bool
+	hardlinks          map[fileIdentity]copiedLink
+	ctx                context.Context
+	stop               context.CancelFunc
+	pauseWake          chan struct{}
+	mu                 sync.Mutex
+	state              Progress
+	sizes              map[string]int64
+	completed          map[string]bool
+	cancel             atomic.Bool
 }
 
 // MetadataOptions are independent; nil retains the legacy copy policy.

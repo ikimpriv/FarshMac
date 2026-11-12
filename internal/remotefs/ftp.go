@@ -213,8 +213,12 @@ func (f *ftpFS) Rename(a, b string) error {
 	}
 	return f.client.Rename(a, b)
 }
+
+// ErrNoPermissions is FTP's known inability to set permissions.
+var ErrNoPermissions = errors.New("FTP does not provide portable permission preservation")
+
 func (f *ftpFS) Chmod(string, os.FileMode) error {
-	return errors.New("FTP does not provide portable permission preservation")
+	return ErrNoPermissions
 }
 func (f *ftpFS) Chtimes(p string, t time.Time) error {
 	if err := SafePath(p); err != nil {
