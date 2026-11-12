@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,6 @@ func TestDeleteShortcuts(t *testing.T) {
 	}{
 		{"F8", Message{Key: "F8"}, false},
 		{"Delete", Message{Key: "Delete"}, false},
-		{"Cmd8", Message{Key: "8", Meta: true}, false},
 		{"ShiftF8", Message{Key: "F8", Shift: true}, true},
 		{"ShiftDelete", Message{Key: "Delete", Shift: true}, true},
 	} {
@@ -66,7 +66,60 @@ func TestDeleteShortcuts(t *testing.T) {
 			} else if err != nil || string(b) != "preserve me" {
 				t.Fatal("Trash lost data", err)
 			}
+			// "Confirm deletion" off: Trash proceeds at once, permanent deletion still asks.
+			if err := os.WriteFile(path, []byte("again"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(filepath.Join(bin, "item"))
+			a.Settings.ConfirmDelete = false
+			a.refresh()
+			selectEntry(t, &a.Panels[0], "item")
+			a.key(tc.key)
+			if asked := a.Form != nil && a.Form.Title == "Delete permanently"; asked != tc.permanent {
+				t.Fatalf("ConfirmDelete=false: permanent=%v asked=%v", tc.permanent, asked)
+			}
+			if tc.permanent {
+				a.key(Message{Key: "Escape"})
+			}
+			waitWork(t, a)
+			_, err = os.Stat(path)
+			if tc.permanent != (err == nil) {
+				t.Fatal("unexpected deletion state", err)
+			}
 		})
+	}
+}
+
+func TestDeleteConfirmationSummarisesManyItems(t *testing.T) {
+	root := t.TempDir()
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	marked := map[string]bool{}
+	for i := 0; i < 1204; i++ {
+		name := fmt.Sprintf("f%04d", i)
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		marked[name] = true
+	}
+	if err := os.WriteFile(filepath.Join(root, "odd\rname"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.refresh()
+	a.Panels[0].Marked = marked
+	a.key(Message{Key: "F8", Shift: true})
+	if a.Form == nil || a.Form.Message != "Permanently delete 1,204 items?" {
+		t.Fatalf("message %+v", a.Form)
+	}
+	a.key(Message{Key: "Escape"})
+	a.Panels[0].Marked = map[string]bool{}
+	selectEntry(t, &a.Panels[0], "odd\rname")
+	a.key(Message{Key: "F8"})
+	if a.Form == nil || a.Form.Message != `Move odd\rname to Trash?` {
+		t.Fatalf("message %+v", a.Form)
 	}
 }
 

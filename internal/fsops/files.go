@@ -30,6 +30,7 @@ func Copy(src, dst string, ops ...*Operation) error {
 	if err != nil {
 		return err
 	}
+	o.ensureRoots(src)
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -55,7 +56,13 @@ func Copy(src, dst string, ops ...*Operation) error {
 }
 
 func copyEntry(src, dst string, o *Operation) (err error) {
-	var sourceInfo os.FileInfo
+	if o.symlinkMode() == SymlinksContents {
+		if info, e := os.Lstat(src); e == nil && info.Mode()&os.ModeSymlink != 0 {
+			// Retry/Skip apply to this link only; metadata comes from the target.
+			return o.Attempt("copy", src, dst, func() error { return o.copyLinkContents(src, dst) })
+		}
+	}
+	var release func(bool)
 	options, explicit := o.metadataOptions()
 	// All destinations here are newly created. On metadata rejection keep the
 	// source intact and discard only this operation's incomplete output.
@@ -63,9 +70,10 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 		if err == nil {
 			if err = o.preserveMetadata(src, dst); err != nil {
 				_ = os.RemoveAll(dst)
-			} else if sourceInfo != nil {
-				o.rememberHardlink(dst, sourceInfo)
 			}
+		}
+		if release != nil {
+			release(err == nil)
 		}
 	}()
 	if err = o.Check(); err != nil {
@@ -75,16 +83,19 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 	if err != nil {
 		return err
 	}
-	sourceInfo = info
-	if linked, e := o.copyHardlink(src, dst, info); e != nil || linked {
-		return e
+	if o.symlinkMode() == SymlinksContents {
+		o.Add(src, regularSize(info)) // Followed folders were not prescanned.
+	}
+	linked := false
+	if linked, release, err = o.copyHardlink(src, dst, info); err != nil || linked {
+		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(src)
 		if err != nil {
 			return err
 		}
-		err = os.Symlink(target, dst)
+		err = os.Symlink(o.copiedLinkText(src, dst, target), dst)
 		if err == nil {
 			o.Complete(src)
 		}
@@ -104,7 +115,7 @@ func copyEntry(src, dst string, o *Operation) (err error) {
 			}
 		}()
 		if err = ReadDirectory(src, o, func(entry os.DirEntry) error {
-			return copyEntry(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()), o)
+			return IgnoreSkipped(copyEntry(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()), o))
 		}); err != nil {
 			return err
 		}
@@ -194,6 +205,13 @@ func copyRegularStream(in *os.File, dst string, info os.FileInfo, o *Operation) 
 	return err
 }
 
+func regularSize(info os.FileInfo) int64 {
+	if info.Mode().IsRegular() {
+		return info.Size()
+	}
+	return 0
+}
+
 // Create in the destination parent so its ACL and the process umask apply
 // exactly as for a normal new file, without changing the process-wide umask.
 func createCopyTemp(dir string, mode os.FileMode) (*os.File, error) {
@@ -209,39 +227,81 @@ func createCopyTemp(dir string, mode os.FileMode) (*os.File, error) {
 // Save atomically replaces an existing regular file if its identity and timestamp
 // still match the version opened by the editor. Symlinks are resolved by caller.
 func Save(path string, content []byte, original os.FileInfo, ops ...*Operation) error {
-	o := operation(ops)
+	_, err := SaveWith(path, content, original, SaveOptions{}, operation(ops))
+	return err
+}
+
+// SaveWith saves like Save. Without InPlace a folder that refuses the
+// temporary file yields ErrInPlaceRequired when the file itself is writable,
+// so the caller can ask before rewriting it non-atomically.
+func SaveWith(path string, content []byte, original os.FileInfo, options SaveOptions, o *Operation) (SaveResult, error) {
 	if err := o.Check(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	current, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return SaveResult{}, err
 	}
-	if !current.Mode().IsRegular() || !os.SameFile(current, original) || current.Size() != original.Size() || !current.ModTime().Equal(original.ModTime()) {
-		return fmt.Errorf("file changed on disk; reopen it before saving")
+	if !current.Mode().IsRegular() {
+		return SaveResult{}, fmt.Errorf("%s is not a regular file", path)
+	}
+	if original == nil || !os.SameFile(current, original) || current.Size() != original.Size() || !current.ModTime().Equal(original.ModTime()) {
+		return SaveResult{}, ErrChangedOnDisk
+	}
+	if options.InPlace {
+		return SaveResult{InPlace: true}, saveInPlace(path, content, o)
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".farshmac-save-*")
 	if err != nil {
-		return err
+		if denied(err) && syscall.Access(path, accessWrite) == nil && immutableFlags(current) == 0 {
+			return SaveResult{}, fmt.Errorf("%w: %w", ErrInPlaceRequired, err)
+		}
+		return SaveResult{}, err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
 	if _, err = copyProgress(f, bytes.NewReader(content), o); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = f.Chmod(current.Mode().Perm()); err != nil {
-		return err
+		return SaveResult{}, err
 	}
+	// Tags, comments, ACLs and user flags belong to the document, not to the
+	// inode that happens to hold it. Losing them is reported, never fatal.
+	metadataErr := copySaveMetadata(path, f)
 	if err = f.Sync(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = f.Close(); err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if err = o.Check(); err != nil {
+		return SaveResult{}, err
+	}
+	if err = os.Rename(f.Name(), path); err != nil {
+		return SaveResult{}, err
+	}
+	return SaveResult{MetadataLost: metadataErr}, nil
+}
+
+// saveInPlace rewrites the existing inode. It is not atomic: a failed write
+// leaves the file truncated, which the error states explicitly.
+func saveInPlace(path string, content []byte, o *Operation) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	_, err = copyProgress(f, bytes.NewReader(content), o)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("%w (file may be truncated; retry or save elsewhere)", err)
+	}
+	return nil
 }
 
 // Create publishes a completed file without replacing an existing path.

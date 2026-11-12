@@ -19,6 +19,7 @@ import (
 type UnknownHost struct {
 	Host, Fingerprint string
 	Key               []byte
+	Type              string
 }
 
 func (e *UnknownHost) Error() string { return "Unknown SSH host " + e.Host + " " + e.Fingerprint }
@@ -29,7 +30,7 @@ func HostKeyCallback(c Config, files ...string) (ssh.HostKeyCallback, error) {
 		if err != nil {
 			return nil, err
 		}
-		return ssh.FixedHostKey(key), nil
+		return pinnedHostKey(key), nil
 	}
 	var existing []string
 	for _, f := range files {
@@ -47,9 +48,13 @@ func HostKeyCallback(c Config, files ...string) (ssh.HostKeyCallback, error) {
 		err := verify(host, addr, key)
 		var unknown *knownhosts.KeyError
 		if errors.As(err, &unknown) && len(unknown.Want) == 0 {
-			return &UnknownHost{host, ssh.FingerprintSHA256(key), key.Marshal()}
+			return &UnknownHost{host, ssh.FingerprintSHA256(key), key.Marshal(), key.Type()}
 		}
-		return err // Known-key mismatch and revoked keys are never auto-accepted.
+		if err != nil {
+			// Known-key mismatch and revoked keys are never auto-accepted.
+			return hostKeyChanged(host, key, err)
+		}
+		return nil
 	}, nil
 }
 
@@ -92,7 +97,7 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 		auth = append(auth, ssh.PublicKeys(keys...))
 	}
 	if c.Password != "" {
-		auth = append(auth, ssh.Password(c.Password))
+		auth = append(auth, ssh.Password(c.Password), ssh.KeyboardInteractive(passwordChallenge(c.Password)))
 	}
 	if len(auth) == 0 {
 		return nil, fmt.Errorf("no usable SSH identity: provide a password, private key or ssh-agent. %s", keyHint)
@@ -119,6 +124,7 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 }
 func (f *sftpFS) ReadDir(p string) ([]os.FileInfo, error) { return f.client.ReadDirContext(f.ctx, p) }
 func (f *sftpFS) Lstat(p string) (os.FileInfo, error)     { return f.client.Lstat(p) }
+func (f *sftpFS) Stat(p string) (os.FileInfo, error)      { return f.client.Stat(p) }
 func (f *sftpFS) Open(p string) (io.ReadCloser, error)    { return f.client.Open(p) }
 func (f *sftpFS) Create(p string) (io.WriteCloser, error) {
 	return f.client.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
@@ -134,7 +140,21 @@ func (f *sftpFS) Rename(a, b string) error {
 	if _, ok := f.client.HasExtension("posix-rename@openssh.com"); ok {
 		return f.client.PosixRename(a, b)
 	}
-	return f.client.Rename(a, b)
+	err := f.client.Rename(a, b)
+	if err != nil {
+		if _, statErr := f.client.Lstat(b); statErr == nil && f.exists(a) {
+			return replaceError(b, "no posix-rename", err)
+		}
+	}
+	return err
+}
+
+func (f *sftpFS) exists(p string) bool { _, err := f.client.Lstat(p); return err == nil }
+
+// replaceError explains why an explicit Overwrite failed: the protocol rename
+// refuses existing targets, and a non-atomic delete+rename is never attempted.
+func replaceError(dst, reason string, err error) error {
+	return fmt.Errorf("server cannot replace an existing file atomically (%s); delete %s first or choose Rename: %w", reason, dst, err)
 }
 func (f *sftpFS) Chmod(p string, m os.FileMode) error { return f.client.Chmod(p, m) }
 func (f *sftpFS) Chtimes(p string, t time.Time) error { return f.client.Chtimes(p, t, t) }

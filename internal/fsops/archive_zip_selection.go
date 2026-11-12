@@ -47,6 +47,10 @@ func withArchiveSelection(src string, o *Operation, include func(string) bool, v
 		if !include(name) {
 			continue
 		}
+		if entry.Flags&zipEncrypted != 0 {
+			// Go would read ciphertext and fail later with a checksum error.
+			return fmt.Errorf("%w: %s", ErrEncryptedArchive, entry.Name)
+		}
 		if entry.Method != zip.Store && entry.Method != zip.Deflate {
 			return withArchive(src, o, visit)
 		}

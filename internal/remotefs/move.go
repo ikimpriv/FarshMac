@@ -32,6 +32,8 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	if err != nil {
 		return err
 	}
+	o.Add(src, regularSize(si))
+	o.Begin(src, regularSize(si))
 	di, err := f.Lstat(dst)
 	if os.IsNotExist(err) {
 		if err = f.Rename(src, dst); err == nil {
@@ -41,6 +43,16 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	}
 	if err != nil {
 		return err
+	}
+	if caseOnlyRename(f, src, dst) {
+		// A case-insensitive server resolved the new spelling to the source.
+		if err = f.Rename(src, dst); err == nil {
+			o.CompleteTree(src)
+		}
+		return err
+	}
+	if si.IsDir() {
+		di = FollowDir(f, dst, di) // Merge into a linked directory; never replace the link.
 	}
 	if si.IsDir() && di.IsDir() {
 		entries, err := f.ReadDir(src)
@@ -69,9 +81,15 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 				return nil
 			}
 		}
-		return o.Attempt("delete source folder", src, "", func() error { return f.Remove(src, true) })
+		return o.Attempt("delete source folder", src, "", func() error {
+			err := f.Remove(src, true)
+			if err == nil {
+				o.Complete(src)
+			}
+			return err
+		})
 	}
-	resolution := o.Resolve(fsops.Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}, nil)
+	resolution := o.Resolve(linkCollision(f, fsops.Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}), nil)
 	switch resolution.Action {
 	case fsops.Skip:
 		o.SkipItem(src)
@@ -118,4 +136,22 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	default:
 		return fsops.ErrCancelled
 	}
+}
+
+// caseOnlyRename is true when dst differs from src only in letter case and the
+// parent listing has no entry spelled exactly like dst (else it is a real collision).
+func caseOnlyRename(f FS, src, dst string) bool {
+	if path.Dir(src) != path.Dir(dst) || !strings.EqualFold(path.Base(src), path.Base(dst)) {
+		return false
+	}
+	entries, err := f.ReadDir(path.Dir(dst))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Name() == path.Base(dst) {
+			return false
+		}
+	}
+	return true
 }

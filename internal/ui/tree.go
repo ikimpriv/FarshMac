@@ -26,11 +26,13 @@ type treeResult struct {
 // Only the worker owns entries and filesystem handles. The UI receives an
 // immutable result through a buffered channel, never a shared Panel or slice.
 type treeLoad struct {
-	cancel  context.CancelFunc
-	done    chan treeResult
-	state   panelState
-	visited atomic.Int64
-	shown   int64
+	cancel   context.CancelFunc
+	done     chan treeResult
+	state    panelState
+	previous Panel
+	failure  string
+	visited  atomic.Int64
+	shown    int64
 }
 
 type treeScanOptions struct {
@@ -164,11 +166,12 @@ func (p *Panel) loadTree(abs string) error {
 }
 
 func (p *Panel) startTree(abs string, options treeScanOptions) {
+	previous, failure := p.takeRollback()
 	state := p.beginLoad(abs)
 	p.cancelTree()
 	p.cancelPanelLoad()
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &treeLoad{cancel: cancel, done: make(chan treeResult, 1), state: state}
+	job := &treeLoad{cancel: cancel, done: make(chan treeResult, 1), state: state, previous: previous, failure: failure}
 	p.tree = job
 	p.TotalBytes, p.ItemCount = 0, 0
 	p.Err = "Reading tree… Esc stops"
@@ -196,7 +199,7 @@ func (r treeResult) status(depth int) string {
 		if errors.Is(r.err, context.Canceled) {
 			text = "Stopped · partial tree"
 		} else {
-			text = r.err.Error()
+			text, _ = describeReadError("", r.err)
 		}
 	} else if r.limited {
 		text = "Partial tree · limit reached; open a subfolder"
@@ -216,6 +219,23 @@ func (p *Panel) pollTree() bool {
 	case result := <-job.done:
 		job.cancel()
 		p.tree = nil
+		// An unreadable root leaves nothing to show: return to the previous
+		// folder like a failed file-panel load. A stopped scan keeps its part.
+		if result.err != nil && len(result.entries) == 0 && !errors.Is(result.err, context.Canceled) && job.previous.Path != "" {
+			path := p.Path
+			*p = job.previous
+			footer, hint := describeReadError(path, result.err)
+			p.Err = footer
+			switch {
+			case job.failure != "":
+				p.loadStatus = job.failure + footer
+			case hint != "":
+				p.loadStatus = hint
+			default:
+				p.loadStatus = "Cannot read " + path + ": " + result.err.Error()
+			}
+			return true
+		}
 		p.installEntries(result.entries, job.state)
 		p.ItemCount = len(result.entries)
 		p.treeLabels = result.labels

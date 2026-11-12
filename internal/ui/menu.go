@@ -31,10 +31,10 @@ func (a *App) menuSections() []menuSection {
 		}
 		return append(items, []menuItem{
 			{},
-			{"Sort modes…", "", func() { a.sortMenu(index) }},
+			{"Sort modes…", "⌃F12", func() { a.sortMenu(index) }},
 			{"Panel on/off", []string{"⌘F1", "⌘F2"}[index], func() { a.togglePanel(index) }},
 			{"Re-read", "⌘R", func() { a.rereadPanel(index) }},
-			{"Change volume…", []string{"AltF1", "AltF2"}[index], func() { a.volumes(index) }},
+			{"Change volume…", []string{"⌥F1", "⌥F2"}[index], func() { a.volumes(index) }},
 		}...)
 	}
 	settings := func(kind string) func() { return func() { a.settingsMenu(kind) } }
@@ -42,28 +42,31 @@ func (a *App) menuSections() []menuSection {
 		{"Left", 2, panel(0)},
 		{"Files", 11, []menuItem{
 			{"Open with macOS", "⇧Enter", a.openSystemSelected},
-			{"View / folder size", "F3", function(3)}, {"Calculate all folder sizes", "⌘⌥F3", func() { a.calculateFolderSizes(true) }}, {"Edit", "F4", function(4)}, {"New file…", "ShiftF4", a.newFile},
-			{"Copy…", "F5", function(5)}, {"Rename or move…", "F6", function(6)}, {"Link…", "", a.createLink},
+			{"View / folder size", "F3", function(3)}, {"Calculate all folder sizes", "⌘⌥F3", func() { a.calculateFolderSizes(true) }}, {"Edit", "F4", function(4)},
+			{"Alternate viewer", "⌥F3", func() { a.openConfigured(false, true, false) }}, {"Alternate editor", "⌥F4", func() { a.openConfigured(true, true, false) }},
+			{"Internal viewer", "⌘⇧F3", func() { a.openConfigured(false, false, true) }}, {"Internal editor", "⌘⇧F4", func() { a.openConfigured(true, false, true) }},
+			{"New file…", "⇧F4", a.newFile},
+			{"Copy…", "F5", function(5)}, {"Rename or move…", "F6", function(6)}, {"Link…", "⌥F6", a.createLink},
 			{"Make folder…", "F7", function(7)}, {"Move to Trash…", "F8", function(8)},
 			{"Delete permanently…", "⇧F8", func() { a.deleteSelected(true) }},
-			{"Create archive…", "", a.archiveCreate}, {"Extract archive…", "", a.archiveExtract}, {"Archive commands…", "", a.archiveCommands},
+			{"Create archive…", "⇧F1", a.archiveCreate}, {"Extract archive…", "⇧F2", a.archiveExtract}, {"Archive commands…", "⇧F3", a.archiveCommands},
 			{"File attributes…", "", a.fileAttributes}, {"Apply command…", "", a.applyCommand}, {"Describe files…", "", a.describeFiles},
 			{"Select group…", "Num +", func() { a.selectGroup("Select") }}, {"Deselect group…", "Num −", func() { a.selectGroup("Deselect") }},
 			{"Invert selection", "Num *", func() { a.selectGroup("Invert") }}, {"Restore selection", "⌘M", func() { a.selectGroup("Restore") }},
 		}},
 		{"Commands", 21, []menuItem{
 			{"Network connections…", "", a.networkMenu},
-			{"Quick view on/off", "Ctrl+Q", func() { a.toggleOtherView("Quick view") }},
+			{"Quick view on/off", "⌃Q", func() { a.toggleOtherView("Quick view") }},
 			{"New window", "⌘N", func() { a.NewWindow = true }},
-			{"Find file…", "AltF7", func() { a.findFiles(false) }}, {"Command history", "AltF8", func() { a.historyMenu("Commands") }},
-			{"Find folder…", "", func() { a.findFiles(true) }}, {"Folder tree", "AltF10", a.treeMenu},
-			{"File view/edit history", "", func() { a.historyMenu("Files") }}, {"Folder history", "", func() { a.historyMenu("Folders") }},
+			{"Find file…", "⌥F7", func() { a.findFiles(false) }}, {"Command history", "⌥F8", func() { a.historyMenu("Commands") }},
+			{"Find folder…", "", func() { a.findFiles(true) }}, {"Folder tree", "⌥F10", a.treeMenu},
+			{"File view/edit history", "⌥F11", func() { a.historyMenu("Files") }}, {"Folder history", "⌥F12", func() { a.historyMenu("Folders") }},
 			{"Same folder in other panel", "⌘=", a.matchOtherPanel},
 			{"Swap panels", "⌘U", func() { a.Panels[0], a.Panels[1] = a.Panels[1], a.Panels[0]; a.previewKey = "" }},
 			{"Panels on/off / terminal", "⌘O", a.showTerminal},
 			{"Compare folders", "", a.compareFolders}, {"User menu", "F2", a.userMenu}, {"Edit user menu…", "", a.editUserMenu},
-			{"File associations…", "", a.fileAssociations}, {"Folder shortcuts…", "", a.folderShortcuts}, {"Edit sort groups…", "", settings("Sort groups")},
-			{"File panel filter…", "", func() { a.filterPanel(a.Active) }}, {"Screens list", "F12", a.screenMenu},
+			{"File associations…", "", a.fileAssociations}, {"Bookmarks…", "⌘⌥0…9", a.bookmarksMenu}, {"Edit sort groups…", "", settings("Sort groups")},
+			{"File panel filter…", "", func() { a.filterPanel(a.Active) }}, {"Screens list", "F12", a.screenMenu}, {"Last messages…", "", a.showMessages},
 			{"Full screen", "⌃⌘F", func() { a.Fullscreen = true }}, {"Task list", "", a.taskList}, {"Mounted volumes", "", func() { a.volumes(a.Active) }},
 			{"Insert filename", "⌘Enter", a.insertFilename}, {"Quit", "⌘Q", a.RequestQuit},
 		}},
@@ -81,7 +84,7 @@ func (a *App) menuSections() []menuSection {
 				a.Status = "Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen."
 			}},
 			{},
-			{"Save setup", "", a.saveSetup}, {"Keyboard reference", "F1", function(1)},
+			{"Save setup", "⇧F9", func() { a.saveSetup() }}, {"Keyboard reference", "F1", function(1)},
 		}},
 		{"Right", 46, panel(1)},
 	}
@@ -208,6 +211,9 @@ func (a *App) drawMenu(g *Grid) {
 			continue
 		}
 		fg, bg := uint32(White), uint32(Cyan)
+		if a.menuItemDisabled(section, item) {
+			fg = Gray
+		}
 		if i == a.Menu.Row {
 			bg = Black
 		}
@@ -219,4 +225,41 @@ func (a *App) drawMenu(g *Grid) {
 		g.Text(x+2, y+1+row, label, fg, bg, w-4-len([]rune(item.Shortcut)))
 		g.Text(x+w-11, y+1+row, item.Shortcut, Yellow, bg, 9)
 	}
+}
+
+// menuItemDisabled marks commands that the active (or, for Left/Right, the
+// selected) panel cannot run because it is remote or an archive. They stay
+// selectable and still explain why when run (P5-14).
+func (a *App) menuItemDisabled(section menuSection, item menuItem) bool {
+	label := strings.TrimPrefix(item.Label, "✓ ")
+	switch section.Name {
+	case "Left", "Right":
+		p := a.Panels[0]
+		if section.Name == "Right" {
+			p = a.Panels[1]
+		}
+		switch label {
+		case "Info panel", "Quick view":
+			return p.Remote != nil
+		case "Tree panel":
+			return p.Remote != nil || p.Archive != nil
+		}
+		return false
+	}
+	p := a.Panels[a.Active]
+	other := a.Panels[1-a.Active]
+	remote, archive := p.Remote != nil, p.Archive != nil
+	switch label {
+	case "Open with macOS", "Archive commands…", "Find file…", "Find folder…", "Folder tree", "User menu":
+		return remote
+	case "Edit", "Rename or move…", "Make folder…", "Move to Trash…", "Delete permanently…":
+		return archive
+	case "New file…", "Link…", "File attributes…", "Apply command…", "Describe files…":
+		return remote || archive
+	case "Create archive…":
+		return remote || archive || other.Remote != nil
+	case "Extract archive…":
+		return remote || other.Remote != nil
+	}
+	return false
 }

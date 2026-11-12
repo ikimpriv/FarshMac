@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"farshmac/internal/fsops"
+	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
 	"fmt"
 	"os"
@@ -95,6 +96,9 @@ func (a *App) launch(path string, plan LaunchPlan) {
 // Shift+Enter uses Finder's default application, ignoring Far associations and
 // the command line. Pass the absolute path as one argument, never shell syntax.
 func (a *App) openSystemSelected() {
+	if !a.requireFilePanel() {
+		return
+	}
 	p := &a.Panels[a.Active]
 	if p.Remote != nil {
 		a.Status = "Copy remote files to a local panel before opening them with macOS"
@@ -113,6 +117,9 @@ func (a *App) openSystemSelected() {
 	a.launch(path, externalPlan(path, "", false))
 }
 func (a *App) openConfigured(edit, alternate, forceInternal bool) {
+	if !a.requireFilePanel() {
+		return
+	}
 	p0 := &a.Panels[a.Active]
 	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir {
 		a.folderSize()
@@ -137,7 +144,7 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		a.error(err)
+		a.openFailed(path, edit, err)
 		return
 	}
 	if info.IsDir() {
@@ -148,15 +155,26 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 		}
 		return
 	}
-	a.launch(path, a.viewPlan(path, edit, alternate, forceInternal))
+	plan := a.viewPlan(path, edit, alternate, forceInternal)
+	if plan.Internal && !edit && info.Mode().IsRegular() && preview.Supported(path) {
+		a.openImage(path)
+		return
+	}
+	a.launch(path, plan)
 }
 func (a *App) enterFile() {
+	if !a.requireFilePanel() {
+		return
+	}
+
 	if p := &a.Panels[a.Active]; p.Remote != nil {
 		if len(p.Entries) == 0 {
 			return
 		}
-		if p.Entries[p.Cursor].Dir {
+		if e := p.Entries[p.Cursor]; e.Dir {
 			a.error(p.Load(p.Current()))
+		} else if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
+			a.enterRemoteLink()
 		} else {
 			a.openRemoteDocument(false)
 		}
@@ -177,11 +195,8 @@ func (a *App) enterFile() {
 		return
 	}
 	if info.IsDir() {
-		if strings.EqualFold(filepath.Ext(path), ".app") {
-			a.launch(path, externalPlan(path, "", false))
-		} else {
-			a.error(p.Load(path))
-		}
+		// Bundles (.app) are folders here; Shift+Enter launches them.
+		a.error(p.Load(path))
 		return
 	}
 	if fsops.ArchiveFormat(path) != "" {

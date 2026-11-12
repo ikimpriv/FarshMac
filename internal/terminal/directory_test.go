@@ -36,7 +36,7 @@ func TestChangeDirPreservesCommand(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer s.Close()
+				defer closeAndWait(s)
 				waitReady(t, s)
 				// Leave a partial command on the editable line, then complete it after cd.
 				if err := s.Write("printf 'PRESERVED:%s\\n' "); err != nil {

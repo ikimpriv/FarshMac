@@ -19,5 +19,14 @@ const key=(key,extra={})=>docListeners.keydown({key,preventDefault(){},...extra}
  context.window.farshmacUpdate({mode:'terminal',shellReady:false});await settle();
  context.window.farshmacToggleHistory();assert.equal(sent.length,n+1,'busy shell must not receive history request');
  context.window.farshmacUpdate({mode:'terminal',shellReady:true});await settle();assert.equal(sent.filter(m=>m.Type==='commandHistory').length,3);
+ // Cmd+O closes the overlay and still reaches Go (also in a non-Latin layout).
+ key('Escape');context.window.farshmacToggleHistory();assert.equal(elements.get('commands').hidden,false);
+ key('щ',{metaKey:true,code:'KeyO'});
+ assert.equal(elements.get('commands').hidden,true);assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,'o');assert.equal(sent.at(-1).Meta,true);
+ // A failed request or exited shell answers with an empty list and a reason.
+ context.window.farshmacToggleHistory();
+ context.window.farshmacUpdate({mode:'terminal',shellReady:true,commands:[],commandsError:'Shell exited; history unavailable'});await settle();
+ assert.equal(elements.get('command-caption').textContent,'Shell exited; history unavailable · Esc: cancel');
+ key('Escape');assert.equal(elements.get('commands').hidden,true);
  console.log('Command history: shell snapshot, selection, editing, run, cancel and busy shell: OK');
 })().catch(e=>{console.error(e);process.exitCode=1});

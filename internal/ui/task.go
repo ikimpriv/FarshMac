@@ -15,6 +15,7 @@ type uiTask struct {
 	operation      *fsops.Operation
 	applyCompleted bool
 	reportError    bool
+	cancelStatus   string // replaces the generic cancellation error, if set
 }
 
 func (a *App) backgroundTask(label string, fn func(*fsops.Operation) (func(), func(), error)) {
@@ -46,6 +47,10 @@ func (a *App) pollTask() {
 		a.Status = ""
 		if result.err != nil {
 			a.error(result.err)
+			cancelled := errors.Is(result.err, fsops.ErrCancelled) || errors.Is(result.err, context.Canceled)
+			if cancelled && task.cancelStatus != "" {
+				a.Status = task.cancelStatus
+			}
 			if task.reportError && !errors.Is(result.err, fsops.ErrCancelled) && !errors.Is(result.err, context.Canceled) {
 				a.confirm(a.LastProgress.Label+" failed", result.err.Error(), []string{"OK"}, func(int) {})
 			}

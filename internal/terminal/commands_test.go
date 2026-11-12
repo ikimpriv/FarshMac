@@ -24,7 +24,7 @@ func TestInteractiveCommandHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer closeAndWait(s)
 			waitReady(t, s)
 			command := "printf 'DIRECT_COMMAND\\n'"
 			if err = s.Write(command + "\r"); err != nil {

@@ -25,7 +25,11 @@ type WindowGroup struct {
 	quitting         bool
 	waiting          int
 	approved         map[int]bool
+	attention        int
+	sessionError     string
+	sessionErrorAt   time.Time
 	Terminating      bool
+	windowSync
 }
 
 func NewWindowGroup(first *App) *WindowGroup {
@@ -51,8 +55,7 @@ func (g *WindowGroup) NewWindow(parent int) (int, error) {
 		return 0, e
 	}
 	if p != nil {
-		b, _ := json.Marshal(p.Settings)
-		_ = json.Unmarshal(b, &a.Settings)
+		a.inheritWindowState(p)
 		for i := range a.Panels {
 			a.Panels[i].panelOptions = p.Panels[i].panelOptions
 		}
@@ -61,9 +64,7 @@ func (g *WindowGroup) NewWindow(parent int) (int, error) {
 		a.LoadSetup()
 	}
 	if g.StartShell && a.Term == nil {
-		if err := a.StartTerminal(); err != nil {
-			a.Status = "Shell: " + err.Error()
-		}
+		a.StartTerminalOrRetry()
 	}
 	g.next++
 	g.Apps[g.next] = a
@@ -116,16 +117,40 @@ func (g *WindowGroup) advanceQuit() {
 			continue
 		}
 		if a.Form == nil && a.Dialog == nil {
-			g.quitting = false
-			g.waiting = 0
+			g.abortQuit(id)
 		}
 		return
 	}
 	g.quitting = false
+	if err := g.quitAutoSave(); err != nil {
+		g.askQuitWithoutSetup(err)
+		return
+	}
+	g.finishQuit()
+}
+func (g *WindowGroup) finishQuit() {
 	g.Terminating = true
 	if e := g.SaveSession(true); e != nil {
 		for _, a := range g.Apps {
 			a.error(e)
+		}
+	}
+}
+
+// abortQuit reports a quit refused without a dialog (e.g. a running file
+// operation): the refusing window is raised and the other windows explain why.
+func (g *WindowGroup) abortQuit(id int) {
+	g.quitting = false
+	g.waiting = 0
+	g.attention = id
+	reason := fmt.Sprintf("Quit cancelled in window %d", id)
+	if a := g.Apps[id]; a != nil && a.Busy {
+		reason = fmt.Sprintf("Quit cancelled: window %d is running a file operation", id)
+	}
+	for other, a := range g.Apps {
+		if other != id {
+			a.Status = reason
+			a.dirty = true
 		}
 	}
 }
@@ -138,6 +163,7 @@ func (g *WindowGroup) Handle(id int, raw string) {
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return
 	}
+	m = latinShortcut(m)
 	if m.Type == "quit" || (m.Type == "key" && m.Meta && (m.Key == "q" || m.Key == "Q")) {
 		g.BeginQuit()
 		return
@@ -147,11 +173,13 @@ func (g *WindowGroup) Handle(id int, raw string) {
 		a.dirty = true
 		return
 	}
+	g.primeSettings(a)
 	if m.Type == "close" {
-		a.RequestQuit()
+		a.RequestClose()
 	} else {
 		a.Handle(raw)
 	}
+	g.syncSettings(a)
 	g.advanceQuit()
 }
 func (g *WindowGroup) Poll(id int) Update {
@@ -159,21 +187,48 @@ func (g *WindowGroup) Poll(id int) Update {
 	if a == nil {
 		return Update{Quit: true}
 	}
-	if !g.Terminating {
-		if e := g.SaveSession(false); e != nil {
-			a.error(e)
-		}
-	}
+	g.saveSessionPeriodically(a)
+	g.primeSettings(a)
 	u := a.Poll()
+	g.syncSettings(a)
 	g.advanceQuit()
 	u.QuitApplication = g.Terminating
 	u.AttentionWindow = g.waiting
+	if u.AttentionWindow == 0 && g.attention != 0 {
+		u.AttentionWindow = g.attention
+		g.attention = 0
+	}
 	return u
 }
+
+// sessionRetryInterval spaces out periodic session writes after a failure.
+var sessionRetryInterval = 30 * time.Second
+
+// saveSessionPeriodically reports a failing periodic session save once per
+// distinct error instead of overwriting the status line every frame.
+func (g *WindowGroup) saveSessionPeriodically(a *App) {
+	if g.Terminating || g.sessionError != "" && time.Since(g.sessionErrorAt) < sessionRetryInterval {
+		return
+	}
+	e := g.SaveSession(false)
+	if e == nil {
+		g.sessionError = ""
+		return
+	}
+	message := "Cannot save window session: " + e.Error()
+	if message != g.sessionError && a.Status != message {
+		a.Status = message
+		a.dirty = true
+	}
+	g.sessionError = message
+	g.sessionErrorAt = time.Now()
+}
 func (g *WindowGroup) CloseWindow(id int) {
+	var autoSaveErr error
 	if a := g.Apps[id]; a != nil {
 		s := g.windowSnapshot(id)
 		g.lastWindow = &s
+		autoSaveErr = a.autoSaveSetup()
 		a.Close()
 		if a.historyCleanup != nil {
 			g.historyCleanups = append(g.historyCleanups, a.historyCleanup)
@@ -189,6 +244,12 @@ func (g *WindowGroup) CloseWindow(id int) {
 	delete(g.frames, id)
 	if g.focused == id && len(g.Order) > 0 {
 		g.focused = g.Order[len(g.Order)-1]
+	}
+	if autoSaveErr != nil {
+		if a := g.Apps[g.focused]; a != nil {
+			a.Status = "Setup not saved: " + autoSaveErr.Error()
+			a.dirty = true
+		}
 	}
 	if !g.Terminating {
 		_ = g.SaveSession(true)
@@ -207,4 +268,5 @@ func (g *WindowGroup) CloseAll() {
 		<-done
 	}
 	g.historyCleanups = nil
+	g.unlockSession()
 }

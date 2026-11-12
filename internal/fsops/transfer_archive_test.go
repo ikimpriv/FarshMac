@@ -46,11 +46,11 @@ func TestZIPRoundtripAndTraversal(t *testing.T) {
 	if e := CreateZIP([]string{src}, archive); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := ZIPContents(archive, true); e != nil {
+	if _, e := ArchiveContents(archive, true); e != nil {
 		t.Fatal(e)
 	}
 	out := filepath.Join(root, "out")
-	if e := ExtractZIP(archive, out); e != nil {
+	if e := ExtractArchive(archive, out); e != nil {
 		t.Fatal(e)
 	}
 	b, _ := os.ReadFile(filepath.Join(out, "src", "hello.txt"))
@@ -68,7 +68,7 @@ func TestZIPRoundtripAndTraversal(t *testing.T) {
 		w.Write([]byte("bad"))
 		z.Close()
 		f.Close()
-		if e := ExtractZIP(bad, filepath.Join(root, "bad-out")); e == nil {
+		if e := ExtractArchive(bad, filepath.Join(root, "bad-out")); e == nil {
 			t.Fatal("unsafe path accepted", name)
 		}
 	}

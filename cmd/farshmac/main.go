@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 
 	"farshmac/internal/highlight"
 	"farshmac/internal/native"
@@ -13,8 +14,12 @@ import (
 )
 
 func main() {
-	if len(os.Args) == 3 && os.Args[1] == preview.HelperFlag {
-		os.Exit(preview.HelperMain(os.Args[2]))
+	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == preview.HelperFlag {
+		pixels := 0
+		if len(os.Args) == 4 {
+			pixels, _ = strconv.Atoi(os.Args[3])
+		}
+		os.Exit(preview.HelperMain(os.Args[2], pixels))
 	}
 	if len(os.Args) == 3 && os.Args[1] == highlight.HelperFlag {
 		os.Exit(highlight.HelperMain(os.Args[2]))

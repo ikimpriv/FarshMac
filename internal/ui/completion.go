@@ -3,6 +3,7 @@ package ui
 import (
 	"farshmac/internal/fsops"
 	"farshmac/internal/terminal"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,7 +21,12 @@ func (a *App) completeCommand() {
 		a.Status = "Completion: use an unquoted path prefix"
 		return
 	}
-	base := a.Panels[a.Active].Path
+	// Complete where the command will run: remote and archive panels execute
+	// commands in a local folder, so their virtual path is not readable here.
+	base := a.Panels[a.Active].filesystemPath()
+	if base == "" {
+		base, _ = os.UserHomeDir()
+	}
 	prefix := filepath.Base(token)
 	dir := filepath.Dir(token)
 	if token == "" || strings.HasSuffix(token, "/") {
@@ -30,7 +36,8 @@ func (a *App) completeCommand() {
 	ignoreCase := a.Settings.CompleteIgnoreCase
 	collect := func(o *fsops.Operation) (func(), error) {
 		var values []string
-		err := fsops.ReadDirectory(expand(dir, base), o, func(e os.DirEntry) error {
+		target := expand(dir, base)
+		err := fsops.ReadDirectory(target, o, func(e os.DirEntry) error {
 			n, p := e.Name(), prefix
 			if ignoreCase {
 				n, p = strings.ToLower(n), strings.ToLower(p)
@@ -49,6 +56,9 @@ func (a *App) completeCommand() {
 			return nil
 		})
 		sort.Strings(values)
+		if err != nil {
+			err = fmt.Errorf("Completion: cannot read %s: %w", target, err)
+		}
 		return func() { a.applyCompletion(start, values) }, err
 
 	}

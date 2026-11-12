@@ -123,6 +123,14 @@
     if (!message.frameInfo.isMainFrame||![message.body isKindOfClass:[NSDictionary class]])return;
     if ([message.body[@"Type"] isEqual:@"clipboard"]&&[message.body[@"Text"] isKindOfClass:[NSString class]]) {[[NSPasteboard generalPasteboard] clearContents];[[NSPasteboard generalPasteboard] setString:message.body[@"Text"] forType:NSPasteboardTypeString];return;}
     if ([message.body[@"Type"] isEqual:@"pasteRequest"]) {[self.owner pasteText:nil];return;}
+    if ([message.body[@"Type"] isEqual:@"minSize"]) {
+        // Keep the 60x15 cell minimum reachable at large font sizes.
+        CGFloat w=MAX(700,[message.body[@"W"] doubleValue]),h=MAX(400,[message.body[@"H"] doubleValue]);
+        self.window.contentMinSize=NSMakeSize(w,h);
+        NSSize size=[self.window contentRectForFrameRect:self.window.frame].size;
+        if(!(self.window.styleMask&NSWindowStyleMaskFullScreen)&&(size.width<w||size.height<h))[self.window setContentSize:NSMakeSize(MAX(w,size.width),MAX(h,size.height))];
+        return;
+    }
     if ([message.body[@"Type"] isEqual:@"frameDone"]) {self.evaluating=NO;if([message.body[@"More"] boolValue])[self tick:nil];return;}
     NSData *json=[NSJSONSerialization dataWithJSONObject:message.body options:0 error:nil];if(json)[self send:[[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]];
 }
@@ -208,7 +216,7 @@
 - (void)cycle:(NSInteger)delta {if(!self.controllers.count)return;NSUInteger i=[self.controllers indexOfObject:[self active]];NSInteger next=((NSInteger)i+delta+self.controllers.count)%self.controllers.count;[self.controllers[next].window makeKeyAndOrderFront:nil];}
 - (void)nextWindow:(id)sender {[self cycle:1];}
 - (void)previousWindow:(id)sender {[self cycle:-1];}
-- (void)focusSession:(int)session {for(FarshMacWindow *c in self.controllers)if(c.session==session&&NSApp.keyWindow!=c.window){[c.window makeKeyAndOrderFront:nil];break;}}
+- (void)focusSession:(int)session {for(FarshMacWindow *c in self.controllers)if(c.session==session&&(NSApp.keyWindow!=c.window||c.window.miniaturized)){if(c.window.miniaturized)[c.window deminiaturize:nil];[c.window makeKeyAndOrderFront:nil];break;}}
 - (void)copyText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacCopy()" completionHandler:nil];}
 - (void)cutText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacCut()" completionHandler:nil];}
 - (void)selectText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacSelectAll()" completionHandler:nil];}

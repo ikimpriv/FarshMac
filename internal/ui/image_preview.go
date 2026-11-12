@@ -2,10 +2,23 @@ package ui
 
 type ImagePreview struct {
 	Data       string `json:"data,omitempty"`
+	Full       bool   `json:"full,omitempty"` // The F3 image view: whole window, black backdrop.
 	X, Y, W, H int
 }
 
 func (a *App) imagePreview() *ImagePreview {
+	if v := a.Image; v != nil && !a.TermVisible {
+		if v.Data == "" || a.Form != nil || a.Dialog != nil {
+			a.previewSent = ""
+			return nil
+		}
+		result := &ImagePreview{Full: true, X: 0, Y: 0, W: a.Cols, H: a.Rows}
+		if key := "image:" + v.Path; a.previewSent != key {
+			result.Data = v.Data
+			a.previewSent = key
+		}
+		return result
+	}
 	if a.Doc != nil || a.TermVisible || a.Busy || a.Menu != nil || a.Form != nil || a.Dialog != nil || a.previewImage == "" || a.previewPending {
 		a.previewSent = ""
 		return nil

@@ -1,11 +1,14 @@
 # FarshMac terminal: version 0.13 audit
 
 This historical audit describes the embedded macOS PTY terminal. A persistent bash
-(default), sh, or login zsh receives `TERM=xterm-256color` and `COLORTERM=truecolor`.
+(default), sh, or login zsh receives `TERM=xterm-256color`, `COLORTERM=truecolor`
+and `TERM_PROGRAM=FarshMac`; Terminal.app session variables (`TERM_PROGRAM_VERSION`,
+`TERM_SESSION_ID`) are not inherited.
 External commands share the PTY; ⌘O switches between it and the panels without
 stopping processes. Later changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 In particular, ⌘⇧H now opens **command history**; the output archive described below
-is available separately through the Window menu.
+is available separately through the Window menu or the mouse wheel, without a
+keyboard shortcut.
 
 ## Submitting commands from panels
 
@@ -31,6 +34,21 @@ enabled. Shell startup files take precedence; aliases are not replaced. GNU ls
 requires --color=auto. TERM describes capabilities; it does not require programs
 to enable color. See [Apple's ls implementation](https://github.com/apple-oss-distributions/file_cmds/blob/main/ls/ls.c).
 
+## Shell lifecycle
+
+- If the shell exits, it restarts in the same window with a 1/2/4/8 s backoff.
+  After 5 consecutive failures during startup it stops and prints a notice; Enter
+  in the terminal or ⌘O retries. When the panel folder is unusable as a working
+  directory, the shell starts in `$HOME`, then `/`.
+- A 5-second watchdog checks that the shell integration acknowledged a command
+  submitted from the panels. Otherwise the status reads "Shell integration did not
+  respond; command not sent — check shell key bindings", and nothing is typed into
+  the shell.
+- Closing a window (⌘W, red button) while a command runs asks **Close window**;
+  ⌘Q asks about quitting the application. ⌘W/⌘Q with a form open cancel the form
+  first. A busy window that refuses ⌘Q is brought to the front.
+- Terminal settings apply to new windows and after the shell in this window exits.
+
 ## Emulation and input
 
 Bundled xterm.js 5.5.0 and the official addon-unicode11 0.8.0 require no network
@@ -50,7 +68,9 @@ See the [xterm.js API](https://xtermjs.org/docs/api/terminal/classes/terminal/).
 | Ctrl+C / ⌘. | Interrupt command |
 | Option+drag | Force selection while an application tracks the mouse |
 | Right click | Copy / Paste / Select all menu unless an application owns the mouse |
-| ⌘⇧H | Command history (output archive in the original 0.13 implementation) |
+| ⌘⇧H | Command history overlay (terminal mode) |
+| ⌘+ / ⌘− / ⌘0 (also ⌘=) | Font size larger / smaller / default (10–24) |
+| Window menu / wheel | Open the output archive |
 | ↑↓ / PgUp/PgDn / wheel in archive | Scroll archive page |
 | Home in archive | Oldest retained page |
 | End / Esc / Live in archive | Return to live terminal |
@@ -72,11 +92,12 @@ operations.
   segments expire when full, with an indication in the UI. This is a bounded output
   archive, not an indefinite command log.
 - Pages load in the background. The DOM contains one page; requests are capped at
-  256 lines and the UI asks for at most the window height. Selection/copy stay
+  256 lines and the UI asks for at most the terminal height minus two rows (the
+overlay toolbar). Selection/copy stay
   within a page. Archived lines retain their original width; horizontal scrolling
   makes them readable after narrowing the window.
-- PTY output uses a bounded queue and frames up to 16 KiB. xterm parses 1024-byte
-  chunks before collecting history. After submitting archive data, Go waits for
+- PTY output uses a bounded queue and frames up to 16 KiB. xterm parses chunks of
+  `min(4094, scrollback − 2)` bytes before collecting history. After submitting archive data, Go waits for
   the background write before sending another output frame. A slow disk applies
   backpressure to the PTY instead of growing an unbounded RAM queue.
 - Write errors appear in the footer. Live output continues, archiving stops, and

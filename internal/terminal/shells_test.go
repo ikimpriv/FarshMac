@@ -41,7 +41,7 @@ func TestSelectableShells(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer s.Close()
+				defer closeAndWait(s)
 				waitReady(t, s)
 				pending := "UNFINISHED_DONT_RUN\x1b[D\x1b[D"
 				if editing == "vicmd" {
@@ -136,7 +136,7 @@ func TestDefaultShellIsBash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer closeAndWait(s)
 	if s.Shell != "bash" {
 		t.Fatal(s.Shell)
 	}

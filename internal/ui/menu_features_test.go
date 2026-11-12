@@ -269,7 +269,6 @@ func TestSettingsRoundtrip(t *testing.T) {
 	a.Settings.FontSize = 18
 	a.Settings.MaskGroups["docs"] = "*.md"
 	a.Panels[0].View = "Medium"
-	a.Settings.Shortcuts[1] = a.Panels[0].Path
 	a.saveSetup()
 	b, _ := New(a.Panels[0].Path, a.Panels[1].Path)
 	b.LoadSetup()

@@ -13,9 +13,13 @@ let documentOpen=false;
 let mode='panels', cols=120,rows=36;
 // Measure cells once per font change, never from a screen whose resize is pending.
 let cellW=8.5,cellH=18,resizeTimer,frameBusy=false;
+let minSize='';
 function measureCells(){
  const screen=panelEl.querySelector('.xterm-screen');
  if(screen&&screen.clientWidth&&screen.clientHeight){cellW=screen.clientWidth/panels.cols;cellH=screen.clientHeight/panels.rows;}
+ // The native window must fit the 60x15 cell minimum at the current font size.
+ const W=Math.ceil(60*cellW+8-1e-6),H=Math.ceil(15*cellH+8-1e-6);
+ if(W+'x'+H!==minSize){minSize=W+'x'+H;send({Type:'minSize',W,H});}
 }
 function dimensions(){
  const nextCols=Math.max(60,Math.min(300,Math.floor((innerWidth-8)/cellW)));
@@ -27,8 +31,13 @@ function dimensions(){
 // Coalesce live-resize bursts. Observing the resized body caused layout feedback.
 window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(dimensions,60);});
 setTimeout(()=>{measureCells();dimensions();},100);
-function keyMessage(e){return {Type:'key',Key:e.key,Code:e.code||'',Ctrl:e.ctrlKey,Alt:e.altKey,Meta:e.metaKey,Shift:e.shiftKey};}
-function toggle(e){return (e.metaKey||e.ctrlKey)&&!e.altKey&&!e.shiftKey&&e.key.toLowerCase()==='o';}
+function keyMessage(e){
+ let key=e.key;
+ // Cmd/Ctrl shortcuts in a non-Latin layout report the Latin letter of the key.
+ if((e.metaKey||e.ctrlKey)&&[...(key||'')].length===1&&!/^[\x00-\x7f]$/.test(key)&&/^Key[A-Z]$/.test(e.code||'')){key=shortcutLetter(e);if(e.shiftKey)key=key.toUpperCase();}
+ return {Type:'key',Key:key,Code:e.code||'',Ctrl:e.ctrlKey,Alt:e.altKey,Meta:e.metaKey,Shift:e.shiftKey};
+}
+function toggle(e){return (e.metaKey||e.ctrlKey)&&!e.altKey&&!e.shiftKey&&shortcutLetter(e)==='o';}
 function copyText(){
  if(commandHistory.visible){commandHistory.copy();return;}
  if(historyView.visible){const value=historyView.copy();if(value)send({Type:'clipboard',Text:value});return;}
@@ -40,9 +49,10 @@ term.attachCustomKeyEventHandler(e=>{
  if(e.type!=='keydown')return true;
  if(toggle(e)){e.preventDefault();send(keyMessage(e));return false;}
  if(e.metaKey&&e.key==='.'){e.preventDefault();send({Type:'input',Text:'\x03'});return false;}
- if((e.metaKey||e.ctrlKey&&e.shiftKey)&&e.key.toLowerCase()==='c'){e.preventDefault();copyText();return false;}
- if((e.metaKey||e.ctrlKey&&e.shiftKey)&&e.key.toLowerCase()==='v'||e.shiftKey&&e.key==='Insert'){e.preventDefault();pasteRequest();return false;}
- if(e.metaKey&&e.key.toLowerCase()==='a'){e.preventDefault();term.selectAll();return false;}
+ if(e.metaKey&&!e.ctrlKey&&!e.altKey&&['=','+','-','0'].includes(e.key)&&!/^Numpad/.test(e.code||'')){e.preventDefault();send(keyMessage(e));return false;}
+ if((e.metaKey||e.ctrlKey&&e.shiftKey)&&shortcutLetter(e)==='c'){e.preventDefault();copyText();return false;}
+ if((e.metaKey||e.ctrlKey&&e.shiftKey)&&shortcutLetter(e)==='v'||e.shiftKey&&e.key==='Insert'){e.preventDefault();pasteRequest();return false;}
+ if(e.metaKey&&shortcutLetter(e)==='a'){e.preventDefault();term.selectAll();return false;}
  return !e.metaKey;
 });
 term.onData(data=>send({Type:'input',Text:data}));
@@ -75,10 +85,12 @@ window.farshmacUpdate = state => {
   await Promise.all(writes);
   const lines=archive.take();if(lines.length)send({Type:'historyAppend',History:lines});
   historyView.update(state.history,state.historyPage);
-  commandHistory.update(state.commands,state.shellReady);
+  commandHistory.update(state.commands,state.shellReady,state.commandsError);
   if(state.grid){
    const img=document.getElementById('quick-preview'), p=state.preview;
    img.hidden=!p;
+   // The F3 image view: the whole grid is black and the picture is centred over it.
+   const full=!!(p&&p.full);img.classList.toggle('full',full);panelEl.classList.toggle('image',full);
    if(p){const r=panelEl.querySelector('.xterm-screen').getBoundingClientRect();
     if(p.data)img.src=p.data;
     img.style.left=(r.left+p.X*r.width/panels.cols)+'px';img.style.top=(r.top+p.Y*r.height/panels.rows)+'px';
@@ -99,19 +111,20 @@ document.addEventListener('keydown',e=>{
  if(e.metaKey&&e.shiftKey&&!e.ctrlKey&&!e.altKey&&(e.code==='KeyH'||e.key.toLowerCase()==='h')&&mode==='terminal'){
   e.preventDefault();e.stopImmediatePropagation();toggleCommands();return;
  }
+ if(commandHistory.visible&&toggle(e)){e.preventDefault();commandHistory.close();send(keyMessage(e));return;}
  if(commandHistory.key(e))return;
  if(historyView.visible){
   if(toggle(e)){e.preventDefault();historyView.close();send(keyMessage(e));return;}
   if(historyView.key(e))return;
-  if(e.metaKey&&e.key.toLowerCase()==='c'){e.preventDefault();copyText();return;}
-  if(e.metaKey&&e.key.toLowerCase()==='a'){e.preventDefault();historyView.selectAll();return;}
-  if(e.metaKey&&e.key.toLowerCase()==='v'){e.preventDefault();pasteRequest();return;}
+  if(e.metaKey&&shortcutLetter(e)==='c'){e.preventDefault();copyText();return;}
+  if(e.metaKey&&shortcutLetter(e)==='a'){e.preventDefault();historyView.selectAll();return;}
+  if(e.metaKey&&shortcutLetter(e)==='v'){e.preventDefault();pasteRequest();return;}
   return;
  }
  if(mode==='terminal')return;
  if(e.isComposing)return;
  if(e.shiftKey&&e.key==='Insert'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();pasteRequest();return;}
- if(e.metaKey&&['c','v','x'].includes(e.key.toLowerCase()))return;
+ if(e.metaKey&&['c','v','x'].includes(shortcutLetter(e)))return;
  e.preventDefault();send(keyMessage(e));
 },true);
 document.addEventListener('paste',e=>{

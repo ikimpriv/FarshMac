@@ -43,6 +43,12 @@ func listener(t testing.TB) (net.Listener, func(net.Conn)) {
 
 func SFTP(t testing.TB, configure ...func(*sftp.Handlers)) remotefs.Config {
 	t.Helper()
+	return SFTPWithAuth(t, nil, configure...)
+}
+
+// SFTPWithAuth lets a test replace the server's authentication callbacks.
+func SFTPWithAuth(t testing.TB, auth func(*ssh.ServerConfig), configure ...func(*sftp.Handlers)) remotefs.Config {
+	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +64,9 @@ func SFTP(t testing.TB, configure ...func(*sftp.Handlers)) remotefs.Config {
 		return nil, fmt.Errorf("invalid login")
 	}}
 	config.AddHostKey(signer)
+	if auth != nil {
+		auth(config)
+	}
 	handlers := sftp.InMemHandler()
 	for _, configure := range configure {
 		configure(&handlers)

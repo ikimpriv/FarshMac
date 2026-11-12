@@ -34,10 +34,17 @@ func (f *ftpFS) Canonical(p string) (string, error) {
 
 func (c Config) dialFTP(ctx context.Context) (FS, error) {
 	var secure *tls.Config
+	var unknown *UnknownCertificate
 	if c.Protocol == "ftps" {
-		secure = &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12, ClientSessionCache: tls.NewLRUClientSessionCache(8)}
+		// Verification is performed by VerifyConnection (chain + host name, or
+		// the exact certificate the user pinned); it is never skipped.
+		secure = &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12, ClientSessionCache: tls.NewLRUClientSessionCache(8), InsecureSkipVerify: true, VerifyConnection: verifyFTPSCertificate(c.Host, c.CertFingerprint, nil, &unknown)}
 	}
-	return c.dialFTPWithTLS(ctx, secure)
+	f, err := c.dialFTPWithTLS(ctx, secure)
+	if err != nil && unknown != nil {
+		return nil, unknown
+	}
+	return f, err
 }
 
 func (c Config) dialFTPWithTLS(ctx context.Context, secure *tls.Config) (FS, error) {
@@ -149,6 +156,19 @@ func (f *ftpFS) Lstat(p string) (os.FileInfo, error) {
 	}
 	return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
 }
+
+// Stat follows symbolic links as far as FTP allows: listings do not reveal
+// link targets, so a link is a folder only if the server lets us change into it.
+func (f *ftpFS) Stat(p string) (os.FileInfo, error) {
+	info, err := f.Lstat(p)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return info, err
+	}
+	if err = f.client.ChangeDir(p); err != nil {
+		return info, nil
+	}
+	return ftpInfo{&ftp.Entry{Name: path.Base(p), Type: ftp.EntryTypeFolder, Time: info.ModTime()}}, nil
+}
 func (f *ftpFS) Open(p string) (io.ReadCloser, error) {
 	if err := SafePath(p); err != nil {
 		return nil, err
@@ -199,10 +219,22 @@ func (f *ftpFS) Rename(a, b string) error {
 	if err := SafePath(a + b); err != nil {
 		return err
 	}
-	return f.client.Rename(a, b)
+	err := f.client.Rename(a, b)
+	if FTPStatus(err) == 550 {
+		if _, statErr := f.Lstat(b); statErr == nil && exists(f, a) {
+			return replaceError(b, "RNTO refused", err)
+		}
+	}
+	return err
 }
+
+// ErrNoPermissions is FTP's known inability to set permissions.
+var ErrNoPermissions = errors.New("FTP does not provide portable permission preservation")
+
+func exists(f FS, p string) bool { _, err := f.Lstat(p); return err == nil }
+
 func (f *ftpFS) Chmod(string, os.FileMode) error {
-	return errors.New("FTP does not provide portable permission preservation")
+	return ErrNoPermissions
 }
 func (f *ftpFS) Chtimes(p string, t time.Time) error {
 	if err := SafePath(p); err != nil {

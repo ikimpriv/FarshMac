@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"farshmac/internal/fsops"
 	"farshmac/internal/terminal"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,11 @@ func (a *App) toggleOtherView(view string) {
 		a.Status = "Tree view is unavailable inside archives"
 		return
 	}
+	if p.load != nil || p.tree != nil {
+		// The abandoned read must not leave "Reading folder… Esc stops"
+		// behind; the listing is re-read when the file view returns.
+		p.Err = ""
+	}
 	p.cancelTree()
 	p.cancelPanelLoad()
 	if p.View == view {
@@ -38,7 +44,9 @@ func (a *App) toggleOtherView(view string) {
 		p.Hidden = false
 	}
 
-	if p.View == "Tree panel" {
+	// Back in a file or tree view: the folder may have changed (or its read
+	// was abandoned) while Quick view / Info panel was shown.
+	if p.View != "Quick view" && p.View != "Info panel" {
 		a.error(p.Load(p.Path))
 	}
 	a.previewKey = ""
@@ -104,7 +112,7 @@ func (a *App) farPanelKey(m Message) bool {
 			a.error(p.Load(p.Path))
 			return true
 		case "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End":
-			if len(p.Entries) == 0 {
+			if len(p.Entries) == 0 || !a.requireFilePanel() {
 				return true
 			}
 			old := p.Cursor
@@ -160,34 +168,12 @@ func (a *App) farPanelKey(m Message) bool {
 		}
 	}
 	if m.Key == "Insert" && (cmd || m.Alt && m.Shift) {
-		value := a.Command
-		if value == "" || m.Shift || m.Alt {
-			var names []string
-			for _, path := range p.Selected() {
-				if m.Alt {
-					if m.Ctrl {
-						if p.Remote != nil {
-							path = p.Remote.Label() + path
-						} else {
-							resolved, err := filepath.EvalSymlinks(path)
-							if err != nil {
-								a.error(err)
-								return true
-							}
-							path = resolved
-						}
-					}
-					names = append(names, path)
-				} else {
-					names = append(names, filepath.Base(path))
-				}
-			}
-			if len(names) == 0 {
-				names = []string{p.Path}
-			}
-			value = strings.Join(names, "\n")
+		if a.Command != "" && !m.Shift && !m.Alt {
+			value := a.Command
+			a.Clipboard = &value
+			return true
 		}
-		a.Clipboard = &value
+		a.copyPanelNames(m.Alt, m.Alt && m.Ctrl)
 		return true
 	}
 	if !cmd && !m.Alt && !m.Shift && m.Code == "Numpad5" {
@@ -270,17 +256,25 @@ func (a *App) farPanelKey(m Message) bool {
 			a.insertFilename()
 			return true
 		case "f":
-			a.appendPanelValue(p.Current())
+			if a.requireFilePanel() {
+				a.appendPanelValue(p.Current())
+			}
 			return true
 		case ";":
-			a.appendPanelValue(a.Panels[1-a.Active].Current())
+			if other := &a.Panels[1-a.Active]; other.filePanelHidden() {
+				a.Status = "Other panel does not show files"
+			} else {
+				a.appendPanelValue(other.Current())
+			}
 			return true
 		}
 	}
 	if m.Key == "Enter" {
 		if m.Shift {
 			other := &a.Panels[1-a.Active]
-			if len(other.Entries) > 0 {
+			if other.filePanelHidden() {
+				a.Status = "Other panel does not show files"
+			} else if len(other.Entries) > 0 {
 				a.appendPanelValue(other.Entries[other.Cursor].Name)
 			}
 		} else {
@@ -316,7 +310,7 @@ func (a *App) farPanelKey(m Message) bool {
 		return true
 	}
 	if !m.Shift && m.Key == "PageDown" {
-		if len(p.Entries) > 0 && (p.Entries[p.Cursor].Dir || isArchiveName(p.Entries[p.Cursor].Name)) {
+		if len(p.Entries) > 0 && (p.Entries[p.Cursor].Dir || fsops.ArchiveFormat(p.Entries[p.Cursor].Name) != "") {
 			a.enterFile()
 		}
 		return true
@@ -335,14 +329,6 @@ func (a *App) farPanelKey(m Message) bool {
 	if m.Code == "Numpad5" {
 		a.panelSplit = 0
 		return true
-	}
-	return false
-}
-func isArchiveName(name string) bool {
-	for _, suffix := range []string{".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz", ".jar"} {
-		if strings.HasSuffix(strings.ToLower(name), suffix) {
-			return true
-		}
 	}
 	return false
 }

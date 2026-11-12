@@ -14,6 +14,9 @@ type folderSizeResult struct {
 	Stale                   bool
 	Bytes                   int64
 	Files, Dirs, Unreadable int
+	// privacyDenied counts unreadable entries refused by macOS privacy
+	// protection (EPERM); it is not persisted in the size cache.
+	privacyDenied int
 }
 
 func (p *Panel) entrySize(e Entry) int64 {
@@ -29,6 +32,43 @@ func (p *Panel) entrySize(e Entry) int64 {
 	return 0
 }
 func (a *App) folderSize() { a.calculateFolderSizes(false) }
+
+// showsSizeColumn matches drawPanel: only single-column file views have one.
+func (p *Panel) showsSizeColumn() bool {
+	return panelColumns(p) == 1 && p.View != "Tree panel"
+}
+
+// folderSizeFooter is the footer for views without a size column while the
+// cursor is on a folder whose size was calculated.
+func (p *Panel) folderSizeFooter(human bool) (string, bool) {
+	if p.showsSizeColumn() || p.Cursor < 0 || p.Cursor >= len(p.Entries) {
+		return "", false
+	}
+	e := p.Entries[p.Cursor]
+	r, ok := p.folderSizes[e.Name]
+	if !e.Dir || !ok {
+		return "", false
+	}
+	return folderSizeLabel(r, human) + " in " + folderSizeName(e.Name), true
+}
+
+func folderSizeName(name string) string {
+	if name == ".." {
+		return "." // ".." is measured as the current folder
+	}
+	return name
+}
+
+func folderSizeLabel(r folderSizeResult, human bool) string {
+	size := panelSizeLabel(r.Bytes, human)
+	if r.Unreadable > 0 {
+		size = ">=" + size
+	}
+	if r.Stale {
+		size = "~" + size
+	}
+	return size
+}
 func (a *App) calculateFolderSizes(all bool) {
 	if a.Busy || a.closed {
 		return
@@ -86,10 +126,11 @@ func (a *App) calculateFolderSizes(all bool) {
 			for name, r := range p.folderSizes {
 				cache[name] = r
 			}
-			unreadable := 0
+			unreadable, denied := 0, 0
 			for name, r := range results {
 				cache[name] = r
 				unreadable += r.Unreadable
+				denied += r.privacyDenied
 			}
 			p.folderSizes = cache
 			state := p.snapshot()
@@ -103,8 +144,18 @@ func (a *App) calculateFolderSizes(all bool) {
 				}
 			}
 			a.Status = fmt.Sprintf("Calculated %d folders", len(results))
+			// Views without a size column show the measured folder here.
+			if !p.showsSizeColumn() && p.Cursor < len(p.Entries) {
+				name := p.Entries[p.Cursor].Name
+				if r, ok := results[name]; ok {
+					a.Status += fmt.Sprintf(" · %s: %s (%d files, %d dirs)", folderSizeName(name), folderSizeLabel(r, a.Settings.HumanReadableSizes), r.Files, r.Dirs)
+				}
+			}
 			if unreadable > 0 {
 				a.Status += fmt.Sprintf("; %d unreadable entries (>= means partial size)", unreadable)
+				if denied == unreadable && remote == nil && archive == nil {
+					a.Status += " · " + diskAccessHint
+				}
 			}
 			if stopped != nil {
 				a.Status += " · " + stopped.Error()
@@ -212,6 +263,9 @@ func measureFolder(root string, o *fsops.Operation, walk sizeWalker) (r folderSi
 		}
 		if e != nil {
 			r.Unreadable++
+			if _, hint := describeReadError(path, e); hint != "" {
+				r.privacyDenied++
+			}
 			return nil
 		}
 		if d.IsDir() {

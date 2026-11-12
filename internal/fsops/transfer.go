@@ -41,6 +41,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 	}
 	src, _ = filepath.Abs(src)
 	dst, _ = filepath.Abs(dst)
+	o.ensureRoots(src)
 	si, e := os.Lstat(src)
 	if e != nil {
 		return e
@@ -68,12 +69,27 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		}
 	}
 	di, e := os.Lstat(dst)
+	if e == nil && di.Mode()&os.ModeSymlink != 0 && !os.SameFile(si, di) {
+		// A link to a directory acts as that directory: merge into it, never replace it.
+		if target, err := os.Stat(dst); err == nil && target.IsDir() {
+			if si.IsDir() {
+				if real, err := filepath.EvalSymlinks(dst); err == nil {
+					rel, _ := filepath.Rel(realSrc, real)
+					if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+						return fmt.Errorf("destination is inside source")
+					}
+				}
+			}
+			di = target
+		}
+	}
 	if os.IsNotExist(e) {
 		if move {
 			e = Move(src, dst)
 			if !errors.Is(e, syscall.EXDEV) {
 				if e == nil {
 					o.CompleteTree(src)
+					e = o.relinkMoved(src, dst, si)
 				}
 				return e
 			}
@@ -88,6 +104,16 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		return e
 	}
 	if src == dst || os.SameFile(si, di) {
+		if move && caseOnlyRename(src, dst, si) {
+			// A case-insensitive volume resolved the new spelling to the source.
+			if e = os.Rename(src, dst); e == nil {
+				o.CompleteTree(src)
+			}
+			return e
+		}
+		if !move {
+			return fmt.Errorf("cannot copy a file onto itself: %s", dst)
+		}
 		return fmt.Errorf("source and destination are the same file")
 	}
 	if si.IsDir() && di.IsDir() {
@@ -111,7 +137,18 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		}
 		return nil
 	}
-	resolution := o.Resolve(Collision{src, dst, si, di}, conflict)
+	collision := Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}
+	if si.Mode()&os.ModeSymlink != 0 {
+		collision.SourceLink, _ = os.Readlink(src)
+		_, statErr := os.Stat(src)
+		collision.SourceBroken = statErr != nil
+	}
+	if di.Mode()&os.ModeSymlink != 0 {
+		collision.DestinationLink, _ = os.Readlink(dst)
+		_, statErr := os.Stat(dst)
+		collision.DestinationBroken = statErr != nil
+	}
+	resolution := o.Resolve(collision, conflict)
 	switch resolution.Action {
 	case Skip:
 		o.SkipItem(src)
@@ -141,6 +178,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		if e = os.Rename(src, dst); !errors.Is(e, syscall.EXDEV) {
 			if e == nil {
 				o.CompleteTree(src)
+				e = o.relinkMoved(src, dst, si)
 			}
 			return e
 		}
@@ -152,7 +190,7 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 	}
 	defer os.RemoveAll(stage)
 	tmp := filepath.Join(stage, "item")
-	if e = Copy(src, tmp, o); e != nil {
+	if e = o.copyStaged(src, tmp, dst); e != nil {
 		return e
 	}
 	current, e := os.Lstat(dst)
@@ -181,13 +219,88 @@ func moveAcrossVolumes(src, dst string, o *Operation) error {
 	previous := o.moving
 	o.moving = true
 	defer func() { o.moving = previous }()
+	o.ensureRoots(src)
 	if err := o.Scan([]string{src}); err != nil {
 		return err
 	}
-	if err := Copy(src, dst, o); err != nil {
+	return moveEntryAcross(src, dst, o)
+}
+
+// moveEntryAcross moves one file at a time, like F5 copies: Retry repeats only
+// the failed file and Skip leaves only that file in the source. Folders are
+// created by the walk, receive their metadata after their contents, and are
+// removed from the source only when empty.
+func moveEntryAcross(src, dst string, o *Operation) error {
+	if err := o.Check(); err != nil {
 		return err
 	}
-	return o.Attempt("delete source", src, "", func() error { return Remove(src, o) })
+	var info os.FileInfo
+	err := o.Attempt("move", src, dst, func() error { var e error; info, e = os.Lstat(src); return e })
+	if err != nil {
+		return IgnoreSkipped(err)
+	}
+	if !info.IsDir() {
+		return IgnoreSkipped(o.Attempt("move", src, dst, func() error {
+			if err := copyEntry(src, dst, o); err != nil {
+				return err
+			}
+			return o.Attempt("delete source", src, "", func() error { return os.Remove(src) })
+		}))
+	}
+	if err = o.Attempt("create folder", src, dst, func() error { return os.Mkdir(dst, 0700) }); err != nil {
+		return IgnoreSkipped(err)
+	}
+	err = ReadDirectory(src, o, func(entry os.DirEntry) error {
+		return moveEntryAcross(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()), o)
+	})
+	if err != nil && !errors.Is(err, ErrSkipped) {
+		if empty, _ := readOne(dst); len(empty) == 0 {
+			_ = os.Remove(dst) // Nothing was moved into it yet.
+		}
+		return err
+	}
+	if errors.Is(err, ErrSkipped) {
+		return nil // An unreadable source folder stays where it is.
+	}
+	if err = o.preserveMetadata(src, dst); err != nil {
+		// The moved contents stay; the source folder is kept as a marker.
+		return IgnoreSkipped(err)
+	}
+	o.Complete(src)
+	if err = o.Check(); err != nil {
+		return err
+	}
+	remaining, err := readOne(src)
+	if err != nil || len(remaining) > 0 {
+		return err
+	}
+	return IgnoreSkipped(o.Attempt("delete source folder", src, "", func() error { return os.Remove(src) }))
+}
+
+// caseOnlyRename reports whether dst names the source entry itself in another
+// letter case. Two hard links whose names differ only by case are distinct
+// entries and remain a collision.
+func caseOnlyRename(src, dst string, si os.FileInfo) bool {
+	if src == dst || filepath.Dir(src) != filepath.Dir(dst) || !strings.EqualFold(filepath.Base(src), filepath.Base(dst)) {
+		return false
+	}
+	if st, ok := si.Sys().(*syscall.Stat_t); ok && !si.IsDir() && st.Nlink > 1 {
+		f, err := os.Open(filepath.Dir(dst))
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		names, err := f.Readdirnames(-1)
+		if err != nil {
+			return false
+		}
+		for _, name := range names {
+			if name == filepath.Base(dst) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func readOne(path string) ([]os.DirEntry, error) {

@@ -48,7 +48,7 @@ func (a *App) operationQuestions(o *fsops.Operation) {
 		if o.Check() != nil {
 			return fsops.ErrorCancel
 		}
-		if skipErrors {
+		if skipErrors && !f.Fatal {
 			return fsops.ErrorSkip
 		}
 		message := "Cannot " + f.Operation + "\n" + f.Source
@@ -56,6 +56,13 @@ func (a *App) operationQuestions(o *fsops.Operation) {
 			message += "\nTo: " + f.Destination
 		}
 		message += "\n\n" + f.Err.Error()
+		if f.Fatal {
+			// Nothing can be skipped when the operation itself cannot start.
+			if a.operationChoice(o, "Error", message, []string{"Retry", "Cancel"}) == 0 {
+				return fsops.ErrorRetry
+			}
+			return fsops.ErrorCancel
+		}
 		choice := a.operationChoice(o, "Error", message, []string{"Retry", "Skip", "Skip all", "Cancel"})
 		switch choice {
 		case 0:
@@ -120,9 +127,18 @@ func (a *App) collisionQuestions(o *fsops.Operation, ask bool) {
 			action = -1
 		}
 		destination := c.Destination
+		// A file never replaces a folder (or a link to one) and vice versa.
+		canReplace := c.SourceInfo == nil || c.DestinationInfo == nil || c.SourceInfo.IsDir() == c.DestinationInfo.IsDir()
+		if action == fsops.Replace && !canReplace && ask {
+			action = -1
+		}
 		if action < 0 {
-			buttons := []string{"Overwrite", "Skip", "Rename"}
-			actions := []int{fsops.Replace, fsops.Skip, fsops.Rename}
+			buttons := []string{"Skip", "Rename"}
+			actions := []int{fsops.Skip, fsops.Rename}
+			if canReplace {
+				buttons = append([]string{"Overwrite"}, buttons...)
+				actions = append([]int{fsops.Replace}, actions...)
+			}
 			if canAppend {
 				buttons = append(buttons, "Append")
 				actions = append(actions, fsops.Append)
@@ -141,7 +157,19 @@ func (a *App) collisionQuestions(o *fsops.Operation, ask bool) {
 				if o.Check() != nil {
 					return
 				}
-				message := "The file already exists\n" + c.Destination + "\n\n" + fileComparison("New", c.SourceInfo) + "\n" + fileComparison("Existing", c.DestinationInfo)
+				existing := fileComparison("Existing", c.DestinationInfo)
+				if c.DestinationBroken {
+					existing = "Existing: broken link → " + c.DestinationLink
+				} else if c.DestinationInfo != nil && c.DestinationInfo.Mode()&os.ModeSymlink != 0 {
+					existing = "Existing: symbolic link → " + c.DestinationLink
+				}
+				incoming := fileComparison("New", c.SourceInfo)
+				if c.SourceBroken {
+					incoming = "New: broken link → " + c.SourceLink
+				} else if c.SourceInfo != nil && c.SourceInfo.Mode()&os.ModeSymlink != 0 {
+					incoming = "New: symbolic link → " + c.SourceLink
+				}
+				message := "The file already exists\n" + c.Destination + "\n\n" + incoming + "\n" + existing
 				a.confirm("Warning", message, buttons, func(i int) {})
 				form := a.Form
 				form.Remember = true

@@ -339,10 +339,31 @@ func CreateArchive(paths []string, dst string, ops ...*Operation) error {
 	}
 	return os.Link(f.Name(), dst)
 }
+
+// CreatableArchive reports whether CreateArchive can write this format.
+func CreatableArchive(name string) bool {
+	switch ArchiveFormat(name) {
+	case "zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "7z":
+		return true
+	}
+	return false
+}
+
+// openArchiveSource opens a file before its header is written, so a skipped
+// unreadable file is simply left out of the archive.
+func openArchiveSource(path string, o *Operation) (*os.File, error) {
+	var in *os.File
+	err := o.Attempt("read", path, "", func() error { var e error; in, e = os.Open(path); return e })
+	return in, err
+}
+
 func writeArchiveSources(w *tar.Writer, paths []string, o *Operation) error {
 	count := 0
 	for _, root := range paths {
 		err := WalkDir(root, o, func(path string, d fs.DirEntry, err error) error {
+			if errors.Is(err, ErrSkipped) {
+				return nil // An unreadable folder the user chose to skip stays empty.
+			}
 			if err != nil {
 				return err
 			}
@@ -367,6 +388,15 @@ func writeArchiveSources(w *tar.Writer, paths []string, o *Operation) error {
 					return err
 				}
 			}
+			var in *os.File
+			if info.Mode().IsRegular() {
+				if in, err = openArchiveSource(path, o); errors.Is(err, ErrSkipped) {
+					return nil
+				} else if err != nil {
+					return err
+				}
+				defer in.Close()
+			}
 			h, err := tar.FileInfoHeader(info, target)
 			if err != nil {
 				return err
@@ -381,14 +411,8 @@ func writeArchiveSources(w *tar.Writer, paths []string, o *Operation) error {
 				return err
 			}
 			o.Begin(path, info.Size())
-			if info.Mode().IsRegular() {
-				in, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				_, err = copyProgress(w, in, o)
-				in.Close()
-				if err != nil {
+			if in != nil {
+				if _, err = copyProgress(w, in, o); err != nil {
 					return err
 				}
 			}

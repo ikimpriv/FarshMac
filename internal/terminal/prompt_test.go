@@ -31,7 +31,7 @@ func TestPromptModePreservesProfile(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer s.Close()
+				defer closeAndWait(s)
 				waitReady(t, s)
 				_, err = os.Stat(marker)
 				if custom && err != nil {

@@ -9,11 +9,14 @@ func (o *Operation) Fork(ctx context.Context) *Operation {
 	child.parent = o
 	child.ctx = ctx
 	child.IgnoreDSStore = o.IgnoreDSStore
+	child.Symlinks = o.Symlinks
+	child.roots = o.roots
 	if o.CopyMetadata != nil {
 		options := *o.CopyMetadata
 		child.CopyMetadata = &options
 	}
 	child.MetadataFailure = o.MetadataFailure
+	child.MetadataLimitation = o.MetadataLimitation
 	child.Failure = o.Failure
 	child.BeforeDelete = o.BeforeDelete
 	child.Collision = o.Collision

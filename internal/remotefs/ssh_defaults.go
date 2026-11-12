@@ -73,7 +73,7 @@ func defaultPrivateKeys(c Config, home string) ([]ssh.Signer, string, error) {
 	if c.KeyFile != "" {
 		key, err := readPrivateKey(c.KeyFile, c.KeyPassphrase)
 		if err != nil {
-			return nil, "", fmt.Errorf("cannot read SSH private key %s: %w", c.KeyFile, err)
+			return nil, "", &KeyFileError{c.KeyFile, err}
 		}
 		return []ssh.Signer{key}, "", nil
 	}

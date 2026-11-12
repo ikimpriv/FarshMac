@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"farshmac/internal/remotefs"
 )
 
 func waitOperationQuestion(t *testing.T, a *App, title string) {
@@ -219,6 +222,7 @@ func TestReadOnlyCollisionAndDeleteCanSkip(t *testing.T) {
 	selectEntry(t, &a.Panels[1], "file")
 	a.Settings.ConfirmDelete = false
 	a.key(Message{Key: "F8", Shift: true})
+	chooseOperation(t, a, "Delete") // Permanent deletion always confirms.
 	waitOperationQuestion(t, a, "Warning")
 	chooseOperation(t, a, "Skip")
 	waitWork(t, a)
@@ -249,6 +253,73 @@ func TestErrorDialogLongMessageAndMouseCheckbox(t *testing.T) {
 		t.Fatal("long error not scrollable")
 	}
 	a.Draw()
+}
+
+func TestFatalStepOffersOnlyRetryAndCancel(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires unprivileged user")
+	}
+	left, right := t.TempDir(), t.TempDir()
+	if e := os.WriteFile(filepath.Join(left, "file"), []byte("data"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	locked := filepath.Join(right, "locked")
+	if e := os.Mkdir(locked, 0); e != nil {
+		t.Fatal(e)
+	}
+	defer os.Chmod(locked, 0700)
+	a, e := New(left, right)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "file")
+	a.key(Message{Key: "F5"})
+	a.Form.Fields[0].Value = filepath.Join(locked, "inner", "file")
+	a.key(Message{Key: "Enter"})
+	waitOperationQuestion(t, a, "Error")
+	if strings.Join(a.Form.Choice, ",") != "Retry,Cancel" || !strings.Contains(a.Form.Message, "Cannot read destination") {
+		t.Fatalf("fatal step choices %q: %s", a.Form.Choice, a.Form.Message)
+	}
+	chooseOperation(t, a, "Cancel")
+	waitWork(t, a)
+	if strings.HasPrefix(a.Status, "Done") {
+		t.Fatal("failed step reported as done:", a.Status)
+	}
+}
+
+func TestConnectSkipDoesNotReportDone(t *testing.T) {
+	l, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close() // Nothing listens: every connection attempt is refused.
+	left := t.TempDir()
+	if e := os.WriteFile(filepath.Join(left, "file"), []byte("data"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	a, e := New(left, t.TempDir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	a.Panels[1].Remote = &remotefs.Config{Protocol: "ftp", Host: "127.0.0.1", Port: port, User: "test", Directory: "/"}
+	a.Panels[1].Path = "/"
+	selectEntry(t, &a.Panels[0], "file")
+	a.key(Message{Key: "F5"})
+	a.key(Message{Key: "Enter"})
+	waitOperationQuestion(t, a, "Error")
+	for _, choice := range a.Form.Choice {
+		if strings.HasPrefix(choice, "Skip") {
+			t.Fatalf("connect offers %q", a.Form.Choice)
+		}
+	}
+	chooseOperation(t, a, "Cancel")
+	waitWork(t, a)
+	if strings.HasPrefix(a.Status, "Done") {
+		t.Fatal("failed connection reported as done:", a.Status)
+	}
 }
 
 func TestConfirmationShowsLastErrorAndBothSizes(t *testing.T) {

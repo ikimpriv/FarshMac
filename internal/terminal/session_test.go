@@ -59,7 +59,7 @@ func TestPTYInteractiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer closeAndWait(s)
 	waitReady(t, s)
 	if err = s.Write("test -t 0 && test -t 1 && export FARSHMAC_TEST_VALUE=alive; printf 'PTY_OK:%s\\n' $FARSHMAC_TEST_VALUE\r"); err != nil {
 		t.Fatal(err)
