@@ -71,13 +71,16 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		if err == nil {
 			return
 		}
+		// A worker stopped by our own cancel() must not turn the first real
+		// error into a user cancellation of the whole operation.
+		stopped := ctx.Err() != nil
 		errMu.Lock()
 		if first == nil {
 			first = err
 		}
 		errMu.Unlock()
 		cancel()
-		if errors.Is(err, fsops.ErrCancelled) {
+		if errors.Is(err, fsops.ErrCancelled) && !stopped {
 			o.Cancel()
 		}
 	}
@@ -228,6 +231,9 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			a, b := path.Clean(pair.Source), path.Clean(pair.Destination)
 			if a == b || strings.HasPrefix(b, a+"/") {
 				err = fmt.Errorf("destination is inside source")
+				if info, e := scan.Lstat(pair.Source); a == b && e == nil && !info.IsDir() {
+					err = fmt.Errorf("cannot copy a file onto itself: %s", a)
+				}
 				break
 			}
 		}

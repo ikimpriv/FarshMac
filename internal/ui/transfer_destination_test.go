@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
 	"farshmac/internal/testnet"
 )
@@ -84,6 +86,55 @@ func TestTrailingSlashCreatesContainer(t *testing.T) {
 				t.Fatal("existing file changed", err)
 			}
 		})
+	}
+}
+
+func TestCopyOntoItselfMessages(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "file")
+	a.key(Message{Key: "F5"})
+	a.key(Message{Key: "Enter"}) // Both panels show the same folder: the suggestion is the file itself.
+	if a.Busy || a.Form != nil || a.Status != "cannot copy a file onto itself: "+filepath.Join(root, "file") {
+		t.Fatalf("busy=%v form=%+v status=%q", a.Busy, a.Form, a.Status)
+	}
+	selectEntry(t, &a.Panels[0], "dir")
+	a.key(Message{Key: "F5"})
+	a.key(Message{Key: "Enter"})
+	waitWork(t, a)
+	if a.Form == nil || !strings.Contains(a.Form.Message, "destination is inside source") {
+		t.Fatalf("folder onto itself: form=%+v status=%q", a.Form, a.Status)
+	}
+}
+
+func TestRemoteCopyOntoItselfMessage(t *testing.T) {
+	c := testnet.SFTP(t)
+	f, err := c.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w, err := f.Create("/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	o := fsops.NewOperation("Copy")
+	defer o.Cancel()
+	end := remotefs.Endpoint{Remote: &c}
+	err = remotefs.Copy(end, end, []remotefs.Pair{{Source: "/file", Destination: "/file"}}, remotefs.CopyOptions{Workers: 1}, o)
+	if err == nil || !strings.Contains(err.Error(), "cannot copy a file onto itself: /file") {
+		t.Fatal(err)
 	}
 }
 

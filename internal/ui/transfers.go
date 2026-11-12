@@ -50,6 +50,10 @@ func (a *App) transferDialog(move bool) {
 		}
 		workers := max(1, min(8, a.Settings.CopyWorkers))
 		dst := expand(s, base)
+		if !move && catalog == nil && len(paths) == 1 && dst == filepath.Clean(paths[0]) && sourceEndpoint.Same(targetEndpoint) && !selectedDir(p, paths[0]) {
+			a.Status = "cannot copy a file onto itself: " + dst // As in Far: no operation, no dialog.
+			return
+		}
 		ask := a.Settings.ConfirmOverwrite
 		a.workProgress(label, func(o *fsops.Operation) error {
 			if move {
@@ -294,6 +298,15 @@ func (a *App) archiveCommands() {
 			a.task.reportError = true
 		}
 	})
+}
+
+func selectedDir(p *Panel, path string) bool {
+	for _, e := range p.Entries {
+		if e.Name == filepath.Base(path) {
+			return e.Dir
+		}
+	}
+	return false
 }
 
 // caseRename: on a case-insensitive volume "Folder" → "folder" finds the source
