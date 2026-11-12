@@ -238,6 +238,23 @@ func (a *App) formPaste(s string) {
 	if field.Toggle {
 		return
 	}
+	if field.Secret {
+		s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	} else {
+		// Form fields are single-line: a trailing line break is dropped and
+		// inner ones become spaces, like other control characters.
+		s = strings.TrimRight(s, "\r\n")
+		if strings.ContainsAny(s, "\r\n") {
+			a.Status = "Pasted as a single line"
+		}
+		s = strings.ReplaceAll(s, "\r\n", " ")
+		s = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, s)
+	}
 	if f.Selected {
 		field.Value = ""
 		f.Cursor = 0
