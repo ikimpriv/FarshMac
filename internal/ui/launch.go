@@ -165,8 +165,10 @@ func (a *App) enterFile() {
 		if len(p.Entries) == 0 {
 			return
 		}
-		if p.Entries[p.Cursor].Dir {
+		if e := p.Entries[p.Cursor]; e.Dir {
 			a.error(p.Load(p.Current()))
+		} else if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
+			a.enterRemoteLink()
 		} else {
 			a.openRemoteDocument(false)
 		}

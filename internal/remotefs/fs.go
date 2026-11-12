@@ -94,6 +94,12 @@ type FS interface {
 	Close() error
 }
 
+// Stater is implemented by filesystems that can follow symbolic links, so a
+// link to a folder can be told apart from a link to a file.
+type Stater interface {
+	Stat(string) (os.FileInfo, error)
+}
+
 func (c Config) Dial(ctx context.Context) (FS, error) {
 	if c.Protocol == "sftp" {
 		return c.dialSFTP(ctx)

@@ -119,6 +119,7 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 }
 func (f *sftpFS) ReadDir(p string) ([]os.FileInfo, error) { return f.client.ReadDirContext(f.ctx, p) }
 func (f *sftpFS) Lstat(p string) (os.FileInfo, error)     { return f.client.Lstat(p) }
+func (f *sftpFS) Stat(p string) (os.FileInfo, error)      { return f.client.Stat(p) }
 func (f *sftpFS) Open(p string) (io.ReadCloser, error)    { return f.client.Open(p) }
 func (f *sftpFS) Create(p string) (io.WriteCloser, error) {
 	return f.client.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
