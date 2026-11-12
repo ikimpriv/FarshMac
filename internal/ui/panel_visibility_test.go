@@ -228,6 +228,48 @@ func TestCopyCommandMatchesControlInsert(t *testing.T) {
 	}
 }
 
+func TestQuickViewToggleBackReloadsPanel(t *testing.T) {
+	a, _ := visibilityFixture(t)
+	right := a.Panels[1].Path
+	a.key(Message{Key: "q", Ctrl: true})
+	if err := os.WriteFile(filepath.Join(right, "new.txt"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.key(Message{Key: "q", Ctrl: true})
+	found := false
+	for _, e := range a.Panels[1].Entries {
+		found = found || e.Name == "new.txt"
+	}
+	if !found {
+		t.Fatal("file created during Quick view not shown")
+	}
+}
+
+func TestQuickViewDuringPendingLoadDoesNotStrandPanel(t *testing.T) {
+	left, right := t.TempDir(), t.TempDir()
+	for i := 0; i < 50; i++ {
+		if err := os.WriteFile(filepath.Join(right, strings.Repeat("f", i+1)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := NewAsync(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	waitPanels(t, a)
+	a.error(a.Panels[1].Load(right))
+	a.key(Message{Key: "q", Ctrl: true})
+	if a.Panels[1].load != nil || strings.HasPrefix(a.Panels[1].Err, "Reading") {
+		t.Fatal("abandoned read left behind", a.Panels[1].Err)
+	}
+	a.key(Message{Key: "q", Ctrl: true})
+	waitPanels(t, a)
+	if p := &a.Panels[1]; len(p.Entries) != 51 || p.Err != "" {
+		t.Fatal("panel stranded after Quick view", len(p.Entries), p.Err)
+	}
+}
+
 func TestFolderShortcutKeepsRememberedPositions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	a, left := visibilityFixture(t)

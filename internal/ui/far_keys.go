@@ -22,6 +22,11 @@ func (a *App) toggleOtherView(view string) {
 		a.Status = "Tree view is unavailable inside archives"
 		return
 	}
+	if p.load != nil || p.tree != nil {
+		// The abandoned read must not leave "Reading folder… Esc stops"
+		// behind; the listing is re-read when the file view returns.
+		p.Err = ""
+	}
 	p.cancelTree()
 	p.cancelPanelLoad()
 	if p.View == view {
@@ -38,7 +43,9 @@ func (a *App) toggleOtherView(view string) {
 		p.Hidden = false
 	}
 
-	if p.View == "Tree panel" {
+	// Back in a file or tree view: the folder may have changed (or its read
+	// was abandoned) while Quick view / Info panel was shown.
+	if p.View != "Quick view" && p.View != "Info panel" {
 		a.error(p.Load(p.Path))
 	}
 	a.previewKey = ""

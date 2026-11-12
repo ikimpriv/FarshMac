@@ -193,6 +193,11 @@ func (a *App) togglePanel(index int) {
 	if a.Panels[index].Hidden && a.Active == index && !a.Panels[1-index].Hidden {
 		a.Active = 1 - index
 	}
+	// A read abandoned while hidden would otherwise strand the panel with
+	// only ".." and "Reading folder…" in its footer.
+	if p := &a.Panels[index]; !p.Hidden && p.load == nil && p.tree == nil && strings.HasPrefix(p.Err, "Reading ") {
+		a.error(p.Load(p.Path))
+	}
 }
 
 func (a *App) rereadPanel(index int) {
