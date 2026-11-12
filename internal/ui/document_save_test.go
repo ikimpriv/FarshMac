@@ -765,11 +765,28 @@ func TestRemoteSymlinkToFileOpensInViewer(t *testing.T) {
 	}
 	a.finishCloseDocument()
 	waitNetwork(t, a)
+	// Listings resolve folder links (P1-05), so the entry is a folder and
+	// the document path is never reached; the resolver still refuses it.
 	selectEntry(t, p, "sublink")
+	if !p.Entries[p.Cursor].Dir {
+		t.Fatal("folder link not listed as folder")
+	}
 	a.openRemoteDocument(false)
 	waitNetwork(t, a)
-	if a.Doc != nil || a.Status != "sublink is a link to a folder" {
-		t.Fatal("remote link to folder", a.Status)
+	if a.Doc != nil {
+		t.Fatal("remote link to folder opened", a.Status)
+	}
+	f, err = c.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Lstat("/folder/sublink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = resolveRemoteLink(f, "/folder/sublink", info); err == nil || err.Error() != "sublink is a link to a folder" {
+		t.Fatal("resolver", err)
 	}
 }
 
