@@ -178,7 +178,7 @@ func (p *Panel) beginLoad(abs string) panelState {
 		}
 	}
 	if changed {
-		p.History = appendUnique(p.History, abs, 200)
+		p.History = appendUnique(p.History, p.historyEntry(abs), 200)
 	}
 	p.Path = abs
 	p.Entries = nil

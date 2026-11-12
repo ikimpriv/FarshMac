@@ -142,8 +142,9 @@ func (a *App) saveSetup() {
 					a.Settings.RemoteConnections[i].Directory = p.Path
 				}
 			}
-			continue
 		}
+		// History entries carry their source (see historyEntry); remote
+		// entries hold only the password-free connection label.
 		for _, path := range p.History {
 			a.folderHistory = appendUnique(a.folderHistory, path, a.Settings.HistoryLimit)
 		}

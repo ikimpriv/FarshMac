@@ -232,7 +232,7 @@ func (a *App) historyMenu(kind string) {
 	}
 	a.folderHistory = paths
 	reverse(paths)
-	a.choose("Folder history", paths, func(i int) { a.error(a.Panels[a.Active].Load(paths[i])) })
+	a.choose("Folder history", paths, func(i int) { a.goFolderHistory(paths[i]) })
 }
 func reverse(s []string) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
