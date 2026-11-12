@@ -137,7 +137,7 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		a.error(err)
+		a.openFailed(path, edit, err)
 		return
 	}
 	if info.IsDir() {

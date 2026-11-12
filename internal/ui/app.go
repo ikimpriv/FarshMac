@@ -601,6 +601,11 @@ func (a *App) Handle(raw string) {
 			return
 		}
 		if a.Doc != nil && a.Doc.Edit && a.Dialog == nil {
+			if a.Doc.ReadOnly {
+				a.Status = "Read-only mode (⌘L to unlock)"
+				a.dirty = true
+				return
+			}
 			a.Doc.Insert(m.Text)
 			a.Doc.modified()
 			return

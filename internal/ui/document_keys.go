@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -73,8 +74,15 @@ func (a *App) editorKey(m Message) {
 		}
 		return
 	case "Insert":
-		d.Overwrite = !d.Overwrite
+		if !m.Shift && !m.Alt {
+			d.Overwrite = !d.Overwrite
+		}
 		return
+	case "Delete":
+		if m.Shift && !cmd && !m.Alt {
+			a.copyDocument(true) // Far: Shift+Del cuts, Ctrl+Ins copies.
+			return
+		}
 	}
 	if d.ReadOnly {
 		a.Status = "Read-only mode (⌘L to unlock)"
@@ -287,11 +295,11 @@ func (a *App) viewerKey(m Message) {
 	d.ViewStart = d.At(d.Offset, 0)
 }
 func (a *App) adjacentFile(next bool) {
-	if a.Doc.ArchiveSource {
+	p := &a.Panels[a.Active]
+	if a.Doc.ArchiveSource || p.Archive != nil {
 		a.Status = "Return to the archive panel to choose another file"
 		return
 	}
-	p := &a.Panels[a.Active]
 	index := p.Cursor
 	step := -1
 	if next {
@@ -301,28 +309,32 @@ func (a *App) adjacentFile(next bool) {
 		if !p.Entries[i].Dir {
 			old := a.Doc
 			target := i
+			name := p.Entries[target].Name
+			replace := func(d *Document) {
+				releaseDocument(old)
+				if a.Doc == old {
+					a.Doc = nil
+				}
+				p.Cursor = target
+				a.showDocument(d)
+			}
 			proceed := func() {
-				if a.Async {
-					path := filepath.Join(p.Path, p.Entries[target].Name)
-					a.openDocumentAsync(path, false, func(d *Document) {
-						if old.File != nil {
-							old.File.Close()
-						}
-						a.Doc = nil
-						p.Cursor = target
-						a.showDocument(d)
-					})
+				if p.Remote != nil {
+					a.downloadRemoteDocument(*p.Remote, filepath.Join(p.Path, name), false, replace, nil)
 					return
 				}
-				a.Doc = nil
-				p.Cursor = target
-				a.open(false)
-				if a.Doc == nil {
-					a.Doc = old
-					p.Cursor = index
-				} else if old.File != nil {
-					old.File.Close()
+				path := filepath.Join(p.Path, name)
+				if a.Async {
+					a.openDocumentAsync(path, false, replace)
+					return
 				}
+				d, err := a.loadDocument(path, false)
+				if err != nil {
+					a.openFailed(path, false, err)
+					return
+				}
+				a.recordView(d.Path, false)
+				a.presentDocument(d, replace)
 			}
 			if old.Dirty {
 				a.confirm("Save changes", "Save changes before viewing the next file?", []string{"Save", "Discard", "Cancel"}, func(choice int) {
@@ -342,4 +354,19 @@ func (a *App) adjacentFile(next bool) {
 		}
 	}
 	a.Status = fmt.Sprintf("No %s file", map[bool]string{true: "next", false: "previous"}[next])
+}
+
+// releaseDocument frees what a replaced document holds outside memory.
+func releaseDocument(d *Document) {
+	if d == nil {
+		return
+	}
+	if d.File != nil {
+		d.File.Close()
+		d.File = nil
+	}
+	if d.TempDir != "" {
+		os.RemoveAll(d.TempDir)
+		d.TempDir = ""
+	}
 }

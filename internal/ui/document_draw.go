@@ -88,11 +88,15 @@ func (d *Document) previousVisualStart(width int) int {
 }
 func (a *App) binaryWidth() int {
 	d := a.Doc
+	if d.Mode == "dump" {
+		// Dump uses one column per byte; the hex ceiling does not apply.
+		if d.BytesPerLine > 0 {
+			return max(1, min(d.BytesPerLine, a.Cols-14))
+		}
+		return max(1, a.Cols-14)
+	}
 	if d.BytesPerLine > 0 {
 		return min(d.BytesPerLine, max(1, (a.Cols-14)/4))
-	}
-	if d.Mode == "dump" {
-		return max(1, a.Cols-14)
 	}
 	return max(1, min(16, (a.Cols-14)/4))
 }
@@ -124,6 +128,9 @@ func (a *App) drawDoc(g *Grid) {
 	if d.Dirty {
 		mode += " *"
 	}
+	if d.readError {
+		mode += " !"
+	}
 	pos := d.Pos(d.Cursor)
 	title := fmt.Sprintf(" %s  %s  %s %s  Ln %d Col %d", filepathLabel(d.displayPath()), mode, d.Codepage, d.EOL, pos.Row+1, pos.Col+1)
 	if a.Settings.EditorSyntax && a.syntax.doc == d && a.syntax.status != "" {
@@ -138,6 +145,9 @@ func (a *App) drawDoc(g *Grid) {
 	}
 	if !d.Edit && d.Mode != "text" {
 		a.drawBinary(g, top, height)
+		if d.readError && d.notice != "" {
+			a.pagedReadFailed(d)
+		}
 	} else {
 		if d.Edit && !d.ManualScroll {
 			if pos.Row < d.Offset {
