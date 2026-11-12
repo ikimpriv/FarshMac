@@ -63,7 +63,7 @@ func (a *App) menuSections() []menuSection {
 			{"Panels on/off / terminal", "⌘O", a.showTerminal},
 			{"Compare folders", "", a.compareFolders}, {"User menu", "F2", a.userMenu}, {"Edit user menu…", "", a.editUserMenu},
 			{"File associations…", "", a.fileAssociations}, {"Folder shortcuts…", "⌃1…9", a.folderShortcuts}, {"Edit sort groups…", "", settings("Sort groups")},
-			{"File panel filter…", "", func() { a.filterPanel(a.Active) }}, {"Screens list", "F12", a.screenMenu},
+			{"File panel filter…", "", func() { a.filterPanel(a.Active) }}, {"Screens list", "F12", a.screenMenu}, {"Last messages…", "", a.showMessages},
 			{"Full screen", "⌃⌘F", func() { a.Fullscreen = true }}, {"Task list", "", a.taskList}, {"Mounted volumes", "", func() { a.volumes(a.Active) }},
 			{"Insert filename", "⌘Enter", a.insertFilename}, {"Quit", "⌘Q", a.RequestQuit},
 		}},

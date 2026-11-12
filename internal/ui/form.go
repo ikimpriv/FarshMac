@@ -46,6 +46,7 @@ type formState struct {
 	autoSaveDone   bool        // Save setup on exit already ran for this window
 	activePrompt   *promptSpec // prompt whose Confirm is running
 	promptRejected bool        // the running prompt was reopened by validation
+	statusLog
 }
 
 // reopenForm shows a form again after its Submit rejected the values, keeping

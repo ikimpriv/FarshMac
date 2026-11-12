@@ -6,6 +6,7 @@ import (
 
 func (a *App) Draw() *Grid {
 	g := NewGrid(a.Cols, a.Rows)
+	a.recordStatus()
 	g.Fill(0, 0, g.W, 1, Black, Cyan)
 	for _, section := range a.menuSections() {
 		g.Text(section.X, 0, section.Name, Black, Cyan, len(section.Name))
@@ -27,7 +28,7 @@ func (a *App) Draw() *Grid {
 	if status == "" {
 		status = "Tab Switch panel   Space Select   ⌘O Terminal   ⌘1…9 Function keys"
 	}
-	g.Text(0, g.H-3, status, Gray, Black, g.W)
+	g.Text(0, g.H-3, fitStatus(status, g.W), Gray, Black, g.W)
 	promptPath := a.Panels[a.Active].Path
 	if a.Panels[a.Active].Remote != nil {
 		promptPath = "local:" + a.Panels[a.Active].filesystemPath()

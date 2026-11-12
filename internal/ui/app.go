@@ -1171,6 +1171,10 @@ func (a *App) click(m Message) {
 		a.menuClick(m)
 		return
 	}
+	if m.Y == a.Rows-3 && m.Button == 0 && a.Status != "" {
+		a.showMessages()
+		return
+	}
 	if m.Y == a.Rows-1 && m.Button == 0 {
 		if !a.Settings.ShowKeys {
 			return
@@ -1224,7 +1228,7 @@ jobsDone:
 					a.shellStarted = true
 					a.ShellCwd = e.Cwd
 					a.finishPanelReturn()
-					a.Status = fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status)
+					a.setShellStatus(fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status))
 					a.dirty = true
 				}
 				if e.Exit {
