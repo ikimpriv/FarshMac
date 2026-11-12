@@ -149,9 +149,37 @@ func (p *Panel) sortEntries(files []Entry) {
 func (a *App) sortMenu(index int) {
 	p := &a.Panels[index]
 	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Directories first", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
-	a.choose("Sort mode", names, func(i int) {
+	current := p.Sort
+	if current == "" {
+		current = "Name"
+	}
+	labels := make([]string, len(names))
+	for i, name := range names {
+		on := name == current
 		switch i {
-		case 0, 1, 2, 3, 8, 9, 10, 11, 12:
+		case 4:
+			on = p.Reverse
+		case 5:
+			on = p.CaseSensitive
+		case 6:
+			on = !p.MixDirectories
+		case 7:
+			on = p.SelectedFirst
+		}
+		labels[i] = "  " + name
+		if on {
+			labels[i] = "✓ " + name
+		}
+	}
+	a.choose("Sort mode", labels, func(i int) {
+		switch i {
+		case 9, 10, 11, 12:
+			if p.Remote != nil {
+				a.Status = "This sort mode requires local file metadata"
+				return
+			}
+			p.Sort = names[i]
+		case 0, 1, 2, 3, 8:
 			p.Sort = names[i]
 		case 4:
 			p.Reverse = !p.Reverse
@@ -164,6 +192,11 @@ func (a *App) sortMenu(index int) {
 		}
 		a.error(p.Load(p.Path))
 	})
+	for i, name := range names {
+		if name == current {
+			a.Form.Focus = i
+		}
+	}
 }
 func (a *App) filterPanel(index int) {
 	p := &a.Panels[index]
