@@ -415,17 +415,19 @@
 
 ---
 
-## 9. Закладки папок (folder shortcuts)
+## 9. Закладки окна (bookmarks)
 
-#### ⌘⌥⇧1…9 (или Ctrl+Shift+1…9) — сохранить
-- **Вызов:** ⌘⌥⇧ + цифра или Ctrl+Shift + цифра (⌘ без ⌥ — это F1…F9), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. ⌘⌥ — основной вариант, потому что macOS может забирать Ctrl+1…9 под переключение рабочих столов. `Commands → Folder shortcuts… → Save current folder…` → диалог `Save folder shortcut`, `Slot 1–9`, значение `1`, ошибка `Choose 1–9`.
-- **Поведение:** `Shortcuts[n] = Path`; для remote сохраняется копия конфигурации без пароля/пассфразы/host key с `Directory = Path`; для архива — `ShortcutArchives[n] = Archive.Path`. Сразу `saveSetup()`; статус `Folder shortcut %d saved: <path>` (если сохранение прошло, иначе — ошибка).
-- **Код:** `folder_shortcuts.go: saveFolderShortcut`.
+Десять слотов 0–9 на экземпляр окна: закладка папки (панель) или документа (просмотрщик/редактор). Не сохраняются, другим окнам не видны; при ⌘N новое окно начинает с пустыми слотами. Поля `Settings.Shortcuts/ShortcutRemotes/ShortcutArchives` остались только для чтения старых `setup.json` и не используются.
 
-#### ⌘⌥1…9 (или Ctrl+1…9) — перейти
-- **Поведение:** пустой слот → `Folder shortcut %d is empty`. Remote-закладка: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная закладка → `openArchiveAt(archive, path)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Shortcut is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `Load(path)`. Запомненные позиции курсора и пометки (`states`) сохраняются.
-- Меню `Folder shortcuts`: `Save current folder…`, затем `1  <path>` … `9  <path>` (для remote с префиксом `Label()`).
-- **Код:** `folder_shortcuts.go: goFolderShortcut`, `panel_options.go: folderShortcuts`.
+#### ⌘⌥⇧0…9 (или Ctrl+Shift+0…9) — сохранить папку
+- **Вызов:** ⌘⌥⇧ + цифра или Ctrl+Shift + цифра (⌘ без ⌥ — это F1…F9), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. `Commands → Bookmarks… → Save current folder…` → диалог `Save bookmark`, `Slot 0–9`, значение `1`, ошибка `Choose 0–9`.
+- **Поведение:** `Bookmarks[n] = {Kind: folder, Path, Cursor: имя файла под курсором (не `..`)}`; для remote — копия конфигурации без пароля/пассфразы/host key с `Directory = Path`; для архива — `Archive = Archive.Path`. Статус `Bookmark %d saved: <path/file>`.
+- **Код:** `bookmarks.go: panelBookmarkKey, saveFolderBookmark`.
+
+#### ⌘⌥0…9 (или Ctrl+0…9) — перейти
+- **Поведение:** пустой слот → `Bookmark %d is empty`. Закладка документа → см. раздел «Cmd+0..9 / Cmd+Option+0..9 — закладки» (открывает просмотрщик/редактор). Закладка папки: из документа сначала показываются панели (экраны документов остаются открытыми). Remote: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная → `openArchiveAt(archive, path, cursor)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Bookmark is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `loadSource(path)`. После загрузки курсор ставится на запомненный файл (`placeCursor`; для асинхронной загрузки через `pendingPosition`); если файла нет — курсор как обычно. Запомненные позиции курсора и пометки (`states`) сохраняются.
+- Меню `Bookmarks`: `Save current folder…`, затем `0  <label>` … `9  <label>`: папка — `<путь>/<файл>` (для remote с префиксом `Label()`), документ — `Edit|View <путь>:<строка>`, справка — `Help`.
+- **Код:** `bookmarks.go: goBookmark, goFolderBookmark, bookmarksMenu`.
 
 ---
 
@@ -1196,8 +1198,8 @@
 
 #### Cmd+0..9 / Cmd+Option+0..9 — закладки
 - **Вызов:** Cmd (или Ctrl) + цифра 0–9: восстановить; Cmd+Option+цифра (или Ctrl+Shift+цифра) — сохранить. Цифра берётся из `m.Code` (`DigitN`), поэтому раскладка и Option не мешают. Cmd+Shift+цифра закладку не ставит: macOS забирает Cmd+Shift+3/4/5 под скриншоты.
-- **Поведение:** сохраняет `docPosition{Cursor, Offset, Column, ViewStart, ByteOffset}` в `Bookmarks[n]`, статус `Bookmark %d saved`. Восстановление: текущая позиция в `Positions`, затем `restore(p)` (курсор ограничивается длиной текста, выделение снимается). Нет закладки — ничего. Закладки — на документ, в памяти, не сохраняются.
-- **Код:** `document.go: documentKey, pos, restore`.
+- **Поведение:** сохраняет `bookmark{Kind: document, Path, Edit, Help, ScreenID, Row, Col, View: docPosition}` в `App.Bookmarks[n]` — те же десять слотов окна, что и закладки папок (раздел 9). Статус `Bookmark %d saved`. Переход (из панелей или любого экрана документа): если экран закладки (`ScreenID`) или другой экран с тем же файлом открыт — фокус на него, текущая позиция в `Positions`, затем `restoreBookmark`; иначе файл открывается заново в том же режиме (viewer/editor) и позиция восстанавливается. Закладка папки из документа → панели (см. раздел 9). ⌘0 в документе — сброс размера шрифта, слот 0 — через Ctrl+0. Если текст в точке закладки не изменился — восстанавливается точный вид; иначе курсор ставится на запомненные строку и колонку, а если файл укоротился ниже этой строки — в конец файла. Файла нет или это не обычный файл — статус `Bookmark %d: <path>: <reason>`, ничего не открывается. Нет закладки — `Bookmark %d is empty`; закладка в закрытой справке — `Bookmark %d: help is closed`. Закладки в памяти, не сохраняются.
+- **Код:** `bookmarks.go: documentBookmarkKey, saveDocumentBookmark, goDocumentBookmark, restoreBookmark`.
 
 #### Cmd+Z в просмотрщике — предыдущая позиция
 - **Поведение:** `Positions` (стек до 100) пополняется перед поиском (`findDocument`), Go to и переходом к закладке. Cmd+Z в просмотрщике снимает последнюю и восстанавливает. В редакторе Cmd+Z — undo (§9.5).
@@ -2066,7 +2068,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 | `User menu` | `F2` | `userMenu` — см. раздел user menu |
 | `Edit user menu…` | — | `editUserMenu` |
 | `File associations…` | — | `fileAssociations` |
-| `Folder shortcuts…` | — | `folderShortcuts` |
+| `Bookmarks…` | ⌘⌥0…9 | `bookmarksMenu` |
 | `Edit sort groups…` | — | `settingsMenu("Sort groups")` |
 | `File panel filter…` | — | `filterPanel(Active)` |
 | `Screens list` | `F12` | `screenMenu` |
@@ -2088,11 +2090,10 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 - `Edit user menu`: список `Add command…` + имена команд; форма `User command — {} inserts filename` с полями `Label`, `Command (empty deletes)`; после OK — `saveSetup()` (немедленная запись setup.json).
 - `File associations`: список `Add association…`, `Open current file with macOS default app`, затем `<mask> → <command>`; форма `File association — {} inserts filename`: `Masks`, `Run command`, `Viewer command`, `Editor command`; маски валидируются; после OK — `saveSetup()`. Viewer/Editor-команды ассоциаций переопределяют внешний viewer/editor из настроек (`viewPlan`).
 
-#### Folder shortcuts…
-- **Диалог:** список `Folder shortcuts`: `Save current folder…`, затем `1  <путь>` … `9  <путь>` (для удалённых — `<label><путь>`). Выбор слота → `goFolderShortcut`; `Save current folder…` → prompt `Save folder shortcut` / `Slot 1–9` (значение `1`), ошибка `Choose 1–9`.
-- **Клавиши:** `⌘⌥1…9` (или `Ctrl+1…9`) — перейти, `⌘⌥⇧1…9` (или `Ctrl+Shift+1…9`) — сохранить (не Numpad).
-- **Хранение:** `Settings.Shortcuts[10]`, `ShortcutRemotes[10]` (копия `remotefs.Config` без пароля/passphrase/host key, `Directory = путь`), `ShortcutArchives[10]` (путь архива). Сохранение вызывает `saveSetup()`; статус `Folder shortcut N saved: <path>` (если сохранение прошло, т.е. статус был `Setup saved`).
-- **Переход:** пустой слот → `Folder shortcut N is empty`; удалённый слот: если какая-то панель уже подключена к тому же серверу — переподключение к пути без диалога, иначе открывается форма `FTP / SFTP connection` с профилем; архивный — `openArchiveAt`; локальный: проверка `os.Stat`, не папка → `Shortcut is not a directory`; затем сброс `Remote`/`Archive` и загрузка.
+#### Bookmarks…
+- **Диалог:** список `Bookmarks`: `Save current folder…`, затем `0  <метка>` … `9  <метка>` (папка — `<путь>/<файл>`, для удалённых с префиксом `<label>`; документ — `Edit|View <путь>:<строка>`). Выбор слота → `goBookmark`; `Save current folder…` → prompt `Save bookmark` / `Slot 0–9` (значение `1`), ошибка `Choose 0–9`.
+- **Клавиши:** `⌘⌥0…9` (или `Ctrl+0…9`) — перейти, `⌘⌥⇧0…9` (или `Ctrl+Shift+0…9`) — сохранить папку (не Numpad); в документе `⌘⌥0…9` сохраняет позицию, `⌘0…9` переходит.
+- **Хранение:** `App.Bookmarks map[int]bookmark` — только в памяти окна; не сохраняются и другим окнам не видны. Подробности — раздел 9.
 - **Код:** `folder_shortcuts.go`, `panel_options.go` (`folderShortcuts`).
 
 #### File panel filter…
@@ -2354,7 +2355,7 @@ Esc returns to the file panels.
 | `TreeDepth` | 4 (норм. 1–12) | Tree settings |
 | `UserMenu []UserCommand{Name, Command}` | nil | Edit user menu |
 | `Associations []Association{Mask, Command, Viewer, Editor}` | nil | File associations |
-| `Shortcuts [10]string`, `ShortcutRemotes [10]*remotefs.Config`, `ShortcutArchives [10]string` | пусто | Folder shortcuts |
+| `Shortcuts [10]string`, `ShortcutRemotes [10]*remotefs.Config`, `ShortcutArchives [10]string` | пусто | Устаревшие folder shortcuts; читаются для совместимости, не используются (закладки живут в окне) |
 | `SortGroups` | "" | Sort groups |
 | `MaskGroups map[string]string` | `arc`, `source`, `exec` (см. выше) | Groups of file masks |
 | `DescriptionFile` | `descript.ion` (норм. — только базовое имя) | File descriptions |

@@ -132,24 +132,19 @@ func TestSaveSetupDetectsExternalChange(t *testing.T) {
 		t.Fatal("own write treated as external", err)
 	}
 }
-func TestShortcutSavedInOneWindowVisibleInOther(t *testing.T) {
+func TestBookmarksStayInTheirWindow(t *testing.T) {
 	setupHome(t)
 	g, a, b := groupWithTwoWindows(t)
 	a.Panels[a.Active].Load(t.TempDir())
 	g.Handle(1, `{"Type":"key","Key":"3","Code":"Digit3","Ctrl":true,"Shift":true}`)
-	if b.Settings.Shortcuts[3] == "" || b.Settings.Shortcuts[3] != a.Settings.Shortcuts[3] {
-		t.Fatal("shortcut not propagated", a.Status)
+	if a.Bookmarks[3].Path != a.Panels[a.Active].Path {
+		t.Fatal("bookmark not saved", a.Status)
 	}
-}
-func TestSecondWindowSaveSetupKeepsFirstWindowShortcuts(t *testing.T) {
-	setupHome(t)
-	g, a, b := groupWithTwoWindows(t)
-	a.Panels[a.Active].Load(t.TempDir())
-	g.Handle(1, `{"Type":"key","Key":"4","Code":"Digit4","Ctrl":true,"Shift":true}`)
-	idB := g.Order[1]
-	g.Handle(idB, `{"Type":"key","Key":"F9","Shift":true}`)
-	if s := readSetup(t); s.Settings.Shortcuts[4] == "" || b.Form != nil {
-		t.Fatal("second window save dropped shortcut", b.Status)
+	if _, ok := b.Bookmarks[3]; ok {
+		t.Fatal("bookmark leaked into another window")
+	}
+	if _, err := os.Stat(setupPath()); err == nil {
+		t.Fatal("bookmark written to setup")
 	}
 }
 func TestSettingsPropagateAcrossWindows(t *testing.T) {

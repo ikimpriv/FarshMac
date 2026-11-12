@@ -65,9 +65,12 @@ func (a *App) openArchive(index int, path string) {
 	if p := &a.Panels[index]; p.Archive != nil && p.Archive.Path == path {
 		target = p.Path
 	}
-	a.openArchiveAt(index, path, target)
+	a.openArchiveAt(index, path, target, "")
 }
-func (a *App) openArchiveAt(index int, path, target string) {
+
+// openArchiveAt shows the target folder of an archive in a panel, with the
+// cursor on the named entry when cursor is not empty.
+func (a *App) openArchiveAt(index int, path, target, cursor string) {
 	a.backgroundTask("Opening archive", func(o *fsops.Operation) (func(), func(), error) {
 		catalog, err := fsops.ReadArchiveIndex(path, o)
 		err = archiveFailure(err)
@@ -87,6 +90,7 @@ func (a *App) openArchiveAt(index int, path, target string) {
 				target = catalog.Path
 			}
 			a.error(p.Load(target))
+			p.placeCursor(cursor)
 		}, nil, err
 	})
 	if a.task != nil {

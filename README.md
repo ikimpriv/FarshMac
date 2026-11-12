@@ -29,7 +29,7 @@ Unzip the universal macOS archive and move **FarshMac.app** to Applications. App
 
 ## Features
 
-- Two file panels, masks and selection, folder bookmarks, sorting, directory sizes, and multiple windows with saved positions and folders.
+- Two file panels, masks and selection, window bookmarks for folders and documents, sorting, directory sizes, and multiple windows with saved positions and folders.
 - Persistent bash, sh, or zsh terminal with bidirectional folder synchronization, color, mouse support, and bounded scrollback spooled to temporary files.
 - Internal viewer and editor, Chroma syntax highlighting, autoindent, search, and external application integration.
 - ZIP, TAR, compressed TAR, and other archive formats; enter archives as folders and copy files out.
@@ -73,7 +73,7 @@ Local builds automatically reuse the `FarshMac Local Development` code-signing i
 
 ## Keyboard essentials
 
-Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only: Ctrl+Q, Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+1…9, Ctrl+Shift+1…9. ⌘ letter shortcuts follow the physical key on non-Latin keyboard layouts.
+Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only: Ctrl+Q, Ctrl+L, Ctrl+H, Ctrl+E/X, Ctrl+0…9, Ctrl+Shift+0…9. ⌘ letter shortcuts follow the physical key on non-Latin keyboard layouts.
 
 | Key | Action |
 | --- | --- |
@@ -97,7 +97,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
 | Shift+Enter | Open with macOS / Finder |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
-| ⌘⌥⇧1…9 / ⌘⌥1…9 | Save / open folder bookmarks (Ctrl+Shift+1…9 / Ctrl+1…9 also work; macOS may take Ctrl+1…9 for switching desktops) |
+| ⌘⌥⇧0…9 / ⌘⌥0…9 | Save / go to a bookmark (Ctrl+Shift+0…9 / Ctrl+0…9 also work; macOS may take Ctrl+0…9 for switching desktops). A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
 | Cmd+Shift+H | Shell command history (terminal mode): Enter to run, F4 to edit |
 | Cmd++ / Cmd+− / Cmd+0 | Font size larger / smaller / default (10–24); Cmd+= also zooms in terminal mode, in panels it opens the same folder in the other panel |
@@ -117,7 +117,7 @@ In the viewer and editor:
 | F12 | Switch open document screens |
 | Cmd+R | Reload from disk (asks if there are unsaved changes) |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
-| Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark (Ctrl+0…9 / Ctrl+Shift+0…9 also work) |
+| Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark (Ctrl+0…9 / Ctrl+Shift+0…9 also work; Cmd+0 resets the font size, so use Ctrl+0 for bookmark 0). Bookmarks are shared with the panels: a document bookmark reopens the file at the saved position from the panels or any other document (end of file if it shrank, nothing if the file is gone); a folder bookmark returns to the panels |
 | Ctrl+Insert / Shift+Delete | Copy / cut |
 
 The editor saves atomically and keeps extended attributes, ACLs and hidden/nodump flags; if some cannot be kept it reports "Saved; some attributes were not preserved". A failed save offers Retry / Save as… / Cancel; a file changed or deleted on disk asks before overwriting or recreating it; in an unwritable folder **Save in place** rewrites the file non-atomically and keeps hard links. Opening a file that probably cannot be saved asks View / Edit anyway / Cancel. Saving through a symbolic link writes the link target.

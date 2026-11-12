@@ -43,12 +43,15 @@ type Settings struct {
 	TreeDepth                                                                                        int
 	UserMenu                                                                                         []UserCommand
 	Associations                                                                                     []Association
-	Shortcuts                                                                                        [10]string
-	ShortcutRemotes                                                                                  [10]*remotefs.Config
-	ShortcutArchives                                                                                 [10]string
-	SortGroups                                                                                       string
-	MaskGroups                                                                                       map[string]string
-	DescriptionFile                                                                                  string
+	// Shortcuts, ShortcutRemotes and ShortcutArchives are folder shortcuts from
+	// setups before window bookmarks; they are kept so old files still parse but
+	// are no longer used or written.
+	Shortcuts        [10]string
+	ShortcutRemotes  [10]*remotefs.Config
+	ShortcutArchives [10]string
+	SortGroups       string
+	MaskGroups       map[string]string
+	DescriptionFile  string
 }
 type UserCommand struct{ Name, Command string }
 type Association struct{ Mask, Command, Viewer, Editor string }

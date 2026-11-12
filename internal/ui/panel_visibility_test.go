@@ -276,8 +276,8 @@ func TestFolderShortcutKeepsRememberedPositions(t *testing.T) {
 	p := &a.Panels[0]
 	selectEntry(t, p, "b.txt")
 	p.Marked = map[string]bool{"a.txt": true}
-	a.Settings.Shortcuts[5] = a.Panels[1].Path
-	a.goFolderShortcut(5)
+	a.setBookmark(5, bookmark{Kind: "folder", Path: a.Panels[1].Path})
+	a.goBookmark(5)
 	if p.Path != a.Panels[1].Path {
 		t.Fatal("shortcut not followed", p.Path)
 	}

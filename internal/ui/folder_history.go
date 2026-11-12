@@ -70,7 +70,7 @@ func (a *App) goFolderHistory(entry string) {
 			a.Status = "Archive not found: " + path
 			return
 		}
-		a.openArchiveAt(index, archive, path)
+		a.openArchiveAt(index, archive, path, "")
 		return
 	}
 	if c, label, ok := parseRemoteHistory(entry); ok {

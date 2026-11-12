@@ -236,6 +236,8 @@ func (a *App) connectRemote(index int, c remotefs.Config) {
 func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 	note := a.connectNote
 	a.connectNote = ""
+	cursor := a.connectCursor
+	a.connectCursor = ""
 	a.backgroundTask("Connecting to "+c.Label(), func(o *fsops.Operation) (func(), func(), error) {
 		f, err := c.Dial(o.Context())
 		if err == nil {
@@ -269,6 +271,7 @@ func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 			p.Offset = 0
 			saveErr := a.saveConnectionProfile(c)
 			a.error(p.Load(c.Directory))
+			p.placeCursor(cursor)
 			a.Status = "Connected: " + c.Label() + " (terminal is local)" + note
 			if saveErr != nil {
 				a.Status += "; profile not saved: " + saveErr.Error()

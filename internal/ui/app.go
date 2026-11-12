@@ -316,6 +316,7 @@ type App struct {
 	Settings                                                  Settings
 	folderHistory                                             []string
 	viewHistory                                               []viewRecord
+	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
@@ -822,7 +823,7 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && a.selectionKey(m) {
 		return
 	}
-	if a.Menu == nil && a.folderShortcutKey(m) {
+	if a.Menu == nil && a.panelBookmarkKey(m) {
 		return
 	}
 	if a.Menu == nil && !m.Meta && !m.Ctrl && !m.Alt && (m.Key == "Delete" || m.Key == "F8" && m.Shift) {
@@ -1443,8 +1444,11 @@ Cmd/Ctrl+Num +/-   Select / deselect same extension
 Alt+Num +/-        Select / deselect same base name
 Shift+Num +/-      Select / deselect all files
 Cmd/Ctrl+M         Restore previous selection
-Cmd+Option+Shift+1..9  Save folder shortcut (panels; also Ctrl+Shift+1..9)
-Cmd+Option+1..9     Go to folder shortcut (also Ctrl+1..9; keeps cursor positions)
+Cmd+Option+Shift+0..9  Save bookmark: folder and cursor file (also Ctrl+Shift+0..9)
+Cmd+Option+0..9     Go to bookmark (also Ctrl+0..9; keeps cursor positions).
+                    Bookmarks belong to the window and are shared with the
+                    viewer/editor: a document bookmark opens that file at
+                    the saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels

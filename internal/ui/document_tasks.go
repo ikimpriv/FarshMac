@@ -9,10 +9,6 @@ func cloneDocument(d *Document) *Document {
 	c := *d
 	c.Buffer = d.Buffer.Clone()
 	c.Positions = append([]docPosition(nil), d.Positions...)
-	c.Bookmarks = make(map[int]docPosition, len(d.Bookmarks))
-	for k, v := range d.Bookmarks {
-		c.Bookmarks[k] = v
-	}
 	return &c
 }
 

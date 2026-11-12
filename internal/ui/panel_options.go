@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -410,28 +409,4 @@ func (a *App) openVolume(index int, path string) {
 	previous := *p
 	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
 	a.error(p.loadSource(path, previous, ""))
-}
-func (a *App) folderShortcuts() {
-	names := []string{"Save current folder…"}
-	for i := 1; i <= 9; i++ {
-		p := a.Settings.Shortcuts[i]
-		if c := a.Settings.ShortcutRemotes[i]; c != nil {
-			p = c.Label() + p
-		}
-		names = append(names, strconv.Itoa(i)+"  "+p)
-	}
-	a.choose("Folder shortcuts", names, func(i int) {
-		if i > 0 {
-			a.goFolderShortcut(i)
-			return
-		}
-		a.prompt("Save folder shortcut", "Slot 1–9", "1", func(s string) {
-			i, e := strconv.Atoi(s)
-			if e != nil || i < 1 || i > 9 {
-				a.rejectPrompt(s, "Choose 1–9")
-				return
-			}
-			a.saveFolderShortcut(i)
-		})
-	})
 }

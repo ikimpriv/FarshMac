@@ -13,6 +13,7 @@ import (
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
 	"farshmac/internal/testnet"
+	"farshmac/internal/textfile"
 )
 
 func skipAsRoot(t *testing.T) {
@@ -529,12 +530,12 @@ func TestBookmarkSavedWithOptionKeySymbol(t *testing.T) {
 	a.Doc.Offset = 2
 	// macOS reserves Cmd+Shift+3/4/5 for screenshots: Cmd+Shift no longer saves.
 	a.key(Message{Key: "#", Code: "Digit3", Meta: true, Shift: true})
-	if _, ok := a.Doc.Bookmarks[3]; ok {
+	if _, ok := a.Bookmarks[3]; ok {
 		t.Fatal("Cmd+Shift+3 saved a bookmark")
 	}
 	// Option turns the key into a symbol ("£" on US); the code names the digit.
 	a.key(Message{Key: "£", Code: "Digit3", Meta: true, Alt: true})
-	if _, ok := a.Doc.Bookmarks[3]; !ok || a.Status != "Bookmark 3 saved" {
+	if _, ok := a.Bookmarks[3]; !ok || a.Status != "Bookmark 3 saved" {
 		t.Fatal("Cmd+Option bookmark", a.Status)
 	}
 	a.Doc.Offset = 0
@@ -543,13 +544,74 @@ func TestBookmarkSavedWithOptionKeySymbol(t *testing.T) {
 		t.Fatal("bookmark restore", a.Doc.Offset)
 	}
 	a.key(Message{Key: "№", Code: "Digit5", Ctrl: true, Shift: true})
-	if _, ok := a.Doc.Bookmarks[5]; !ok {
+	if _, ok := a.Bookmarks[5]; !ok {
 		t.Fatal("Ctrl+Shift alias")
 	}
 	a.Doc.Offset = 1
 	a.key(Message{Key: "5", Code: "Digit5", Ctrl: true})
 	if a.Doc.Offset != 2 {
 		t.Fatal("Ctrl restore", a.Doc.Offset)
+	}
+}
+
+func TestBookmarksAreWindowScoped(t *testing.T) {
+	a := textApp(t, "one\ntwo\nthree\nfour\n", true)
+	first := a.Doc
+	a.key(Message{Key: "ArrowDown"})
+	a.key(Message{Key: "ArrowDown"})
+	a.key(Message{Key: "ArrowRight"})
+	a.key(Message{Key: "£", Code: "Digit3", Meta: true, Alt: true})
+	if b := a.Bookmarks[3]; b.Kind != "document" || b.Path != first.Path || !b.Edit || b.Row != 2 || b.Col != 1 {
+		t.Fatalf("bookmark %+v", b)
+	}
+	other := filepath.Join(filepath.Dir(first.Path), "other.txt")
+	os.WriteFile(other, []byte("x\n"), 0644)
+	a.openDocument(other, false)
+	if a.Doc.Path != other {
+		t.Fatal("second document not shown")
+	}
+	// From another screen the jump focuses the bookmarked document.
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
+	if a.Doc != first || first.Pos(first.Cursor) != (textfile.Position{Row: 2, Col: 1}) {
+		t.Fatal("jump did not focus the bookmarked screen", a.Doc.Path, a.Status)
+	}
+	// After the screen is closed the jump reopens the file in the editor.
+	a.key(Message{Key: "Escape"})
+	if a.Doc != nil && a.Doc != first {
+		a.key(Message{Key: "Escape"})
+	}
+	a.key(Message{Key: "Escape"})
+	if a.Doc != nil {
+		t.Fatal("documents still open")
+	}
+	a.openDocument(other, false)
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
+	if a.Doc == nil || a.Doc.Path != first.Path || !a.Doc.Edit {
+		t.Fatal("jump did not reopen the file in the editor", a.Status)
+	}
+	if a.Doc.Pos(a.Doc.Cursor) != (textfile.Position{Row: 2, Col: 1}) {
+		t.Fatal("reopened position", a.Doc.Pos(a.Doc.Cursor))
+	}
+	a.key(Message{Key: "Escape"})
+	// A file that shrank below the bookmark opens at its end.
+	os.WriteFile(first.Path, []byte("one\n"), 0644)
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
+	if a.Doc == nil || a.Doc.Path != first.Path || a.Doc.Cursor != len(a.Doc.Text) {
+		t.Fatal("shrunk file should open at its end", a.Status)
+	}
+	a.key(Message{Key: "Escape"})
+	// A missing file is reported and nothing opens.
+	os.Remove(first.Path)
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
+	if a.Doc == nil || a.Doc.Path != other || a.Dialog != nil {
+		t.Fatal("missing file must not open anything", a.Status)
+	}
+	if !strings.Contains(a.Status, "Bookmark 3") || !strings.Contains(a.Status, "no such file") {
+		t.Fatal("status", a.Status)
+	}
+	a.key(Message{Key: "9", Code: "Digit9", Meta: true})
+	if a.Status != "Bookmark 9 is empty" {
+		t.Fatal("empty bookmark", a.Status)
 	}
 }
 

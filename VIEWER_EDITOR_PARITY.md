@@ -24,6 +24,13 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
 - Bookmarks are set with ⌘⌥0…9 (Far's Ctrl+Shift+digit, which also works) and
   restored with ⌘0…9 or Ctrl+0…9. ⌘⇧digit is not used because macOS takes
   ⌘⇧3/4/5 for screenshots. Bookmark digits use the physical key on every layout.
+  Unlike Far, bookmarks are scoped to the window rather than the document, and the
+  ten slots are shared with the panels' folder bookmarks: a jump from the panels or
+  any document screen focuses the bookmarked screen, or reopens the file in the
+  same mode (viewer/editor) if it was closed. A missing file is reported in the
+  status line and nothing opens; a file that shrank below the bookmark opens at its
+  end. A folder bookmark used from a document returns to the panels. ⌘0 resets the
+  font size, so bookmark 0 is reached with Ctrl+0.
 - F9 opens document settings in a document and the main menu in panels.
 
 ## Implemented features
@@ -41,7 +48,7 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
 | Encodings | Shift+F8: UTF-8, UTF-16LE/BE, Windows-1251/1252, CP866, ISO-8859-1, KOI8-R. F8 toggles CP866/1251 (from any other code page the first press selects CP866, as Far's DOS/Win). On paged large files F8 changes only the code page; a viewer holding unsaved edits reports "Save edited text before reinterpreting bytes". |
 | Encoding on save | Viewer reinterprets original bytes; editor selects output encoding. Unrepresentable characters prevent saving. F9 selects BOM and LF/CRLF/CR. |
 | Viewer ↔ editor | F6 preserves text, position, and dirty state. Encoding failure does not display stale content. |
-| Bookmarks | ⌘⌥0…9 (or Ctrl+Shift+0…9) sets; ⌘0…9 jumps; scoped to the open document. |
+| Bookmarks | ⌘⌥0…9 (or Ctrl+Shift+0…9) sets; ⌘0…9 jumps; the window's ten slots, shared with folder bookmarks; reopens a closed file at the remembered line and column (end of file if it shrank, nothing if it is gone). |
 | Viewer position undo | ⌘Z restores the position before search, goto, or a bookmark jump. |
 | Adjacent files | `+` / `-` in the viewer only (in the editor they are ordinary input); always opens the internal viewer. Unsaved changes require a decision before switching. |
 | Alternate / internal | Alt+F3 / Alt+F4 open the alternate viewer/editor (external if internal is the default, and vice versa); ⌘⇧F3 / ⌘⇧F4 force the internal one. Both are also in the Files menu. |
@@ -84,7 +91,7 @@ This is a historical audit; see [CHANGELOG.md](CHANGELOG.md) for later changes.
    column semantics are incomplete.
 6. **Unicode/input:** ordinary Cyrillic and wide characters work in the model;
    complex emoji/ZWJ, all grapheme clusters, and IME lack end-to-end confirmation.
-7. **State:** bookmarks and screen lists are not retained after closing. The
+7. **State:** bookmarks live only while the window is open; screen lists are not retained after closing. The
    view/edit history is persistent, but reopening positions, all Far settings, and
    per-field contextual help are absent.
 8. **Extensions:** no viewer/editor plugin API, F11, Lua macros, FarColorer/HRC/HRD,

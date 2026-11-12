@@ -83,8 +83,10 @@ are absent. Later Option-input fixes are documented in the changelog.
   (created, accessed, owner, description).
 - ⌘C equals Ctrl+Insert: copies the command line or selected names; on `..` it
   copies the panel path. Ctrl+Alt+Insert copies real paths (links resolved).
-- ⌘⌥1…9 (or Ctrl+1…9) bookmark jumps keep remembered cursor positions and marks of visited
-  folders.
+- ⌘⌥0…9 (or Ctrl+0…9) bookmark jumps keep remembered cursor positions and marks of visited
+  folders and put the cursor on the file that was under it when the bookmark was saved.
+  Unlike Far's folder shortcuts, bookmarks belong to one window and are not saved; the same
+  ten slots also hold viewer/editor positions (see VIEWER_EDITOR_PARITY.md).
 - Ctrl+PgDn enters exactly the archive formats in [ARCHIVE_SUPPORT.md](ARCHIVE_SUPPORT.md);
   a bare `.gz`/`.bz2`/`.xz` is not entered.
 - Folder history entries remember their source (local path,

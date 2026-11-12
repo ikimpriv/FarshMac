@@ -332,7 +332,7 @@ func (a *App) replaceReloaded(d, n *Document) {
 	releaseDocument(d)
 	*d = *n
 	d.ScreenID = old.ScreenID
-	d.Bookmarks, d.Positions, d.Search = old.Bookmarks, old.Positions, old.Search
+	d.Positions, d.Search = old.Positions, old.Search
 	d.Wrap, d.WordWrap, d.Scrollbar = old.Wrap, old.WordWrap, old.Scrollbar
 	d.HideKeys, d.HideStatus, d.BytesPerLine = old.HideKeys, old.HideStatus, old.BytesPerLine
 	d.ReadOnly = old.ReadOnly

@@ -77,6 +77,7 @@ func (a *App) form(title string, fields []Field, submit func([]Field)) {
 type formState struct {
 	submitting     *Form       // the form whose Submit is running
 	connectNote    string      // appended to the next "Connected" status
+	connectCursor  string      // entry to focus after the next connection (bookmark jump)
 	autoSaveDone   bool        // Save setup on exit already ran for this window
 	activePrompt   *promptSpec // prompt whose Confirm is running
 	promptRejected bool        // the running prompt was reopened by validation
