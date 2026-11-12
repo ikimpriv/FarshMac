@@ -165,7 +165,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 					e = dest.Mkdir(pair.Destination)
 				}
 				created = e == nil
-			} else if e == nil && !existing.IsDir() {
+			} else if e == nil && !FollowDir(dest, pair.Destination, existing).IsDir() {
 				return fmt.Errorf("destination is not a directory: %s", pair.Destination)
 			}
 			return e
@@ -275,7 +275,7 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 	}
 	appendMode := false
 	if exists {
-		resolution := o.Resolve(fsops.Collision{Source: j.Source, Destination: j.Destination, SourceInfo: j.Info, DestinationInfo: before}, options.Conflict)
+		resolution := o.Resolve(linkCollision(d, fsops.Collision{Source: j.Source, Destination: j.Destination, SourceInfo: j.Info, DestinationInfo: before}), options.Conflict)
 		switch resolution.Action {
 		case fsops.Skip:
 			o.SkipItem(j.Source)
@@ -427,6 +427,15 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 	published = true
 	o.Complete(j.Source)
 	return nil
+}
+
+func linkCollision(f FS, c fsops.Collision) fsops.Collision {
+	if c.DestinationInfo != nil && c.DestinationInfo.Mode()&os.ModeSymlink != 0 {
+		c.DestinationLink, _ = f.Readlink(c.Destination)
+		_, err := f.Stat(c.Destination)
+		c.DestinationBroken = err != nil
+	}
+	return c
 }
 
 func applyPortableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptions, o *fsops.Operation) error {

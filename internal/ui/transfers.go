@@ -93,6 +93,7 @@ func (a *App) transferDialog(move bool) {
 				if os.IsNotExist(e) {
 					return nil
 				}
+				info = remotefs.FollowDir(destination, dst, info)
 				return e
 			})
 			exists := info != nil

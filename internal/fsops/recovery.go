@@ -25,6 +25,9 @@ type Failure struct {
 type Collision struct {
 	Source, Destination         string
 	SourceInfo, DestinationInfo os.FileInfo
+	// DestinationLink is the target of an existing symbolic link (file or broken).
+	DestinationLink   string
+	DestinationBroken bool
 }
 type Resolution struct {
 	Action      int

@@ -120,9 +120,18 @@ func (a *App) collisionQuestions(o *fsops.Operation, ask bool) {
 			action = -1
 		}
 		destination := c.Destination
+		// A file never replaces a folder (or a link to one) and vice versa.
+		canReplace := c.SourceInfo == nil || c.DestinationInfo == nil || c.SourceInfo.IsDir() == c.DestinationInfo.IsDir()
+		if action == fsops.Replace && !canReplace && ask {
+			action = -1
+		}
 		if action < 0 {
-			buttons := []string{"Overwrite", "Skip", "Rename"}
-			actions := []int{fsops.Replace, fsops.Skip, fsops.Rename}
+			buttons := []string{"Skip", "Rename"}
+			actions := []int{fsops.Skip, fsops.Rename}
+			if canReplace {
+				buttons = append([]string{"Overwrite"}, buttons...)
+				actions = append([]int{fsops.Replace}, actions...)
+			}
 			if canAppend {
 				buttons = append(buttons, "Append")
 				actions = append(actions, fsops.Append)
@@ -141,7 +150,13 @@ func (a *App) collisionQuestions(o *fsops.Operation, ask bool) {
 				if o.Check() != nil {
 					return
 				}
-				message := "The file already exists\n" + c.Destination + "\n\n" + fileComparison("New", c.SourceInfo) + "\n" + fileComparison("Existing", c.DestinationInfo)
+				existing := fileComparison("Existing", c.DestinationInfo)
+				if c.DestinationBroken {
+					existing = "Existing: broken link → " + c.DestinationLink
+				} else if c.DestinationInfo != nil && c.DestinationInfo.Mode()&os.ModeSymlink != 0 {
+					existing = "Existing: symbolic link → " + c.DestinationLink
+				}
+				message := "The file already exists\n" + c.Destination + "\n\n" + fileComparison("New", c.SourceInfo) + "\n" + existing
 				a.confirm("Warning", message, buttons, func(i int) {})
 				form := a.Form
 				form.Remember = true

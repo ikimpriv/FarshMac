@@ -266,7 +266,7 @@ func (a *App) remoteMoveDialog() {
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			isDir := err == nil && info.IsDir()
+			isDir := err == nil && remotefs.FollowDir(f, dst, info).IsDir()
 			if len(paths) > 1 && !isDir {
 				return fmt.Errorf("destination must be an existing directory")
 			}

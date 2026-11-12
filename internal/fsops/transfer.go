@@ -68,6 +68,20 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		}
 	}
 	di, e := os.Lstat(dst)
+	if e == nil && di.Mode()&os.ModeSymlink != 0 {
+		// A link to a directory acts as that directory: merge into it, never replace it.
+		if target, err := os.Stat(dst); err == nil && target.IsDir() {
+			if si.IsDir() {
+				if real, err := filepath.EvalSymlinks(dst); err == nil {
+					rel, _ := filepath.Rel(realSrc, real)
+					if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+						return fmt.Errorf("destination is inside source")
+					}
+				}
+			}
+			di = target
+		}
+	}
 	if os.IsNotExist(e) {
 		if move {
 			e = Move(src, dst)
@@ -111,7 +125,13 @@ func transfer(src, dst string, move bool, conflict Conflict, o *Operation) error
 		}
 		return nil
 	}
-	resolution := o.Resolve(Collision{src, dst, si, di}, conflict)
+	collision := Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}
+	if di.Mode()&os.ModeSymlink != 0 {
+		collision.DestinationLink, _ = os.Readlink(dst)
+		_, statErr := os.Stat(dst)
+		collision.DestinationBroken = statErr != nil
+	}
+	resolution := o.Resolve(collision, conflict)
 	switch resolution.Action {
 	case Skip:
 		o.SkipItem(src)

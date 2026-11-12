@@ -89,3 +89,50 @@ func TestLocalTransferPermissionErrorStaysVisible(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyDialogAcceptsSymlinkedDirectory(t *testing.T) {
+	for _, key := range []string{"F5", "F6"} {
+		t.Run(key, func(t *testing.T) {
+			left, right := t.TempDir(), t.TempDir()
+			target, link := filepath.Join(right, "target"), filepath.Join(right, "link")
+			if e := os.Mkdir(target, 0700); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.Symlink(target, link); e != nil {
+				t.Fatal(e)
+			}
+			for _, name := range []string{"one", "two"} {
+				if e := os.WriteFile(filepath.Join(left, name), []byte(name), 0600); e != nil {
+					t.Fatal(e)
+				}
+			}
+			a, e := New(left, right)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.Close()
+			a.Panels[0].Marked = map[string]bool{"one": true, "two": true}
+			a.key(Message{Key: key})
+			if a.Form != nil {
+				a.Form.Fields[0].Value = link
+			} else if a.Dialog != nil {
+				a.Dialog.Input = link
+			} else {
+				t.Fatal("no transfer dialog")
+			}
+			a.key(Message{Key: "Enter"})
+			waitWork(t, a)
+			if a.Form != nil {
+				t.Fatalf("unexpected dialog %q: %s", a.Form.Title, a.Form.Message)
+			}
+			for _, name := range []string{"one", "two"} {
+				if b, e := os.ReadFile(filepath.Join(target, name)); e != nil || string(b) != name {
+					t.Fatalf("%s: %q %v status %s", name, b, e, a.Status)
+				}
+			}
+			if got, e := os.Readlink(link); e != nil || got != target {
+				t.Fatal("link replaced", got, e)
+			}
+		})
+	}
+}

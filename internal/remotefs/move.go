@@ -42,6 +42,9 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	if err != nil {
 		return err
 	}
+	if si.IsDir() {
+		di = FollowDir(f, dst, di) // Merge into a linked directory; never replace the link.
+	}
 	if si.IsDir() && di.IsDir() {
 		entries, err := f.ReadDir(src)
 		if err != nil {
@@ -71,7 +74,7 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 		}
 		return o.Attempt("delete source folder", src, "", func() error { return f.Remove(src, true) })
 	}
-	resolution := o.Resolve(fsops.Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}, nil)
+	resolution := o.Resolve(linkCollision(f, fsops.Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}), nil)
 	switch resolution.Action {
 	case fsops.Skip:
 		o.SkipItem(src)

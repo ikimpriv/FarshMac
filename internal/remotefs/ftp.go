@@ -149,6 +149,18 @@ func (f *ftpFS) Lstat(p string) (os.FileInfo, error) {
 	}
 	return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
 }
+
+// FTP listings do not reveal link targets: a link is a directory only if it can be listed.
+func (f *ftpFS) Stat(p string) (os.FileInfo, error) {
+	info, err := f.Lstat(p)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return info, err
+	}
+	if _, err = f.ReadDir(p); err != nil {
+		return info, nil
+	}
+	return ftpInfo{&ftp.Entry{Name: path.Base(p), Type: ftp.EntryTypeFolder, Time: info.ModTime()}}, nil
+}
 func (f *ftpFS) Open(p string) (io.ReadCloser, error) {
 	if err := SafePath(p); err != nil {
 		return nil, err
