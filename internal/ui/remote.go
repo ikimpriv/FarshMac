@@ -214,6 +214,7 @@ func (a *App) remoteDelete() {
 			return
 		}
 		a.workProgress("Deleting remote files", func(o *fsops.Operation) error {
+			o.Streaming() // Items are counted while the trees are deleted.
 			f, err := config.Dial(o.Context())
 			if err != nil {
 				return err
@@ -256,6 +257,7 @@ func (a *App) remoteMoveDialog() {
 		dst := expand(value, target.Path)
 		ask := a.Settings.ConfirmOverwrite
 		a.workProgress("Renaming remote files", func(o *fsops.Operation) error {
+			o.Streaming()
 			a.collisionQuestions(o, ask)
 			a.moveMetadataQuestions(o)
 			f, err := config.Dial(o.Context())

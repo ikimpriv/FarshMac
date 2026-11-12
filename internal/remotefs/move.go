@@ -32,6 +32,8 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 	if err != nil {
 		return err
 	}
+	o.Add(src, regularSize(si))
+	o.Begin(src, regularSize(si))
 	di, err := f.Lstat(dst)
 	if os.IsNotExist(err) {
 		if err = f.Rename(src, dst); err == nil {
@@ -72,7 +74,13 @@ func moveEntry(f FS, endpoint Endpoint, src, dst string, o *fsops.Operation, dep
 				return nil
 			}
 		}
-		return o.Attempt("delete source folder", src, "", func() error { return f.Remove(src, true) })
+		return o.Attempt("delete source folder", src, "", func() error {
+			err := f.Remove(src, true)
+			if err == nil {
+				o.Complete(src)
+			}
+			return err
+		})
 	}
 	resolution := o.Resolve(linkCollision(f, fsops.Collision{Source: src, Destination: dst, SourceInfo: si, DestinationInfo: di}), nil)
 	switch resolution.Action {

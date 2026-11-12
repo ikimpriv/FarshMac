@@ -542,6 +542,8 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 	if err != nil {
 		return err
 	}
+	o.Add(p, regularSize(info))
+	o.Begin(p, regularSize(info))
 	if o.BeforeDelete != nil {
 		switch o.BeforeDelete(p, info) {
 		case fsops.Skip:
@@ -555,6 +557,11 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 		entries, err := f.ReadDir(p)
 		if err != nil {
 			return err
+		}
+		for _, entry := range entries {
+			if ValidName(entry.Name()) {
+				o.Add(path.Join(p, entry.Name()), regularSize(entry)) // Count the folder's items at once.
+			}
 		}
 		skipped := false
 		for _, entry := range entries {
@@ -581,9 +588,17 @@ func removeTreeStep(f FS, p string, o *fsops.Operation, depth int) error {
 	}
 	err = f.Remove(p, info.IsDir())
 	if err == nil {
+		o.Advance(regularSize(info))
 		o.Complete(p)
 	}
 	return err
+}
+
+func regularSize(info os.FileInfo) int64 {
+	if info.Mode().IsRegular() {
+		return info.Size()
+	}
+	return 0
 }
 
 func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Operation) (FS, error) {
