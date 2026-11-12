@@ -208,7 +208,7 @@
 - (void)cycle:(NSInteger)delta {if(!self.controllers.count)return;NSUInteger i=[self.controllers indexOfObject:[self active]];NSInteger next=((NSInteger)i+delta+self.controllers.count)%self.controllers.count;[self.controllers[next].window makeKeyAndOrderFront:nil];}
 - (void)nextWindow:(id)sender {[self cycle:1];}
 - (void)previousWindow:(id)sender {[self cycle:-1];}
-- (void)focusSession:(int)session {for(FarshMacWindow *c in self.controllers)if(c.session==session&&NSApp.keyWindow!=c.window){[c.window makeKeyAndOrderFront:nil];break;}}
+- (void)focusSession:(int)session {for(FarshMacWindow *c in self.controllers)if(c.session==session&&(NSApp.keyWindow!=c.window||c.window.miniaturized)){if(c.window.miniaturized)[c.window deminiaturize:nil];[c.window makeKeyAndOrderFront:nil];break;}}
 - (void)copyText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacCopy()" completionHandler:nil];}
 - (void)cutText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacCut()" completionHandler:nil];}
 - (void)selectText:(id)sender {[[self active].web evaluateJavaScript:@"window.farshmacSelectAll()" completionHandler:nil];}
