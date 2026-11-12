@@ -39,6 +39,43 @@ func TestQuitAbortedByBusyWindowRaisesAttention(t *testing.T) {
 	}
 }
 
+func TestQuitWithOpenFormCancelsFormFirst(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("ENV", "")
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Settings.ShellCustomPrompt = false
+	if err = a.StartTerminal(); err != nil {
+		t.Fatal(err)
+	}
+	a.ShellReady = false // A command is running.
+	for _, c := range []struct {
+		close          bool
+		title, message string
+	}{{false, "Quit", "A command is running. Close the application?"}, {true, "Close window", "A command is running. Close this window?"}} {
+		a.settingsMenu("Terminal settings")
+		cancelled := false
+		a.Form.Cancel = func() { cancelled = true }
+		a.Form.Fields[0].Value = "edited"
+		if c.close {
+			a.RequestClose()
+		} else {
+			a.RequestQuit()
+		}
+		if !cancelled || a.Form == nil || a.Form.Title != c.title || a.Form.Message != c.message {
+			t.Fatalf("cancelled=%v form=%+v", cancelled, a.Form)
+		}
+		a.key(Message{Key: "Escape"})
+		if a.Quit || a.Settings.Shell == "edited" {
+			t.Fatal("cancelled quit changed state")
+		}
+	}
+}
+
 func TestNewWindowInheritsCommandHistory(t *testing.T) {
 	root := t.TempDir()
 	first, err := New(root, root)

@@ -175,7 +175,7 @@ func (g *WindowGroup) Handle(id int, raw string) {
 		return
 	}
 	if m.Type == "close" {
-		a.RequestQuit()
+		a.RequestClose()
 	} else {
 		a.Handle(raw)
 	}
