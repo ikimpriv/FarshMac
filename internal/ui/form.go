@@ -27,6 +27,7 @@ type Form struct {
 	Submit                    func([]Field)
 	Choice                    []string
 	Select                    func(int)
+	OnKey                     func(Message) bool // handles list-specific keys first
 }
 
 func (a *App) form(title string, fields []Field, submit func([]Field)) {
@@ -35,6 +36,34 @@ func (a *App) form(title string, fields []Field, submit func([]Field)) {
 		cursor = utf8.RuneCountInString(fields[0].Value)
 	}
 	a.Form = &Form{Title: title, Fields: fields, Cursor: cursor, Submit: submit}
+}
+
+// formState holds window-local modal bookkeeping for forms and settings.
+type formState struct {
+	submitting   *Form  // the form whose Submit is running
+	connectNote  string // appended to the next "Connected" status
+	autoSaveDone bool   // Save setup on exit already ran for this window
+}
+
+// reopenForm shows a form again after its Submit rejected the values, keeping
+// everything the user entered and selecting the offending field.
+func (a *App) reopenForm(fields []Field, focus int, status string) {
+	if a.submitting == nil {
+		a.Status = status
+		return
+	}
+	reopened := *a.submitting
+	reopened.Fields = fields
+	reopened.Focus = max(0, min(focus, len(fields)-1))
+	reopened.Cursor = 0
+	reopened.Selected = false
+	if reopened.Focus < len(fields) {
+		reopened.Cursor = utf8.RuneCountInString(fields[reopened.Focus].Value)
+		reopened.Selected = !fields[reopened.Focus].Toggle
+	}
+	a.Form = &reopened
+	a.Status = status
+	a.dirty = true
 }
 func (a *App) choose(title string, choices []string, selectItem func(int)) {
 	if len(choices) == 0 {
@@ -48,6 +77,9 @@ func (a *App) confirm(title, message string, buttons []string, selectItem func(i
 }
 func (a *App) formKey(m Message) {
 	f := a.Form
+	if f.OnKey != nil && f.OnKey(m) {
+		return
+	}
 	if m.Key == "Escape" {
 		a.Form = nil
 		if f.Cancel != nil {
@@ -130,7 +162,9 @@ func (a *App) formKey(m Message) {
 				f.Cancel()
 			}
 		} else {
+			a.submitting = f
 			f.Submit(f.Fields)
+			a.submitting = nil
 		}
 		return
 	}

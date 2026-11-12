@@ -81,7 +81,7 @@ func (a *App) menuSections() []menuSection {
 				a.Status = "Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen."
 			}},
 			{},
-			{"Save setup", "", a.saveSetup}, {"Keyboard reference", "F1", function(1)},
+			{"Save setup", "⇧F9", func() { a.saveSetup() }}, {"Keyboard reference", "F1", function(1)},
 		}},
 		{"Right", 46, panel(1)},
 	}

@@ -336,6 +336,7 @@ type App struct {
 	jobs                                                      chan func()
 	history                                                   []string
 	historyAt                                                 int
+	formState
 }
 
 func New(left, right string) (*App, error)      { return newApp(left, right, false) }
@@ -403,9 +404,7 @@ func (a *App) Close() {
 			}
 		}()
 	}
-	if a.Settings.AutoSave {
-		a.saveSetup()
-	}
+	_ = a.autoSaveSetup()
 	for _, d := range append(a.Documents, a.Doc) {
 		if d != nil {
 			if d.File != nil {
@@ -1196,6 +1195,7 @@ jobsDone:
 	for i := range a.Panels {
 		if a.Panels[i].pollTree() || a.Panels[i].pollPanelLoad() {
 			a.dirty = true
+			a.noteInvalidRemoteNames(i)
 		}
 	}
 	if a.Operation != nil {

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"encoding/json"
 	"farshmac/internal/remotefs"
 	"farshmac/internal/terminal"
 	"farshmac/internal/textfile"
@@ -73,12 +72,8 @@ func setupPath() string {
 }
 func (a *App) LoadSetup() {
 	defer a.loadConnectionProfiles()
-	b, err := readConfigFile(setupPath())
-	if err != nil {
-		return
-	}
-	s := savedSetup{Settings: defaultSettings()}
-	if json.Unmarshal(b, &s) != nil {
+	s, ok := a.readSetupFile()
+	if !ok {
 		return
 	}
 	a.Settings = s.Settings
@@ -132,15 +127,13 @@ func (a *App) configurePanel(i int) {
 	p.MaskGroups = a.Settings.MaskGroups
 	p.DescriptionFile = a.Settings.DescriptionFile
 }
-func (a *App) saveSetup() {
+
+// setupSnapshot collects what Save setup writes from this window: shared
+// settings plus this window's panel options and histories.
+func (a *App) setupSnapshot() savedSetup {
 	a.normalizeSettings()
 	for _, p := range a.Panels {
 		if p.Remote != nil {
-			for i := range a.Settings.RemoteConnections {
-				if a.Settings.RemoteConnections[i].Label() == p.Remote.Label() {
-					a.Settings.RemoteConnections[i].Directory = p.Path
-				}
-			}
 			continue
 		}
 		for _, path := range p.History {
@@ -152,27 +145,7 @@ func (a *App) saveSetup() {
 		s.Panels[i] = a.Panels[i].panelOptions
 		s.Paths[i] = a.Panels[i].filesystemPath()
 	}
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err == nil {
-		err = os.MkdirAll(filepath.Dir(setupPath()), 0700)
-	}
-	if err == nil {
-		var f *os.File
-		f, err = os.CreateTemp(filepath.Dir(setupPath()), ".setup-*")
-		if err == nil {
-			defer os.Remove(f.Name())
-			_, err = f.Write(b)
-			closeErr := f.Close()
-			if err == nil {
-				err = closeErr
-			}
-			if err == nil {
-				err = os.Rename(f.Name(), setupPath())
-			}
-		}
-	}
-	a.Status = "Setup saved"
-	a.error(err)
+	return s
 }
 func (a *App) settingsMenu(kind string) {
 	toggle := func(label string, b bool) Field { return Field{Label: label, Toggle: true, Checked: b} }
