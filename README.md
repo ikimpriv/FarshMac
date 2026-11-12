@@ -35,6 +35,7 @@ Unzip the universal macOS archive and move **FarshMac.app** to Applications. App
 - ZIP, TAR, compressed TAR, and other archive formats; enter archives as folders and copy files out.
 - FTP, FTPS, and SFTP panels, saved connection profiles, and configurable parallel copying.
 - Trash by default, explicit permanent deletion, cancellable background operations, and copy metadata options.
+- Link-aware local copy and move: relative symbolic links keep pointing at the same object (Smart, the default; As is and Copy contents are also available in the F5/F6 dialog), and hard-linked files copied together stay hard links.
 - Graphical image/PDF quick view and an information panel with macOS disk, memory, and power data.
 
 ## Build and run
@@ -82,7 +83,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | F3 / F4 | View / edit; F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
-| Alt+F6 | Create a symbolic or hard link |
+| Alt+F6 | Create a symbolic link (relative by default) or hard link; naming an existing folder creates the link inside it |
 | F8 | Move to Trash |
 | Shift+F8 / Shift+Delete | Delete permanently (always asks) |
 | Shift+F1 / Shift+F2 / Shift+F3 | Create archive / extract archive / archive commands |

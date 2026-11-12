@@ -1421,7 +1421,8 @@ Left/Right menu    Brief, Medium, Full, Wide, Detailed, Info, Tree, Quick view
 Shift+F5/F6        Copy/move only the current item
 Shift+F1/F2/F3     Archive create/extract/commands
 Shift+F9           Save setup
-Alt+F6             Link (symbolic / hard)
+Alt+F6             Link (symbolic, relative by default / hard); an existing
+                   folder as the name creates the link inside it
 Alt+F7 / Alt+F8    Find file / command history (inserts, does not run)
 Alt+F10            Folder tree
 Alt+F11/F12        View/edit history / folder history
@@ -1506,6 +1507,10 @@ Read-only archive panels are supported. No Windows DLL plugins or macros.
 Cross-volume moves copy each file with metadata, ask before any loss, then
 delete the source.
 Copy options: permissions/ACL, xattrs/flags/timestamps (F5 dialog).
+Symbolic links (F5/F6, local): Smart keeps links pointing at the same object
+(relative links to outside the selection are rewritten), As is copies the
+link text, Copy contents copies what links point to. Hard-linked files
+copied together stay hard links.
 The text editor saves atomically and keeps xattrs, ACLs and hidden/nodump
 flags; it warns "Saved; some attributes were not preserved" otherwise.
 Unwritable folders: "Save in place" (not atomic, keeps hard links).

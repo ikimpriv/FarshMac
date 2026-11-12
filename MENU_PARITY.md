@@ -34,7 +34,7 @@ archive plugin or extension.
 
 - View / folder size, Edit, New file, Copy, Rename or move, Link, Make folder, Move to Trash (F8), and Delete permanently (Shift+F8 / Shift+Delete).
 - Existing directories merge during copy/move. File conflicts offer **Overwrite / All / Skip / Skip all / Cancel**. Replacements are staged first; destination symlinks are not followed, except that a symlink to a folder given as the destination acts as that folder. Cross-volume moves copy each file with metadata, ask before any loss, then delete that source file.
-- Symbolic/hard links, nested directory creation and size calculation without following directory symlinks.
+- Symbolic (relative by default) and hard links, created inside an existing folder given as the name; nested directory creation and size calculation without following directory symlinks. Local copy/move offers Smart / As is / Copy contents for symbolic links and keeps hard-link groups (see [file operations](docs/FILE_OPERATIONS.md)).
 - ZIP/JAR/WAR, TAR, tar.gz/tgz, tar.bz2/tbz/tbz2, tar.xz/txz and 7z: create, extract to a new directory, list and test. RAR/CPIO: read/extract. Internal links are supported when confined to the destination. Early versions exposed archive actions on Enter; read-only archive panels were added in 0.11. Archive updates, full-extraction merging, passwords and multi-volume archives remain unsupported. See [archive details](ARCHIVE_SUPPORT.md).
 - File attributes: POSIX mode 000–777 and local modification time; symlinks are not modified. ACLs, BSD flags, owner/group and independent access/creation times were absent from this dialog.
 - Apply command replaces `{}` with each selected file's shell-quoted path and runs in the embedded terminal.

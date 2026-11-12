@@ -113,8 +113,11 @@ even when hidden files are disabled. Failure preserves the selection.
 
 Copy/Move/Delete and ZIP creation/extraction/testing display total/current-file
 progress, bytes/items, speed, elapsed time, and ETA. Prescanning does not traverse
-symlink directories. Bytes represent logical work: atomic rename and Skip count
-immediately. Concurrent source changes can invalidate initial totals.
+symlink directories; with **Symbolic links: Copy contents** the totals grow as
+followed folders are read, and a same-volume folder move into another folder walks
+it once to fix links (cancellable). Bytes represent logical work: atomic
+rename and Skip count immediately. Concurrent source changes can invalidate
+initial totals.
 
 Esc requests cancellation directly. Reads check between blocks; deletion checks
 between entries. Incomplete temporary copies are removed; completed work is not
