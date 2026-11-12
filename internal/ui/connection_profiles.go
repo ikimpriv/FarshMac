@@ -67,6 +67,11 @@ func (a *App) updateConnectionProfile(origin, profile remotefs.Config) error {
 		var out []remotefs.Config
 		placed := false
 		for _, old := range profiles {
+			if old.PlainFTPAccepted && old.Label() == profile.Label() {
+				profile.PlainFTPAccepted = true // a remembered warning stays remembered
+			}
+		}
+		for _, old := range profiles {
 			switch profileKey(old) {
 			case profileKey(origin):
 				if !placed {
