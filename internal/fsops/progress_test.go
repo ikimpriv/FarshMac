@@ -88,7 +88,7 @@ func TestArchiveAndDeleteProgress(t *testing.T) {
 	}
 	o = NewOperation("extract")
 	dst := filepath.Join(root, "out")
-	if e := ExtractZIP(archive, dst, o); e != nil {
+	if e := ExtractArchive(archive, dst, o); e != nil {
 		t.Fatal(e)
 	}
 	p = o.Snapshot()
