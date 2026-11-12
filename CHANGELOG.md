@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.21.0 — File safety, links, and window bookmarks
+
+- Improve editor permission checks, open/save errors, external-change detection, and explicit save-in-place recovery.
+- Add Smart / As is / Copy contents handling for symbolic links and preserve hard links copied together.
+- Improve local and remote operation recovery, cancellation, connection trust handling, and progress reporting.
+- Unify folder and document bookmarks per window: Cmd+Option+0…9 saves a slot; Cmd+0…9 opens it.
+- Enter opens .app bundles as folders; F3 opens supported images in the graphical viewer.
+- Expand regression coverage for file operations, editor saves, remote sessions, terminal integration, and rendering.
+
 ## 0.20.0 — File-operation dialogs and recovery
 
 - Adapt Far Manager file-operation dialogs: source/destination size and date, Overwrite / Skip / Rename / Append, Remember choice, and read-only confirmations.
