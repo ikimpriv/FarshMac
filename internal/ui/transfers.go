@@ -253,8 +253,11 @@ func (a *App) archiveCommands() {
 		}
 		a.backgroundProgress("Reading archive", func(o *fsops.Operation) (func(), error) {
 			text, err := fsops.ArchiveContents(path, i == 1, o)
-			return func() { a.report("Archive: "+filepath.Base(path), text) }, err
+			return func() { a.report("Archive: "+filepath.Base(path), text) }, archiveFailure(err)
 		})
+		if a.task != nil {
+			a.task.reportError = true
+		}
 	})
 }
 

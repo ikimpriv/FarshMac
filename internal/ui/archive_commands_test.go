@@ -2,12 +2,63 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
 )
+
+func TestOpeningDamagedArchiveShowsDialog(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "bad.tar.gz"), []byte("not an archive at all"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "bad.tar.gz")
+	a.key(Message{Key: "Enter"})
+	waitWork(t, a)
+	if a.Form == nil || a.Form.Title != "Opening archive failed" || !strings.Contains(a.Form.Message, "archive operation failed") {
+		t.Fatalf("form %+v status %q", a.Form, a.Status)
+	}
+	a.key(Message{Key: "Enter"})
+	a.archiveCommands()
+	a.Form.Focus = 1 // Test archive
+	a.formKey(Message{Key: "Enter"})
+	waitWork(t, a)
+	if a.Form == nil || a.Form.Title != "Reading archive failed" {
+		t.Fatalf("form %+v status %q", a.Form, a.Status)
+	}
+}
+
+func TestEncryptedArchiveMessage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/usr/bin/zip", "-q", "-P", "fixture-password", "encrypted.zip", "file")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fixture: %s: %v", out, err)
+	}
+	a, err := New(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	selectEntry(t, &a.Panels[0], "encrypted.zip")
+	a.key(Message{Key: "Enter"})
+	waitWork(t, a)
+	if a.Form == nil || !strings.HasPrefix(a.Form.Message, "Encrypted archives are not supported\n") || a.Panels[0].Archive != nil {
+		t.Fatalf("form %+v", a.Form)
+	}
+}
 
 func TestArchiveCommandsRefuseRemoteOppositePanel(t *testing.T) {
 	root, hidden := t.TempDir(), t.TempDir()

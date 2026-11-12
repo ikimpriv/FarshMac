@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,6 +70,7 @@ func (a *App) openArchive(index int, path string) {
 func (a *App) openArchiveAt(index int, path, target string) {
 	a.backgroundTask("Opening archive", func(o *fsops.Operation) (func(), func(), error) {
 		catalog, err := fsops.ReadArchiveIndex(path, o)
+		err = archiveFailure(err)
 		return func() {
 			p := &a.Panels[index]
 			p.cancelPanelLoad()
@@ -87,6 +89,25 @@ func (a *App) openArchiveAt(index int, path, target string) {
 			a.error(p.Load(target))
 		}, nil, err
 	})
+	if a.task != nil {
+		a.task.reportError = true // bsdtar diagnostics do not fit the status line.
+	}
+}
+
+// archiveFailure puts the reason first for encrypted archives; bsdtar's own
+// diagnostic stays below it.
+func archiveFailure(err error) error {
+	if err == nil || errors.Is(err, fsops.ErrCancelled) {
+		return err
+	}
+	if errors.Is(err, fsops.ErrEncryptedArchive) {
+		return fmt.Errorf("Encrypted archives are not supported\n%w", err)
+	}
+	detail := strings.ToLower(strings.ReplaceAll(err.Error(), "damaged, encrypted or unsupported archive", ""))
+	if strings.Contains(detail, "passphrase") || strings.Contains(detail, "encrypt") {
+		return fmt.Errorf("Encrypted archives are not supported\n%w", err)
+	}
+	return err
 }
 func (a *App) archiveReadOnly() bool {
 	if a.Panels[a.Active].Archive == nil {
