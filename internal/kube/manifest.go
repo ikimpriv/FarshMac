@@ -39,15 +39,35 @@ func (c *Client) Get(ctx context.Context, ref Ref) (*unstructured.Unstructured, 
 // uid, resourceVersion, creationTimestamp, generation, selfLink, status and
 // ownerReferences. The namespace is kept.
 func ExportYAML(obj *unstructured.Unstructured, clean bool) ([]byte, error) {
+	if clean {
+		return ExportYAMLMode(obj, ExportClean)
+	}
+	return ExportYAMLMode(obj, ExportFull)
+}
+
+// ExportMode selects which server-managed fields an export keeps.
+type ExportMode int
+
+const (
+	ExportFull  ExportMode = iota // Everything, as the server returns it (viewer).
+	ExportEdit                    // Without status, managedFields, uid, resourceVersion, creationTimestamp, generation, selfLink; ownerReferences kept (editor: Update replaces the whole object).
+	ExportClean                   // ExportEdit without ownerReferences (copies to another namespace or cluster).
+)
+
+// ExportYAMLMode renders an object as YAML, dropping fields by mode.
+func ExportYAMLMode(obj *unstructured.Unstructured, mode ExportMode) ([]byte, error) {
 	if obj == nil {
 		return nil, fmt.Errorf("no object")
 	}
 	out := obj.DeepCopy()
-	if clean {
+	if mode != ExportFull {
 		unstructured.RemoveNestedField(out.Object, "status")
-		for _, field := range []string{"managedFields", "uid", "resourceVersion", "creationTimestamp", "generation", "selfLink", "ownerReferences"} {
+		for _, field := range []string{"managedFields", "uid", "resourceVersion", "creationTimestamp", "generation", "selfLink"} {
 			unstructured.RemoveNestedField(out.Object, "metadata", field)
 		}
+	}
+	if mode == ExportClean {
+		unstructured.RemoveNestedField(out.Object, "metadata", "ownerReferences")
 	}
 	return sigyaml.Marshal(out.Object)
 }

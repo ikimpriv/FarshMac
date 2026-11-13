@@ -204,8 +204,11 @@ func TestKubeManifestViewEditAndDelete(t *testing.T) {
 	if a.Doc == nil || !strings.Contains(a.Doc.Text, "kind: Deployment") || !strings.Contains(a.Doc.Text, "name: app") || a.Doc.Edit {
 		t.Fatal("manifest view", a.Doc, a.Status)
 	}
-	if a.Doc.displayPath() != "k8s:fake/shop/deployments/app" {
-		t.Fatal("display path", a.Doc.displayPath())
+	if a.Doc.displayPath() != "k8s:fake/shop/deployments/app.yaml" {
+		t.Fatal("display path must end in .yaml for highlighting", a.Doc.displayPath())
+	}
+	if !strings.Contains(a.Doc.Text, "resourceVersion:") {
+		t.Fatal("the viewer shows the full manifest", a.Doc.Text)
 	}
 	closeDoc(t, a, "app")
 	a.key(Message{Key: "F4"})
@@ -213,6 +216,9 @@ func TestKubeManifestViewEditAndDelete(t *testing.T) {
 	d := a.Doc
 	if d == nil || !d.Edit {
 		t.Fatal("manifest editor", a.Status)
+	}
+	if strings.Contains(d.Text, "resourceVersion:") || strings.Contains(d.Text, "creationTimestamp:") || strings.Contains(d.Text, "uid:") || !strings.Contains(d.Text, "name: app") {
+		t.Fatal("the editor must strip server-managed fields", d.Text)
 	}
 	d.Cursor = len(d.Text)
 	d.Insert("  replicas-note: edited\n")

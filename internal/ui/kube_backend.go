@@ -653,6 +653,9 @@ func (kubeBackend) Open(a *App, p *Panel, edit bool) bool {
 		a.Status = "No manifest here: choose a namespace, an object or a pod"
 		return true
 	}
+	if m, ok := src.(*manifestSource); ok {
+		m.edit = edit
+	}
 	a.openSourceDocument(src, edit, a.showDocument, nil)
 	return true
 }

@@ -364,7 +364,21 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 			status(w, 409, "Conflict", "the object has been modified")
 			return
 		}
-		in["metadata"].(map[string]any)["resourceVersion"] = "2"
+		// Like a real server: identity and server-managed fields survive an update.
+		oldMeta, newMeta := items[index]["metadata"].(map[string]any), in["metadata"].(map[string]any)
+		for _, field := range []string{"uid", "creationTimestamp", "managedFields"} {
+			if _, ok := newMeta[field]; !ok {
+				if v, ok := oldMeta[field]; ok {
+					newMeta[field] = v
+				}
+			}
+		}
+		if _, ok := in["_columns"]; !ok {
+			if v, ok := items[index]["_columns"]; ok {
+				in["_columns"] = v
+			}
+		}
+		newMeta["resourceVersion"] = "2"
 		items[index] = in
 		f.puts = append(f.puts, path)
 		writeJSON(w, in)

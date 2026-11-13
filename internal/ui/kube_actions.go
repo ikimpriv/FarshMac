@@ -26,10 +26,12 @@ var namespaceGVR = schema.GroupVersionResource{Version: "v1", Resource: "namespa
 type manifestSource struct {
 	k               *kubePanel
 	ref             kube.Ref
+	edit            bool // The editor gets the manifest without server-managed fields.
 	resourceVersion string
 }
 
-func (s *manifestSource) Display() string { return s.k.label() + "/" + s.ref.String() }
+// Display ends in .yaml so the viewer and editor highlight it as YAML.
+func (s *manifestSource) Display() string { return s.k.label() + "/" + s.ref.String() + ".yaml" }
 func (s *manifestSource) Name() string    { return s.ref.Name + ".yaml" }
 func (s *manifestSource) Blocked(os.FileInfo) string {
 	return ""
@@ -39,7 +41,11 @@ func (s *manifestSource) Fetch(o *fsops.Operation, dir string) (string, os.FileI
 	if err != nil {
 		return "", nil, err
 	}
-	data, err := kube.ExportYAML(obj, false)
+	mode := kube.ExportFull
+	if s.edit {
+		mode = kube.ExportEdit
+	}
+	data, err := kube.ExportYAMLMode(obj, mode)
 	if err != nil {
 		return "", nil, err
 	}

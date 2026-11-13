@@ -137,7 +137,7 @@ The cluster is shown as folders: `/` lists namespaces, a namespace lists resourc
 | Level | Keys |
 | --- | --- |
 | Namespaces | F3/F4 manifest, F5 export every manifest of a namespace, F7 new namespace, F8 delete (type the name), Shift+F4 describe |
-| Type folder | F3 manifest (read-only), F4 edit and save with Update (conflicts are reported, your text is kept), F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
+| Type folder | F3 manifest (read-only), F4 edit without status, managedFields and other server-managed fields and save with Update (conflicts are reported, your text is kept); manifests are highlighted as YAML, F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
 | Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
 | Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls` found in the container; a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
 
