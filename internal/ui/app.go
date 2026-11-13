@@ -100,7 +100,7 @@ func (p *Panel) Load(path string) error {
 		return err
 	}
 	if p.Kube != nil {
-		if p.Async {
+		if p.Async && !p.Kube.cachedFor(abs) {
 			return p.loadPanel(abs)
 		}
 		return p.loadKube(abs)

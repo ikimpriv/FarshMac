@@ -36,12 +36,41 @@ type kubePanel struct {
 	last         kubePath                   // Level of the path last listed, for the key bar.
 	lastPath     string
 	watches      map[string]*kubeNamespaceWatch // Namespace ("" = the list of namespaces) -> its watches.
+	unwatched    map[string]string              // "ns/folder" -> why its watch ended (kept as listed).
+	reloading    map[string]bool                // Namespaces being reloaded in the background.
 	changed      atomic.Bool                    // Watches changed a snapshot; the panel re-lists.
 	reloadedAt   time.Time
 }
 
+// cachedFor reports whether the level at path can be listed from memory
+// alone, so the panel can be refreshed in place without a reading indicator.
+func (k *kubePanel) cachedFor(p string) bool {
+	segs := kubeSegments(p)
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(segs) == 0 {
+		return k.namespaces != nil
+	}
+	snap := k.snapshots[segs[0]]
+	if snap == nil {
+		return false
+	}
+	if _, watched := k.watches[segs[0]]; !watched && time.Since(snap.Taken) >= k.ttl {
+		return false
+	}
+	// A pod segment switches to the containers listing, which needs the
+	// pod from the server unless it is cached; deeper is a container.
+	for i := 1; i+1 < len(segs); i += 2 {
+		if segs[i] == "pods" {
+			_, ok := k.pods[segs[0]+"/"+segs[i+1]]
+			return ok && i+2 == len(segs)
+		}
+	}
+	return true
+}
+
 func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.Object, s Settings) *kubePanel {
-	k := &kubePanel{profile: profile, client: client, ttl: 30 * time.Second, hidden: map[string]bool{}, snapshots: map[string]*kube.Snapshot{}, pods: map[string]kube.PodSummary{}, probes: map[string]kube.Probe{}}
+	k := &kubePanel{profile: profile, client: client, ttl: 30 * time.Second, hidden: map[string]bool{}, snapshots: map[string]*kube.Snapshot{}, pods: map[string]kube.PodSummary{}, probes: map[string]kube.Probe{}, unwatched: map[string]string{}, reloading: map[string]bool{}}
 	for _, name := range strings.Split(s.KubeHiddenTypes, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			k.hidden[name] = true

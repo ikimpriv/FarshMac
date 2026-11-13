@@ -85,19 +85,52 @@ func (k *kubePanel) watchFolder(ctx context.Context, ns string, r kube.Resource,
 		k.changed.Store(true)
 	}
 	if err := result(); err != nil && ctx.Err() == nil {
-		// Expired or broken beyond reconnecting: the next listing reloads
-		// and starts the watches again.
-		k.mu.Lock()
-		if w, ok := k.watches[ns]; ok {
-			w.cancel()
-			delete(k.watches, ns)
-		}
-		delete(k.snapshots, ns)
-		k.mu.Unlock()
 		if errors.Is(err, kube.ErrWatchExpired) {
-			k.changed.Store(true)
+			// Too old to resume: reload the namespace in the background and
+			// start its watches again; the panel keeps showing the old list.
+			k.reloadNamespace(ns)
+			return
 		}
+		// A type that cannot be watched (or a terminal API error) keeps the
+		// snapshot as listed; the rest of the namespace stays live.
+		k.mu.Lock()
+		k.unwatched[ns+"/"+r.Folder] = err.Error()
+		k.mu.Unlock()
 	}
+}
+
+// reloadNamespace replaces a namespace snapshot from the server without
+// touching the panel until the data is in, then restarts its watches.
+func (k *kubePanel) reloadNamespace(ns string) {
+	k.mu.Lock()
+	if k.reloading[ns] {
+		k.mu.Unlock()
+		return
+	}
+	k.reloading[ns] = true
+	if w, ok := k.watches[ns]; ok {
+		w.cancel()
+		delete(k.watches, ns)
+	}
+	k.mu.Unlock()
+	go func() {
+		defer func() {
+			k.mu.Lock()
+			delete(k.reloading, ns)
+			k.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		snap, err := k.client.LoadSnapshot(ctx, ns, k.hidden)
+		if err != nil {
+			return // The TTL path reloads it on the next listing.
+		}
+		k.mu.Lock()
+		k.snapshots[ns] = snap
+		k.mu.Unlock()
+		k.startWatches(ns, snap, "")
+		k.changed.Store(true)
+	}()
 }
 
 func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
@@ -127,9 +160,24 @@ func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
 			w.cancel()
 			delete(k.watches, "")
 		}
-		k.namespaces, k.namespacesAt = nil, time.Time{}
 		k.mu.Unlock()
-		k.changed.Store(true)
+		if errors.Is(err, kube.ErrWatchExpired) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				list, rv, err := k.client.NamespacesRV(ctx)
+				if err != nil {
+					return
+				}
+				k.mu.Lock()
+				k.namespaces, k.namespacesAt = list, time.Now()
+				k.mu.Unlock()
+				if rv != "" {
+					k.startWatches("", nil, rv)
+				}
+				k.changed.Store(true)
+			}()
+		}
 	}
 }
 
@@ -145,8 +193,11 @@ func (k *kubePanel) stopWatches() {
 // takeChanged reports, once, that watches changed something since the last call.
 func (k *kubePanel) takeChanged() bool { return k.changed.Swap(false) }
 
-// pollKubeWatches re-lists Kubernetes panels whose snapshots changed, at
-// most a few times per second and never over a listing in progress.
+// pollKubeWatches re-lists Kubernetes panels whose snapshots changed: from
+// the cache, synchronously, so the entries are replaced in place without a
+// reading indicator; at most a few times per second and never over a
+// listing in progress. Levels that need the server (container listings)
+// are left alone until the user re-enters them.
 func (a *App) pollKubeWatches() {
 	for i := range a.Panels {
 		p := &a.Panels[i]
@@ -159,9 +210,11 @@ func (a *App) pollKubeWatches() {
 			continue
 		}
 		k.reloadedAt = time.Now()
-		if err := p.Load(p.Path); err != nil {
-			p.Err = err.Error()
+		if !k.cachedFor(p.Path) {
+			continue
 		}
-		a.dirty = true
+		if err := p.loadKube(p.Path); err == nil {
+			a.dirty = true
+		}
 	}
 }

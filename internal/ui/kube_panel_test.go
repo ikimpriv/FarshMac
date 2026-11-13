@@ -173,7 +173,7 @@ func TestKubePanelLevels(t *testing.T) {
 	before := p.Path
 	a.error(p.Load("/shop/nothing"))
 	waitNetwork(t, a)
-	if p.Path != before || !strings.Contains(p.Err, "no such folder") {
+	if p.Path != before || !strings.Contains(p.Err+a.Status, "no such folder") {
 		t.Fatal("bad path", p.Path, p.Err, a.Status)
 	}
 	// The terminal stays local and F9 gets a Kubernetes section.
@@ -335,10 +335,29 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(strings.Join(entryNames(p), ","), "late") {
 		a.Poll()
+		// Updates come from the cache: no reading indicator, no emptied list.
+		if p.load != nil || len(p.Entries) < 2 || p.Err != "" {
+			t.Fatal("watch update must not re-read the cluster", p.load != nil, len(p.Entries), p.Err)
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if got := strings.Join(entryNames(p), ","); !strings.Contains(got, "late") {
 		t.Fatal("added object not shown", got)
+	}
+	// An expired watch reloads the namespace in the background and resumes.
+	f.ExpireWatch("/apis/apps/v1/namespaces/shop/deployments")
+	f.DropWatches("/apis/apps/v1/namespaces/shop/deployments")
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && p.Kube.watching("shop") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	for time.Now().Before(deadline) && !p.Kube.watching("shop") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !p.Kube.watching("shop") || len(p.Entries) < 2 || p.load != nil {
+		t.Fatal("watch did not resume after expiry", p.Kube.watching("shop"), len(p.Entries), p.load != nil)
 	}
 	f.Emit("/apis/apps/v1/namespaces/shop/deployments", "DELETED", kubetest.Obj("Deployment", "shop", "late", "dep-late", nil, nil, nil))
 	deadline = time.Now().Add(10 * time.Second)
