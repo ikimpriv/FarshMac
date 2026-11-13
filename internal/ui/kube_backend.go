@@ -588,8 +588,10 @@ func (kubeBackend) Caps(p *Panel) panelCaps {
 	switch p.kubeLevel().Level {
 	case kubeRoot:
 		return capMkdir | capDelete | capQuickView
+	case kubeNamespace, kubeObject:
+		return capCopyIn
 	case kubeTypeFolder:
-		return capEdit | capDelete | capQuickView
+		return capEdit | capDelete | capQuickView | capCopyIn
 	case kubeContainers:
 		return capQuickView
 	case kubeContainerFS:

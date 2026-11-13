@@ -20,6 +20,10 @@ func (a *App) transferDialog(move bool) {
 	if move && p.backend().Move(a, p) {
 		return
 	}
+	if !move && other.Kube != nil && other.kubeLevel().Level != kubeContainerFS {
+		a.kubeApplyDialog(p, other)
+		return
+	}
 	if !move && p.backend().Copy(a, p) {
 		return
 	}

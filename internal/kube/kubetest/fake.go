@@ -419,6 +419,10 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	i := strings.LastIndex(path, "/")
 	collection, name := path[:i], path[i+1:]
 	items, ok := f.objects[collection]
+	if !ok && r.Method == http.MethodPatch && strings.Contains(collection, "/namespaces/") {
+		// Server-side apply creates the first object of a type in a namespace.
+		items, ok = nil, true
+	}
 	if !ok {
 		if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/namespaces/") {
 			status(w, 404, "NotFound", "namespace not found")

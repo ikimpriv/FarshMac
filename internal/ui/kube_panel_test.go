@@ -507,3 +507,58 @@ func TestKubeQuickViewDescribes(t *testing.T) {
 		t.Fatal("type folder preview", a.previewText)
 	}
 }
+
+func TestKubeApplyManifestsIntoNamespace(t *testing.T) {
+	a, f := kubeApp(t)
+	p := &a.Panels[0]
+	local := a.Panels[1].Path
+	os.WriteFile(filepath.Join(local, "one.yaml"), []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: one\n  namespace: elsewhere\ndata:\n  a: \"1\"\n"), 0644)
+	os.MkdirAll(filepath.Join(local, "exported", "configmaps"), 0755)
+	os.WriteFile(filepath.Join(local, "exported", "configmaps", "two.yaml"), []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: two\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: three\n"), 0644)
+	os.WriteFile(filepath.Join(local, "exported", "notes.txt"), []byte("ignored"), 0644)
+	enterKube(t, a, "shop")
+	a.error(a.Panels[1].Load(local))
+	a.Panels[1].Marked = map[string]bool{"one.yaml": true, "exported": true}
+	a.Active = 1
+	a.key(Message{Key: "F5"})
+	if a.Form == nil || !strings.HasPrefix(a.Form.Title, "Apply 2 manifest file(s)") || a.Form.Fields[0].Value != "shop" {
+		t.Fatal("apply dialog", a.Form)
+	}
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	patches := f.Patches()
+	if len(patches) != 3 {
+		t.Fatal("three objects applied", patches, a.Status)
+	}
+	for _, patch := range patches {
+		if !strings.Contains(patch, "/namespaces/shop/configmaps/") {
+			t.Fatal("target namespace must win over the manifest's", patch)
+		}
+	}
+	// Objects of one namespace copied into another cluster panel land there.
+	a.connectKube(1, kube.Profile{Kubeconfig: f.Kubeconfig(t), Context: "fake"})
+	waitNetwork(t, a)
+	a.error(a.Panels[1].Load("/default"))
+	waitNetwork(t, a)
+	a.Active = 0
+	a.error(p.Load("/shop/deployments.apps"))
+	waitNetwork(t, a)
+	selectEntry(t, p, "app")
+	a.key(Message{Key: "F5"})
+	if a.Form == nil || !strings.HasPrefix(a.Form.Title, "Apply 1 object(s)") || a.Form.Fields[0].Value != "default" {
+		t.Fatal("cluster-to-cluster dialog", a.Form)
+	}
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	patches = f.Patches()
+	if len(patches) != 4 || !strings.Contains(patches[3], "/namespaces/default/deployments/app") {
+		t.Fatal("object applied into the other namespace", patches, a.Status)
+	}
+	// The cluster root does not accept manifests.
+	a.error(a.Panels[1].Load("/"))
+	waitNetwork(t, a)
+	a.key(Message{Key: "F5"})
+	if a.Form != nil || !strings.Contains(a.Status, "Choose a namespace") {
+		t.Fatal("root target", a.Form, a.Status)
+	}
+}

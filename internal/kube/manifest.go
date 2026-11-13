@@ -115,17 +115,34 @@ func (c *Client) ResourceFor(obj *unstructured.Unstructured) (schema.GroupVersio
 // Apply creates or updates the object in ns by server-side apply with field
 // manager "farshmac" and no force: conflicting managers fail.
 func (c *Client) Apply(ctx context.Context, obj *unstructured.Unstructured, ns string) (*unstructured.Unstructured, error) {
-	gvr, ok := c.ResourceFor(obj)
-	if !ok {
-		return nil, fmt.Errorf("unknown kind %s", obj.GroupVersionKind())
+	return c.ApplyWith(ctx, obj, ns, false)
+}
+
+// ApplyWith is Apply with an optional force, which takes fields over from
+// other field managers (kubectl, controllers) instead of failing on them.
+// A cluster-scoped kind is applied without a namespace.
+func (c *Client) ApplyWith(ctx context.Context, obj *unstructured.Unstructured, ns string, force bool) (*unstructured.Unstructured, error) {
+	gvk := obj.GroupVersionKind()
+	mapping, err := c.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return nil, fmt.Errorf("unknown kind %s", gvk)
 	}
 	obj = obj.DeepCopy()
-	obj.SetNamespace(ns)
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		obj.SetNamespace(ns)
+	} else {
+		ns = ""
+		obj.SetNamespace("")
+	}
 	data, err := obj.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
-	return c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "farshmac"})
+	options := metav1.PatchOptions{FieldManager: "farshmac"}
+	if force {
+		options.Force = &force
+	}
+	return c.dyn.Resource(mapping.Resource).Namespace(ns).Patch(ctx, obj.GetName(), types.ApplyPatchType, data, options)
 }
 
 // Update replaces the object; the manifest must carry the resourceVersion it
