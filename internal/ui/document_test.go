@@ -387,3 +387,43 @@ func TestEditorMacNavigationKeys(t *testing.T) {
 		t.Fatal("Option+Shift+Right selects by word", d.Anchor, d.Cursor, d.Rect)
 	}
 }
+
+func TestYAMLEditorNeverInsertsTabs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.yaml")
+	os.WriteFile(path, []byte("a:\n"), 0644)
+	a, _ := New(root, root)
+	defer a.Close()
+	a.Settings.EditorExpandTabs = false
+	a.Settings.EditorTabSize = 8
+	a.openDocument(path, true)
+	d := a.Doc
+	d.Cursor = len(d.Text)
+	a.key(Message{Key: "Tab"})
+	if !strings.HasSuffix(d.Text, "\n  ") {
+		t.Fatalf("Tab in YAML must insert two spaces: %q", d.Text)
+	}
+	a.Handle(`{"Type":"paste","Text":"\tb: 1\n"}`)
+	if strings.Contains(d.Text, "\t") {
+		t.Fatalf("pasted tabs must become spaces: %q", d.Text)
+	}
+	// Indenting a selection with Tab (and Alt+I) adds spaces as well.
+	d.Anchor, d.Cursor = 0, len(d.Text)
+	a.key(Message{Key: "Tab"})
+	if strings.Contains(d.Text, "\t") || !strings.HasPrefix(d.Text, "  a:") {
+		t.Fatalf("selection indent in YAML: %q", d.Text)
+	}
+	a.key(Message{Key: "i", Alt: true})
+	if strings.Contains(d.Text, "\t") || !strings.HasPrefix(d.Text, "    a:") {
+		t.Fatalf("Alt+I indent in YAML: %q", d.Text)
+	}
+	// Other documents follow the settings.
+	txt := filepath.Join(root, "notes.txt")
+	os.WriteFile(txt, []byte("x\n"), 0644)
+	a.openDocument(txt, true)
+	a.Doc.Cursor = len(a.Doc.Text)
+	a.key(Message{Key: "Tab"})
+	if !strings.HasSuffix(a.Doc.Text, "\t") {
+		t.Fatalf("text files keep real tabs when configured: %q", a.Doc.Text)
+	}
+}

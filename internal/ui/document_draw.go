@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -102,7 +103,7 @@ func (a *App) binaryWidth() int {
 }
 func (a *App) drawDoc(g *Grid) {
 	d := a.Doc
-	d.TabSize = a.editorTabWidth()
+	d.TabSize, _ = a.editorTabs(d)
 	syntax := a.documentSyntax(d)
 	g.Fill(0, 0, g.W, g.H, LightCyan, Blue)
 	top, bottom := 1, g.H-1
@@ -286,6 +287,30 @@ func (a *App) editorTabWidth() int {
 		return 4
 	}
 	return a.Settings.EditorTabSize
+}
+
+// isYAML: YAML forbids tabs in indentation, so YAML documents always indent
+// with spaces, two per level as is customary, whatever the editor settings.
+func (d *Document) isYAML() bool {
+	ext := strings.ToLower(filepath.Ext(d.displayPath()))
+	return ext == ".yaml" || ext == ".yml"
+}
+
+// editorTabs is the indentation width and whether Tab inserts spaces for
+// the document: the settings, or YAML's fixed two spaces.
+func (a *App) editorTabs(d *Document) (width int, expand bool) {
+	if d.isYAML() {
+		return 2, true
+	}
+	return a.editorTabWidth(), a.Settings.EditorExpandTabs
+}
+
+// yamlText replaces tabs in text typed or pasted into a YAML document.
+func yamlText(d *Document, text string) string {
+	if d.isYAML() && strings.Contains(text, "\t") {
+		return strings.ReplaceAll(text, "\t", "  ")
+	}
+	return text
 }
 func (d *Document) tabWidth() int {
 	if d.TabSize < 1 || d.TabSize > 16 {

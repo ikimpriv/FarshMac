@@ -699,7 +699,7 @@ func (a *App) Handle(raw string) {
 				a.dirty = true
 				return
 			}
-			a.Doc.Insert(m.Text)
+			a.Doc.Insert(yamlText(a.Doc, m.Text))
 			a.Doc.modified()
 			return
 		}

@@ -138,11 +138,12 @@ func (a *App) editorKey(m Message) {
 		return
 	}
 	if m.Alt {
+		width, expand := a.editorTabs(d)
 		switch strings.ToLower(m.Key) {
 		case "i":
-			d.IndentWithOptions(false, a.editorTabWidth(), a.Settings.EditorExpandTabs)
+			d.IndentWithOptions(false, width, expand)
 		case "u":
-			d.IndentWithOptions(true, a.editorTabWidth(), a.Settings.EditorExpandTabs)
+			d.IndentWithOptions(true, width, expand)
 		}
 		d.modified()
 		return
@@ -169,14 +170,15 @@ func (a *App) editorKey(m Message) {
 			d.Newline(a.Settings.EditorAutoIndent)
 		}
 	case "Tab":
+		width, expand := a.editorTabs(d)
 		if m.Shift {
-			d.IndentWithOptions(true, a.editorTabWidth(), a.Settings.EditorExpandTabs)
+			d.IndentWithOptions(true, width, expand)
 		} else if d.Anchor >= 0 && d.Cursor != d.Anchor {
-			d.IndentWithOptions(false, a.editorTabWidth(), a.Settings.EditorExpandTabs)
-		} else if a.Settings.EditorExpandTabs {
+			d.IndentWithOptions(false, width, expand)
+		} else if expand {
 			start := d.Lines()[pos.Row]
-			col := displayWidthTabs(d.Text[start:d.Cursor], a.editorTabWidth())
-			d.Insert(strings.Repeat(" ", a.editorTabWidth()-col%a.editorTabWidth()))
+			col := displayWidthTabs(d.Text[start:d.Cursor], width)
+			d.Insert(strings.Repeat(" ", width-col%width))
 		} else {
 			d.Insert("\t")
 		}
