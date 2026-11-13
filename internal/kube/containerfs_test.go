@@ -63,8 +63,8 @@ func TestProbeContainerWithoutShell(t *testing.T) {
 	if _, err = kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, kube.Probe{}); !errors.Is(err, kube.ErrNoShell) {
 		t.Fatal("open without shell", err)
 	}
-	if _, err = kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, kube.Probe{Shell: "/bin/sh"}); !errors.Is(err, kube.ErrNoLister) {
-		t.Fatal("open without lister", err)
+	if fs, err := kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, kube.Probe{Shell: "/bin/sh"}); err != nil || fs.ListMode() != "builtin" {
+		t.Fatal("a shell alone lists with its builtins", fs, err)
 	}
 	if fs := openFS(t, executorWith(t)); fs.HasTar() {
 		t.Fatal("tar reported without tar")
@@ -322,4 +322,139 @@ func TestExitCode(t *testing.T) {
 	}
 	var zero remotecommand.TerminalSize
 	_ = zero
+}
+
+// failingExecutor answers every exec with one error, like a runtime that
+// cannot reach the container at all.
+type failingExecutor struct{ err error }
+
+func (f failingExecutor) Stream(context.Context, kube.ContainerRef, kube.ExecOptions) error {
+	return f.err
+}
+
+func TestProbeReportsExecFailuresUnwrapped(t *testing.T) {
+	err := errors.New(`Internal error occurred: unable to upgrade connection: container not found ("main")`)
+	_, got := kube.ProbeContainer(context.Background(), failingExecutor{err}, kube.ContainerRef{})
+	if got == nil || errors.Is(got, kube.ErrNoShell) || !strings.Contains(got.Error(), "unable to upgrade connection") {
+		t.Fatal("exec failure must not become a missing shell:", got)
+	}
+	// A runtime that cannot find the shell still means no shell.
+	missing := utilexec.CodeExitError{Err: errors.New("exec failed"), Code: 127}
+	if _, got = kube.ProbeContainer(context.Background(), failingExecutor{missing}, kube.ContainerRef{}); !errors.Is(got, kube.ErrNoShell) {
+		t.Fatal("exit 127 means no shell:", got)
+	}
+}
+
+func TestBusyboxStatListsWithRealSeparator(t *testing.T) {
+	// BusyBox stat prints a \001 escape literally; the format carries a real
+	// 0x01 byte, so busybox and GNU stat both produce parsable records.
+	root := localexec.Fixture(t)
+	x := executorWith(t, "busybox-stat")
+	probe, err := kube.ProbeContainer(context.Background(), x, kube.ContainerRef{})
+	if err != nil || !probe.Stat {
+		t.Fatalf("busybox stat must pass the probe with a real separator byte: %+v %v", probe, err)
+	}
+	fs, err := kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.ReadDir(root)
+	if err != nil || len(entries) != 7 || fs.ListMode() != "stat" {
+		t.Fatalf("busybox stat listing: %d entries, mode %s, err %v", len(entries), fs.ListMode(), err)
+	}
+}
+
+func TestUnparsableStatFallsBackToLs(t *testing.T) {
+	root := localexec.Fixture(t)
+	x := executorWith(t, "terse-stat")
+	probe, err := kube.ProbeContainer(context.Background(), x, kube.ContainerRef{})
+	if err != nil || probe.Stat {
+		t.Fatalf("a stat ignoring the format must not pass the probe: %+v %v", probe, err)
+	}
+	// Even when a stale probe claims stat, listing notices and moves on.
+	probe.Stat = true
+	fs, err := kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.ReadDir(root)
+	if err != nil || len(entries) != 7 || fs.ListMode() != "ls" {
+		t.Fatalf("fallback listing: %d entries, mode %s, err %v", len(entries), fs.ListMode(), err)
+	}
+	if info, err := fs.Lstat(filepath.Join(root, "plain.txt")); err != nil || info.Size() != 5 {
+		t.Fatal("lstat after fallback", info, err)
+	}
+}
+
+func TestBadFindFallsBack(t *testing.T) {
+	root := localexec.Fixture(t)
+	x := executorWith(t, "bad-find", "stat")
+	probe, err := kube.ProbeContainer(context.Background(), x, kube.ContainerRef{})
+	if err != nil || probe.Find || !probe.Stat {
+		t.Fatalf("a find rejecting %%y must not pass the probe: %+v %v", probe, err)
+	}
+	probe.Find = true
+	fs, err := kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.ReadDir(root)
+	if err != nil || len(entries) != 7 || fs.ListMode() != "stat" {
+		t.Fatalf("fallback from find: %d entries, mode %s, err %v", len(entries), fs.ListMode(), err)
+	}
+	if _, err := fs.ReadDir(filepath.Join(root, "nope")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing directory after fallback", err)
+	}
+	// An empty directory is empty, not a parse failure.
+	empty := filepath.Join(root, "empty")
+	os.Mkdir(empty, 0755)
+	if entries, err := fs.ReadDir(empty); err != nil || len(entries) != 0 || fs.ListMode() != "stat" {
+		t.Fatal("empty directory", entries, err, fs.ListMode())
+	}
+}
+
+func TestShellOnlyContainer(t *testing.T) {
+	root := localexec.Fixture(t)
+	x := localexec.New(t, "")
+	probe, err := kube.ProbeContainer(context.Background(), x, kube.ContainerRef{})
+	if err != nil || probe.Cat || probe.Ls || probe.Stat || probe.Find || probe.Shell == "" {
+		t.Fatalf("shell-only probe %+v %v", probe, err)
+	}
+	fs, err := kube.OpenContainerFS(context.Background(), x, kube.ContainerRef{}, probe)
+	if err != nil || fs.ListMode() != "builtin" {
+		t.Fatal("open shell-only", err)
+	}
+	entries, err := fs.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]os.FileInfo{}
+	for _, e := range entries {
+		got[e.Name()] = e
+	}
+	if len(got) != 7 || !got["sub dir"].IsDir() || got["link-to-dir"].Mode()&os.ModeSymlink == 0 || got["plain.txt"].IsDir() {
+		t.Fatalf("builtin listing %v", keys(got))
+	}
+	if _, err := fs.ReadDir(filepath.Join(root, "nope")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing directory", err)
+	}
+	if _, err := fs.Lstat(filepath.Join(root, "nope")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing path", err)
+	}
+	if info, err := fs.Stat(filepath.Join(root, "link-to-dir")); err != nil || !info.IsDir() {
+		t.Fatal("Stat through a link with builtins", info, err)
+	}
+	// Reading uses the shell's read loop; writing is refused with the reason.
+	r, err := fs.Open(filepath.Join(root, "plain.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(r)
+	r.Close()
+	if string(data) != "hello\n" {
+		t.Fatalf("read loop %q", data)
+	}
+	if _, err := fs.Create(filepath.Join(root, "new.txt")); err == nil || !strings.Contains(err.Error(), "cat") {
+		t.Fatal("create without cat", err)
+	}
 }

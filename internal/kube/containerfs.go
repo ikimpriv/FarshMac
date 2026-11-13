@@ -16,32 +16,44 @@ import (
 
 // Probe records which tools a container offers. Shell is the first of
 // /bin/bash, /bin/sh that runs; "" means commands cannot run at all. Find,
-// Stat and Ls select the directory listing mode (GNU find -printf, GNU
-// stat -c, or ls -lan which BSD and busybox also provide); Tar reports
+// Stat and Ls select the directory listing mode (GNU find -printf, stat -c
+// with the full format, or ls -lan which BSD and busybox also provide);
+// without any of them the shell's own builtins list names and types. Cat
+// reports whether files can be read with cat (and written at all); Tar
 // whether whole trees can be streamed later.
 type Probe struct {
 	Shell string
 	Tar   bool
+	Cat   bool
 	Find  bool
 	Stat  bool
 	Ls    bool
 }
 
 // ErrNoShell is wrapped by ProbeContainer when neither /bin/bash nor /bin/sh
-// can be started, for example in a distroless image.
+// exists, for example in a distroless image. Exec failures of other kinds
+// (the container is not running, the connection cannot be upgraded, RBAC)
+// are returned as they are.
 var ErrNoShell = errors.New("no shell in container")
 
-// ErrNoLister is wrapped when a shell exists but none of find, stat or ls
-// does, so directories cannot be listed.
+// ErrNoLister is kept for callers that test for it; since the shell's
+// builtins can always list a directory it is no longer returned.
 var ErrNoLister = errors.New("no find, stat or ls in container")
 
-// Lines of the probe script, one `name=0|1` per tool. The find test needs
-// GNU -printf; the stat test needs GNU -c; ls -lan exists everywhere.
-const probeScript = `command -v tar >/dev/null 2>&1 && echo tar=1 || echo tar=0
-find / -maxdepth 0 -printf '' >/dev/null 2>&1 && echo find=1 || echo find=0
-stat -c '%n' / >/dev/null 2>&1 && echo stat=1 || echo stat=0
-ls -lan / >/dev/null 2>&1 && echo ls=1 || echo ls=0
-`
+// sep separates the fields of a listing record: a real 0x01 byte, which
+// shell single quotes pass through unchanged. GNU stat would also expand a
+// \001 escape in its format, busybox stat prints it literally.
+const sep = "\x01"
+
+// probeScript prints one `name=…` line per tool. find and stat are tested
+// with the exact listing formats, because a find may accept -printf ” yet
+// reject %y, and a stat may print the separator escape literally; the
+// probe counts the separators in the answer.
+var probeScript = "command -v tar >/dev/null 2>&1 && echo tar=1 || echo tar=0\n" +
+	"command -v cat >/dev/null 2>&1 && echo cat=1 || echo cat=0\n" +
+	"f=$(find / -maxdepth 0 -printf '" + findFormat + "' 2>/dev/null) && echo \"find=$f\" || echo find=0\n" +
+	"s=$(stat -c '" + statFormat + "' / 2>/dev/null) && echo \"stat=$s\" || echo stat=0\n" +
+	"ls -lan / >/dev/null 2>&1 && echo ls=1 || echo ls=0\n"
 
 var shellCandidates = []string{"/bin/bash", "/bin/sh"}
 
@@ -50,34 +62,74 @@ func ProbeContainer(ctx context.Context, x Executor, ref ContainerRef) (Probe, e
 	var lastErr error
 	for _, shell := range shellCandidates {
 		var out, errOut bytes.Buffer
-		err := x.Stream(ctx, ref, ExecOptions{Command: []string{shell, "-c", probeScript}, Stdout: &out, Stderr: &errOut})
+		err := x.Stream(ctx, ref, ExecOptions{Command: []string{shell, "-c", probeScript}, Stdout: &out, Stderr: &limitedWriter{w: &errOut, limit: 4096}})
 		if ctx.Err() != nil {
 			return Probe{}, ctx.Err()
 		}
 		if err != nil && out.Len() == 0 {
-			lastErr = fmt.Errorf("%s: %s", shell, strings.TrimSpace(firstLine(errOut.String()+" "+err.Error())))
+			msg := strings.TrimSpace(firstLine(errOut.String()))
+			if msg == "" {
+				msg = err.Error()
+			}
+			if !shellMissing(err, msg) {
+				// The runtime could not run anything: report that, not a
+				// missing shell.
+				return Probe{}, errors.New(msg)
+			}
+			lastErr = fmt.Errorf("%s: %s", shell, msg)
 			continue
 		}
 		p := Probe{Shell: shell}
 		for _, line := range strings.Split(out.String(), "\n") {
-			name, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-			if !ok || value != "1" {
+			name, value, ok := strings.Cut(strings.TrimRight(line, "\r"), "=")
+			if !ok {
 				continue
 			}
 			switch name {
 			case "tar":
-				p.Tar = true
+				p.Tar = value == "1"
+			case "cat":
+				p.Cat = value == "1"
 			case "find":
-				p.Find = true
+				p.Find = strings.Count(value, sep) == 5
 			case "stat":
-				p.Stat = true
+				p.Stat = strings.Count(value, sep) == 4
 			case "ls":
-				p.Ls = true
+				p.Ls = value == "1"
 			}
 		}
 		return p, nil
 	}
 	return Probe{}, fmt.Errorf("%w: %v", ErrNoShell, lastErr)
+}
+
+// shellMissing tells a shell that does not exist from an exec that could not
+// run at all: runtimes answer the former with "executable file … not found"
+// or "no such file or directory" and exit codes 126/127.
+func shellMissing(err error, msg string) bool {
+	if code, ok := ExitCode(err); ok && (code == 126 || code == 127) {
+		return true
+	}
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "executable file") && strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "no such file or directory")
+}
+
+// listMode is how directories are listed, in order of preference. A mode
+// whose command fails or whose output does not parse is given up for the
+// rest of the session (some finds accept -printf ” but not %y; some stats
+// print the separator escape literally).
+type listMode int
+
+const (
+	listFind listMode = iota
+	listStat
+	listLs
+	listBuiltin // the shell's own [ -d ] / [ -L ] tests: names and types only
+)
+
+func (m listMode) String() string {
+	return [...]string{"find", "stat", "ls", "builtin"}[m]
 }
 
 // ContainerFS is a remotefs.FS over exec in one container. Every operation
@@ -88,19 +140,30 @@ type ContainerFS struct {
 	x     Executor
 	ref   ContainerRef
 	probe Probe
+	mode  listMode
 }
 
 // OpenContainerFS wraps a probed container. The context bounds every later
-// command. A probe without a shell or without any lister is refused.
+// command. Only a probe without a shell is refused: without find, stat and
+// ls the shell's builtins still list names and types.
 func OpenContainerFS(ctx context.Context, x Executor, ref ContainerRef, probe Probe) (*ContainerFS, error) {
 	if probe.Shell == "" {
 		return nil, ErrNoShell
 	}
-	if !probe.Find && !probe.Stat && !probe.Ls {
-		return nil, ErrNoLister
+	f := &ContainerFS{ctx: ctx, x: x, ref: ref, probe: probe, mode: listBuiltin}
+	switch {
+	case probe.Find:
+		f.mode = listFind
+	case probe.Stat:
+		f.mode = listStat
+	case probe.Ls:
+		f.mode = listLs
 	}
-	return &ContainerFS{ctx: ctx, x: x, ref: ref, probe: probe}, nil
+	return f, nil
 }
+
+// ListMode reports how directories are currently listed.
+func (f *ContainerFS) ListMode() string { return f.mode.String() }
 
 func (f *ContainerFS) HasTar() bool { return f.probe.Tar }
 func (f *ContainerFS) Probe() Probe { return f.probe }
@@ -132,7 +195,7 @@ func execError(op, p, stderr string, err error) error {
 	}
 	var cause error
 	switch {
-	case strings.Contains(msg, "No such file or directory"), strings.Contains(msg, "not found"):
+	case strings.Contains(msg, "No such file or directory"), strings.Contains(msg, "not found"), strings.Contains(msg, "can't cd to"):
 		cause = os.ErrNotExist
 	case strings.Contains(msg, "Permission denied"), strings.Contains(msg, "Operation not permitted"):
 		cause = os.ErrPermission
@@ -172,7 +235,10 @@ type fileInfo struct {
 	size    int64
 	mode    os.FileMode
 	modTime time.Time
-	target  string // symbolic link target, when known
+	target  string      // symbolic link target, when known
+	follow  os.FileMode // builtin mode: the type behind a link (readlink may be absent)
+	known   bool        // follow is set; broken links have known with followBroken
+	broken  bool
 }
 
 func (i *fileInfo) Name() string       { return i.name }
@@ -182,44 +248,119 @@ func (i *fileInfo) ModTime() time.Time { return i.modTime }
 func (i *fileInfo) IsDir() bool        { return i.mode.IsDir() }
 func (i *fileInfo) Sys() any           { return nil }
 
-// Listing formats. Fields are separated by \001 and records by newline, so
-// names with spaces and quotes survive; names containing a newline do not
-// (they are rare and would need NUL-terminated records that stat lacks).
+// Listing formats. Fields are separated by a 0x01 byte (sep) and records by
+// newline, so names with spaces and quotes survive; names containing a
+// newline do not (they are rare and would need NUL-terminated records that
+// stat lacks). The command lines, with <s> standing for the separator:
 //
-//	find:  find DIR -mindepth 1 -maxdepth 1 -printf '%y\001%m\001%s\001%T@\001%f\001%l\n'
-//	       (Lstat: find PATH -maxdepth 0 -printf ...)
-//	stat:  for f in .[!.]* ..?* *; do [ -e "$f" ] || [ -L "$f" ] && printf '%s\001' "$(stat -c '%F\001%a\001%s\001%Y\001%n' -- "$f")" && readlink -- "$f" 2>/dev/null; echo; done
-//	       (run with cd DIR; Lstat: the same on one path)
-//	ls:    ls -lanA -- DIR     (Lstat: ls -land -- PATH)
+//	find:    find DIR -mindepth 1 -maxdepth 1 -printf '%y<s>%m<s>%s<s>%T@<s>%f<s>%l\n'
+//	         (Lstat: find PATH -maxdepth 0 -printf ...)
+//	stat:    cd DIR; for f in .[!.]* ..?* *; do [ -e "$f" ] || [ -L "$f" ] && printf '%s<s>' "$(stat -c '%F<s>%a<s>%s<s>%Y<s>%n' -- "$f")"; readlink -- "$f" 2>/dev/null; echo; done
+//	         (Lstat: the same on one path)
+//	ls:      ls -lanA -- DIR     (Lstat: ls -land -- PATH)
+//	builtin: cd DIR; for f in .[!.]* ..?* *; do [ -e "$f" ] || [ -L "$f" ] || continue; t=f; [ -d "$f" ] && t=d; [ -L "$f" ] && t=l; printf '%s<s>%s<s>%s<s>%s\n' "$t" "$f" "$(readlink -- "$f")" "<d|f|x: what a link points at>"; done
+//	         (Lstat: the same tests on one path; names and types only, no size or time)
 const (
-	findFormat = `%y\001%m\001%s\001%T@\001%f\001%l\n`
-	statFormat = `%F\001%a\001%s\001%Y\001%n`
+	findFormat = "%y" + sep + "%m" + sep + "%s" + sep + "%T@" + sep + "%f" + sep + "%l\n"
+	statFormat = "%F" + sep + "%a" + sep + "%s" + sep + "%Y" + sep + "%n"
 )
 
-func (f *ContainerFS) ReadDir(dir string) ([]os.FileInfo, error) {
-	var infos []*fileInfo
+// statLoop lists the entries of the current directory with stat.
+const statLoop = "for f in .[!.]* ..?* *; do if [ -e \"$f\" ] || [ -L \"$f\" ]; then printf '%s" + sep + "' \"$(stat -c '" + statFormat + "' -- \"$f\")\"; readlink -- \"$f\" 2>/dev/null; echo; fi; done"
+
+// builtinEntry prints one record for $f with the shell's own tests.
+const builtinEntry = "t=f; [ -d \"$f\" ] && t=d; [ -L \"$f\" ] && t=l; l=''; ft=''; if [ \"$t\" = l ]; then l=$(readlink -- \"$f\" 2>/dev/null); ft=x; [ -e \"$f\" ] && ft=f; [ -d \"$f\" ] && ft=d; fi; printf '%s" + sep + "%s" + sep + "%s" + sep + "%s\\n' \"$t\" \"$f\" \"$l\" \"$ft\""
+
+// checkDir fails like the real tools when DIR is missing or not a directory.
+func checkDir(dir string) string {
+	q := shQuote(dir)
+	return "[ -e " + q + " ] || [ -L " + q + " ] || { echo " + q + ": No such file or directory >&2; exit 1; }; [ -d " + q + " ] || { echo " + q + ": Not a directory >&2; exit 1; }; cd " + q + " || exit 1\n"
+}
+
+// list runs one listing mode for dir (or one path) and parses the output.
+func (f *ContainerFS) list(mode listMode, op, p string, single bool) ([]*fileInfo, error) {
+	var out []byte
 	var err error
-	switch {
-	case f.probe.Find:
-		var out []byte
-		out, err = f.run("readdir", dir, "find "+shQuote(dir)+" -mindepth 1 -maxdepth 1 -printf '"+findFormat+"'", nil)
-		if err == nil {
-			infos, err = parseFindOutput(out)
+	switch mode {
+	case listFind:
+		depth := " -mindepth 1 -maxdepth 1"
+		if single {
+			depth = " -maxdepth 0"
 		}
-	case f.probe.Stat:
-		script := "cd " + shQuote(dir) + " || exit 1\nfor f in .[!.]* ..?* *; do if [ -e \"$f\" ] || [ -L \"$f\" ]; then printf '%s\\001' \"$(stat -c '" + statFormat + "' -- \"$f\")\"; readlink -- \"$f\" 2>/dev/null; echo; fi; done"
-		var out []byte
-		out, err = f.run("readdir", dir, script, nil)
+		out, err = f.run(op, p, "find "+shQuote(p)+depth+" -printf '"+findFormat+"'", nil)
 		if err == nil {
-			infos, err = parseStatOutput(out)
+			return parseFindOutput(out)
+		}
+	case listStat:
+		script := checkDir(p) + statLoop
+		if single {
+			script = "f=" + shQuote(p) + "; s=$(stat -c '" + statFormat + "' -- \"$f\") || exit $?; printf '%s" + sep + "' \"$s\"; readlink -- \"$f\" 2>/dev/null; echo"
+		}
+		out, err = f.run(op, p, script, nil)
+		if err == nil {
+			return parseStatOutput(out)
+		}
+	case listLs:
+		flags := " -lanA -- "
+		if single {
+			flags = " -land -- "
+		}
+		out, err = f.run(op, p, "ls"+flags+shQuote(p), nil)
+		if err == nil {
+			return parseLsOutput(out, time.Now())
 		}
 	default:
-		var out []byte
-		out, err = f.run("readdir", dir, "ls -lanA -- "+shQuote(dir), nil)
+		script := checkDir(p) + "for f in .[!.]* ..?* *; do if [ -e \"$f\" ] || [ -L \"$f\" ]; then " + builtinEntry + "; fi; done"
+		if single {
+			script = "f=" + shQuote(p) + "; if [ -e \"$f\" ] || [ -L \"$f\" ]; then " + builtinEntry + "; else echo \"$f: No such file or directory\" >&2; exit 1; fi"
+		}
+		out, err = f.run(op, p, script, nil)
 		if err == nil {
-			infos, err = parseLsOutput(out, time.Now())
+			return parseBuiltinOutput(out)
 		}
 	}
+	return nil, err
+}
+
+// listWith tries the current mode and falls back to the next ones when the
+// tool fails or its output does not parse, remembering the working mode.
+// Errors about the path itself (missing, forbidden) end the attempt.
+func (f *ContainerFS) listWith(op, p string, single bool) ([]*fileInfo, error) {
+	var lastErr error
+	for mode := f.mode; mode <= listBuiltin; mode++ {
+		infos, err := f.list(mode, op, p, single)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+				return nil, err
+			}
+			lastErr = err
+		} else if len(infos) > 0 || mode == listBuiltin || f.emptyListing(mode, p, single) {
+			f.mode = mode
+			return infos, nil
+		} else {
+			lastErr = &os.PathError{Op: op, Path: p, Err: fmt.Errorf("%s listing could not be parsed", mode)}
+		}
+		if mode == listBuiltin {
+			break
+		}
+		f.mode = mode + 1
+	}
+	return nil, lastErr
+}
+
+// emptyListing tells an empty directory (nothing to parse) from unparsable
+// output: the mode produced no records, so ask the builtins whether the
+// directory really has no entries.
+func (f *ContainerFS) emptyListing(mode listMode, p string, single bool) bool {
+	if single {
+		return false
+	}
+	infos, err := f.list(listBuiltin, "readdir", p, false)
+	return err == nil && len(infos) == 0
+}
+
+func (f *ContainerFS) ReadDir(dir string) ([]os.FileInfo, error) {
+	infos, err := f.listWith("readdir", dir, false)
 	if err != nil {
 		return nil, err
 	}
@@ -243,27 +384,7 @@ func (f *ContainerFS) Lstat(p string) (os.FileInfo, error) {
 }
 
 func (f *ContainerFS) lstat(p string) (*fileInfo, error) {
-	var infos []*fileInfo
-	var err error
-	var out []byte
-	switch {
-	case f.probe.Find:
-		out, err = f.run("lstat", p, "find "+shQuote(p)+" -maxdepth 0 -printf '"+findFormat+"'", nil)
-		if err == nil {
-			infos, err = parseFindOutput(out)
-		}
-	case f.probe.Stat:
-		script := "f=" + shQuote(p) + "; s=$(stat -c '" + statFormat + "' -- \"$f\") || exit $?; printf '%s\\001' \"$s\"; readlink -- \"$f\" 2>/dev/null; echo"
-		out, err = f.run("lstat", p, script, nil)
-		if err == nil {
-			infos, err = parseStatOutput(out)
-		}
-	default:
-		out, err = f.run("lstat", p, "ls -land -- "+shQuote(p), nil)
-		if err == nil {
-			infos, err = parseLsOutput(out, time.Now())
-		}
-	}
+	infos, err := f.listWith("lstat", p, true)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +409,14 @@ func (f *ContainerFS) Stat(p string) (os.FileInfo, error) {
 			return info, nil
 		}
 		target := info.target
+		if target == "" && info.known {
+			// No readlink in the container: the builtin listing already
+			// looked through the link.
+			if info.broken {
+				return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
+			}
+			return &fileInfo{name: path.Base(p), mode: info.follow}, nil
+		}
 		if target == "" {
 			if target, err = f.Readlink(current); err != nil {
 				return nil, err
@@ -301,18 +430,25 @@ func (f *ContainerFS) Stat(p string) (os.FileInfo, error) {
 	return nil, &os.PathError{Op: "stat", Path: p, Err: errors.New("too many levels of symbolic links")}
 }
 
-// Open streams `cat -- PATH`.
+// Open streams `cat -- PATH`. Without cat the shell reads the file line by
+// line (`while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done <
+// PATH`), which suits text files only: NUL bytes are dropped and a missing
+// final newline is added.
 func (f *ContainerFS) Open(p string) (io.ReadCloser, error) {
 	if info, err := f.lstat(p); err != nil {
 		return nil, err
 	} else if info.IsDir() {
 		return nil, &os.PathError{Op: "open", Path: p, Err: errors.New("is a directory")}
 	}
+	script := "cat -- " + shQuote(p)
+	if !f.probe.Cat {
+		script = "while IFS= read -r l || [ -n \"$l\" ]; do printf '%s\\n' \"$l\"; done < " + shQuote(p)
+	}
 	ctx, cancel := context.WithCancel(f.ctx)
 	pr, pw := io.Pipe()
 	go func() {
 		var errOut bytes.Buffer
-		err := f.x.Stream(ctx, f.ref, ExecOptions{Command: []string{f.probe.Shell, "-c", "cat -- " + shQuote(p)}, Stdout: pw, Stderr: &limitedWriter{w: &errOut, limit: 4096}})
+		err := f.x.Stream(ctx, f.ref, ExecOptions{Command: []string{f.probe.Shell, "-c", script}, Stdout: pw, Stderr: &limitedWriter{w: &errOut, limit: 4096}})
 		pw.CloseWithError(execError("read", p, errOut.String(), err))
 	}()
 	return &cancelReader{ReadCloser: pr, cancel: cancel}, nil
@@ -333,6 +469,9 @@ func (r *cancelReader) Close() error {
 // an existing file is refused like sftp's O_EXCL). Close finishes the write
 // and returns the command's error.
 func (f *ContainerFS) Create(p string) (io.WriteCloser, error) {
+	if !f.probe.Cat {
+		return nil, &os.PathError{Op: "create", Path: p, Err: errors.New("cat is not available in the container, files cannot be written")}
+	}
 	ctx, cancel := context.WithCancel(f.ctx)
 	pr, pw := io.Pipe()
 	w := &execWriter{WriteCloser: pw, cancel: cancel, done: make(chan struct{})}
@@ -478,7 +617,7 @@ func parseFindOutput(out []byte) ([]*fileInfo, error) {
 		if len(line) == 0 {
 			continue
 		}
-		fields := strings.Split(string(line), "\001")
+		fields := strings.Split(string(line), sep)
 		if len(fields) < 6 || fields[0] == "" {
 			continue
 		}
@@ -488,6 +627,46 @@ func parseFindOutput(out []byte) ([]*fileInfo, error) {
 		}
 		size, _ := strconv.ParseInt(fields[2], 10, 64)
 		infos = append(infos, &fileInfo{name: fields[4], size: size, mode: mode | permMode(fields[1]), modTime: epochTime(fields[3]), target: fields[5]})
+	}
+	return infos, nil
+}
+
+// parseBuiltinOutput reads records of the builtin mode: type letter (f, d,
+// l), name, link target. Sizes and times are unknown; modes are nominal.
+func parseBuiltinOutput(out []byte) ([]*fileInfo, error) {
+	var infos []*fileInfo
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		fields := strings.Split(string(line), sep)
+		if len(fields) < 2 || fields[0] == "" || fields[1] == "" {
+			continue
+		}
+		info := &fileInfo{name: fields[1]}
+		switch fields[0] {
+		case "d":
+			info.mode = os.ModeDir | 0755
+		case "l":
+			info.mode = os.ModeSymlink | 0777
+		default:
+			info.mode = 0644
+		}
+		if len(fields) > 2 {
+			info.target = fields[2]
+		}
+		if len(fields) > 3 && fields[3] != "" {
+			info.known = true
+			switch fields[3] {
+			case "d":
+				info.follow = os.ModeDir | 0755
+			case "f":
+				info.follow = 0644
+			default:
+				info.broken = true
+			}
+		}
+		infos = append(infos, info)
 	}
 	return infos, nil
 }
@@ -514,7 +693,7 @@ func parseStatOutput(out []byte) ([]*fileInfo, error) {
 		if len(line) == 0 {
 			continue
 		}
-		fields := strings.Split(string(line), "\001")
+		fields := strings.Split(string(line), sep)
 		if len(fields) < 5 {
 			continue
 		}

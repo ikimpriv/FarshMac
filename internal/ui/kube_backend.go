@@ -490,6 +490,14 @@ func (p *Panel) loadKube(abs string) error {
 		if !probe.Tar {
 			info += " · no tar"
 		}
+		if !probe.Cat {
+			info += " · no cat: files cannot be written"
+		}
+		if pf, ok := f.(prefixFS); ok {
+			if cfs, ok := pf.FS.(*kube.ContainerFS); ok && cfs.ListMode() == "builtin" {
+				info += "\nNo ls, stat or find: names and types only, sizes and dates unknown"
+			}
+		}
 		info += "\nCommands run in the container; the shell stays local"
 		state := p.beginLoad(abs)
 		p.cancelPanelLoad()

@@ -245,10 +245,10 @@ func (a *App) menuItemDisabled(section menuSection, item menuItem) bool {
 			p = a.Panels[1]
 		}
 		switch label {
-		case "Info panel":
+		case "Info panel", "Quick view":
+			// Turning a server or cluster panel itself into a view loses its
+			// listing; Ctrl+Q previews it from the other panel instead.
 			return !p.can(capInfo)
-		case "Quick view":
-			return false // Previews the other panel, whatever this one shows.
 		case "Tree panel":
 			return !p.can(capTree)
 		}

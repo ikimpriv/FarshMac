@@ -169,6 +169,53 @@ done
 exit $rc
 `
 
+// busyboxStatStub behaves like BusyBox stat: -c is honoured but a \001
+// escape in the format is printed literally, so only a real 0x01 byte in
+// the format separates fields. Installed as "stat" by the "busybox-stat" tool.
+const busyboxStatStub = `#!/bin/sh
+fmt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c) fmt=$2; shift;;
+    --) shift; break;;
+    -*) ;;
+    *) break;;
+  esac
+  shift
+done
+rc=0
+for f in "$@"; do
+  m=$(/usr/bin/stat -f '%p' "$f" 2>/dev/null) || { echo "stat: can't stat '$f': No such file or directory" >&2; rc=1; continue; }
+  case "$m" in
+    10????) t="regular file";; 12????) t="symbolic link";; 4????) t="directory";; *) t="regular file";;
+  esac
+  perms=$(printf '%o' $(( 0$m & 07777 )))
+  out=$fmt
+  out=$(printf '%s' "$out" | /usr/bin/sed -e "s|%F|$t|" -e "s|%a|$perms|" -e "s|%s|$(/usr/bin/stat -f '%z' "$f")|" -e "s|%Y|$(/usr/bin/stat -f '%m' "$f")|" -e "s|%n|$f|")
+  printf '%s\n' "$out"
+done
+exit $rc
+`
+
+// badFindStub accepts `-printf ”` but rejects the listing format with
+// "find: bad -printf %y" on exit 1, like some non-GNU finds. Installed as
+// "find" by the "bad-find" tool.
+const badFindStub = `#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -printf) shift; case "$1" in *%y*) echo "find: bad -printf %y" >&2; exit 1;; esac;;
+  esac
+  shift
+done
+exit 0
+`
+
+// terseStatStub ignores -c entirely and prints only the name, so its output
+// has no separators at all. Installed as "stat" by the "terse-stat" tool.
+const terseStatStub = `#!/bin/sh
+for f in "$@"; do case "$f" in -c) ;; --) ;; -*) ;; *) /usr/bin/stat -f '%N' "$f" || exit 1;; esac; done
+`
+
 // toolbox builds a PATH directory with the named real tools and stubs.
 func toolbox(t testing.TB, tools ...string) string {
 	t.Helper()
@@ -182,6 +229,12 @@ func toolbox(t testing.TB, tools ...string) string {
 			os.WriteFile(filepath.Join(bin, "find"), []byte(findStub), 0755)
 		case "stat":
 			os.WriteFile(filepath.Join(bin, "stat"), []byte(statStub), 0755)
+		case "busybox-stat":
+			os.WriteFile(filepath.Join(bin, "stat"), []byte(busyboxStatStub), 0755)
+		case "terse-stat":
+			os.WriteFile(filepath.Join(bin, "stat"), []byte(terseStatStub), 0755)
+		case "bad-find":
+			os.WriteFile(filepath.Join(bin, "find"), []byte(badFindStub), 0755)
 		default:
 			real, err := exec.LookPath(name)
 			if err != nil {
@@ -196,7 +249,10 @@ func toolbox(t testing.TB, tools ...string) string {
 }
 
 // BaseTools are the commands a minimal container file system needs; tests
-// add "tar", "find", "stat" (GNU-style stubs) or others on top.
+// add "tar", "find", "stat" (GNU-style stubs), "busybox-stat" (a stat that
+// prints a \001 escape literally but passes real bytes), "terse-stat" (a
+// stat ignoring -c), "bad-find" (a find rejecting %y) or others on top. New
+// with no tools at all gives a shell-only container.
 const BaseTools = "cat ls mkdir rm rmdir mv chmod touch readlink ln basename printf"
 
 // New builds an executor whose PATH holds only tools: real binaries found
