@@ -324,8 +324,8 @@ func TestKubeExportManifests(t *testing.T) {
 	}
 	a.Active = 1
 	a.key(Message{Key: "F5"})
-	if a.Form != nil || !strings.Contains(a.Status, "destination") {
-		t.Fatal("copy into the cluster", a.Form, a.Status)
+	if a.Form != nil || !strings.Contains(a.Status, "Choose a namespace") {
+		t.Fatal("copy into the cluster root", a.Form, a.Status)
 	}
 }
 
