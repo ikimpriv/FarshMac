@@ -12,7 +12,7 @@ func (a *App) openRemoteDocument(edit bool) {
 	if len(p.Entries) == 0 || p.Entries[p.Cursor].Dir {
 		return
 	}
-	a.openSourceDocument(&remoteSource{Config: *p.Remote, Path: p.Current()}, edit, a.showDocument, nil)
+	a.openSourceDocument(p.backend().DocumentSource(p, p.Current()), edit, a.showDocument, nil)
 }
 
 // resolveRemoteLink follows a symbolic link to the regular file it names.

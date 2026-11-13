@@ -33,13 +33,15 @@ type documentSource interface {
 	Blocked(info os.FileInfo) string
 }
 
-// remoteSource is a file on an FTP/FTPS/SFTP server.
+// remoteSource is a file on a server (FTP/FTPS/SFTP) or in a container:
+// anything reachable through a remotefs.Opener.
 type remoteSource struct {
-	Config remotefs.Config
+	Opener remotefs.Opener
+	Label  string
 	Path   string
 }
 
-func (s *remoteSource) Display() string { return s.Config.Label() + s.Path }
+func (s *remoteSource) Display() string { return s.Label + s.Path }
 func (s *remoteSource) Name() string    { return path.Base(s.Path) }
 func (s *remoteSource) Blocked(info os.FileInfo) string {
 	if info != nil && info.Mode().Perm()&0222 == 0 {
@@ -48,7 +50,7 @@ func (s *remoteSource) Blocked(info os.FileInfo) string {
 	return ""
 }
 func (s *remoteSource) Fetch(o *fsops.Operation, dir string) (string, os.FileInfo, error) {
-	f, err := s.Config.Dial(o.Context())
+	f, err := s.Opener.Open(o.Context())
 	if err != nil {
 		return "", nil, err
 	}
@@ -93,7 +95,7 @@ func (s *remoteSource) Fetch(o *fsops.Operation, dir string) (string, os.FileInf
 	return local, info, nil
 }
 func (s *remoteSource) Store(o *fsops.Operation, staged string, expected os.FileInfo, force bool) (os.FileInfo, error) {
-	f, err := s.Config.Dial(o.Context())
+	f, err := s.Opener.Open(o.Context())
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +111,7 @@ func (s *remoteSource) Store(o *fsops.Operation, staged string, expected os.File
 	}
 	mode := current.Mode().Perm()
 	options := remotefs.CopyOptions{Workers: 1, Metadata: fsops.MetadataOptions{Permissions: true}, PermissionsMode: &mode, ExpectedDestination: current, Conflict: func(string, string) int { return 0 }}
-	config := s.Config
-	if err = remotefs.Copy(remotefs.Endpoint{}, remotefs.RemoteEndpoint(&config), []remotefs.Pair{{Source: staged, Destination: s.Path}}, options, o); err != nil {
+	if err = remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Opener: s.Opener}, []remotefs.Pair{{Source: staged, Destination: s.Path}}, options, o); err != nil {
 		return nil, err
 	}
 	if o.Check() != nil {

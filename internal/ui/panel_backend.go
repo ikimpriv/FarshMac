@@ -46,6 +46,7 @@ const (
 	capAttributes                         // File attributes, Describe files
 	capNewFile                            // Shift+F4 creates a file
 	capLocalOutput                        // FilesystemPath is a sensible place for local output (archives)
+	capExecute                            // Commands typed at the prompt run through the backend
 )
 
 // modifiers is the set of modifier keys currently held, reported by the
@@ -115,6 +116,11 @@ type panelBackend interface {
 	// Key handles source-specific keys (Shift+F3 logs, Ctrl+R refresh…);
 	// false leaves the key to the common handlers.
 	Key(a *App, p *Panel, m Message) bool
+	// CommandPrompt replaces the prompt path shown before the command line
+	// ("" keeps the default: the panel path, or local: + the shell folder).
+	CommandPrompt(p *Panel) string
+	// Execute runs a command typed at the prompt; false sends it to the shell.
+	Execute(a *App, p *Panel, command string) bool
 	// MenuSection is an extra F9 menu for this source, or nil.
 	MenuSection(a *App, p *Panel) *menuSection
 }
@@ -280,7 +286,8 @@ func (remoteBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	return keyBarFor(mods, plain, shift, ctrl, alt)
 }
 func (remoteBackend) DocumentSource(p *Panel, path string) documentSource {
-	return &remoteSource{Config: *p.Remote, Path: path}
+	c := *p.Remote
+	return &remoteSource{Opener: &c, Label: c.Label(), Path: path}
 }
 func (remoteBackend) Open(a *App, p *Panel, edit bool) bool {
 	a.openRemoteDocument(edit)
@@ -321,3 +328,10 @@ func (archiveBackend) Copy(*App, *Panel) bool         { return false }
 func (archiveBackend) Key(*App, *Panel, Message) bool { return false }
 func (remoteBackend) Copy(*App, *Panel) bool          { return false }
 func (remoteBackend) Key(*App, *Panel, Message) bool  { return false }
+
+func (localBackend) CommandPrompt(*Panel) string         { return "" }
+func (localBackend) Execute(*App, *Panel, string) bool   { return false }
+func (archiveBackend) CommandPrompt(*Panel) string       { return "" }
+func (archiveBackend) Execute(*App, *Panel, string) bool { return false }
+func (remoteBackend) CommandPrompt(*Panel) string        { return "" }
+func (remoteBackend) Execute(*App, *Panel, string) bool  { return false }

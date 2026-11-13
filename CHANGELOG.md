@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Kubernetes panel
+
+- Add Kubernetes panels: Commands → Network connections → New Kubernetes cluster… connects through client-go (kubeconfig + context, exec auth plugins via the login shell PATH); profiles live in `kubernetes.json`.
+- Show the cluster as folders: namespaces, resource types with objects and their `kubectl get` columns, owned objects with ReplicaSets and ControllerRevisions collapsed, Service pods by selector, pod containers and container file systems.
+- F3/F4 open manifests (F4 saves with Update and reports conflicts), F5 exports manifests (recursively for folders, asking before Secrets), F7 creates a namespace, F8 deletes objects or a namespace (name typed), Shift+F8 keeps children, Shift+F3 logs, Alt+F3 follows logs in the terminal, Shift+F4 describes, Cmd+R refreshes.
+- Container file systems work like server panels (view, edit, copy in both directions, rename, mkdir, delete); a command typed at the prompt runs inside the container with a TTY in the terminal area, and Kubernetes → Open shell in container starts an interactive shell.
+- Panel modes are now strategies behind one `panelBackend` interface with capabilities; the key bar shows Far's Shift/Ctrl/Alt rows while a modifier is held.
+
 ## 0.21.0 — File safety, links, and window bookmarks
 
 - Improve editor permission checks, open/save errors, external-change detection, and explicit save-in-place recovery.

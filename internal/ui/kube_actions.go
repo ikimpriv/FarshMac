@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/kube"
+	"farshmac/internal/terminal"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -409,12 +411,12 @@ func (a *App) kubeLogs(p *Panel, follow bool) {
 		a.Status = "Logs: choose a pod, or an object that owns pods"
 		return
 	}
-	if follow {
-		a.Status = "Following logs in the terminal is not available yet; Shift+F3 shows the last lines"
-		return
-	}
 	withPod := func(pod *kube.Object) {
 		withContainer := func(name string) {
+			if follow {
+				a.kubeFollowLogs(p, pod, name)
+				return
+			}
 			tail := int64(a.Settings.KubeLogsTail)
 			if tail <= 0 {
 				tail = 1000
@@ -498,4 +500,85 @@ func (a *App) kubeDescribe(p *Panel) {
 	if a.task != nil {
 		a.task.reportError = true
 	}
+}
+
+// kubeRunInContainer runs a command line typed at the prompt inside the
+// container shown by the panel, in the panel's folder, with a TTY in the
+// terminal area (5.5). There is no persistent shell: each command starts
+// fresh, which is why cd must come from the panel.
+func (a *App) kubeRunInContainer(p *Panel, r kubePath, command string) {
+	k := p.Kube
+	ref := kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container}
+	probe, err := k.probe(backgroundContext{}, ref)
+	if err != nil {
+		a.error(err)
+		return
+	}
+	if probe.Shell == "" {
+		a.Status = "No shell in this container; commands cannot run"
+		return
+	}
+	argv := []string{probe.Shell, "-c", "cd " + terminal.Quote(r.FSPath) + " && " + command}
+	a.kubeStartExec(p, ref, argv, "pod:"+ref.Pod+"/"+ref.Container+" "+command)
+}
+
+// kubeShell opens an interactive shell in the container under the cursor or
+// shown by the panel ("Open shell in container").
+func (a *App) kubeShell(p *Panel) {
+	k := p.Kube
+	r := p.kubeLevel()
+	var ref kube.ContainerRef
+	switch r.Level {
+	case kubeContainerFS:
+		ref = kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container}
+	case kubeContainers:
+		if len(p.Entries) == 0 || p.Entries[p.Cursor].Name == ".." {
+			a.Status = "Choose a container"
+			return
+		}
+		ref = kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: containerName(p.Entries[p.Cursor].Name)}
+	default:
+		a.Status = "Open shell: enter a pod's container first"
+		return
+	}
+	probe, err := k.probe(backgroundContext{}, ref)
+	if err != nil {
+		a.error(err)
+		return
+	}
+	if probe.Shell == "" {
+		a.Status = "No shell in this container"
+		return
+	}
+	a.kubeStartExec(p, ref, []string{probe.Shell}, "pod:"+ref.Pod+"/"+ref.Container+" "+probe.Shell)
+}
+
+// kubeStartExec attaches an exec stream to the terminal area; when it ends
+// the container panel is listed again.
+func (a *App) kubeStartExec(p *Panel, ref kube.ContainerRef, argv []string, label string) {
+	k := p.Kube
+	index := a.Active
+	stream, err := kube.StartExec(context.Background(), k.exec(), ref, argv, a.Cols, max(1, a.Rows-1))
+	if err != nil {
+		a.error(err)
+		return
+	}
+	a.startForeign(stream, label, func() {
+		if q := &a.Panels[index]; q.Kube == k {
+			a.error(q.Load(q.Path))
+		}
+	})
+}
+
+// kubeFollowLogs streams a container's log into the terminal area (Alt+F3).
+func (a *App) kubeFollowLogs(p *Panel, pod *kube.Object, container string) {
+	k := p.Kube
+	tail := int64(a.Settings.KubeLogsTail)
+	if tail <= 0 {
+		tail = 1000
+	}
+	stream := newLogStream(context.Background(), func(ctx context.Context) (io.ReadCloser, error) {
+		return k.client.Logs(ctx, pod.Namespace, pod.Name, kube.LogOptions{Container: container, TailLines: tail, Follow: true})
+	})
+	a.startForeign(stream, "logs "+pod.Namespace+"/"+pod.Name+"/"+container, nil)
 }

@@ -25,9 +25,9 @@ var remoteLinkResolveLimit = 500
 func (a *App) enterRemoteLink() {
 	index := a.Active
 	p := &a.Panels[index]
-	config, base, target := *p.Remote, p.Path, p.Current()
+	endpoint, base, target := p.endpoint(), p.Path, p.Current()
 	a.backgroundTask("Checking remote link", func(o *fsops.Operation) (func(), func(), error) {
-		f, err := config.Dial(o.Context())
+		f, err := endpoint.Open(o.Context())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -45,7 +45,7 @@ func (a *App) enterRemoteLink() {
 		}
 		return func() {
 			p := &a.Panels[index]
-			if p.Remote == nil || p.Path != base || a.Active != index || p.Current() != target {
+			if !p.served() || p.Path != base || a.Active != index || p.Current() != target {
 				return
 			}
 			if dir {
@@ -68,58 +68,66 @@ func (p *Panel) loadRemote(path string) error {
 		return err
 	}
 	defer f.Close()
-	entries, err := f.ReadDir(path)
+	files, size, err := p.listFS(f, path, o)
 	if err != nil {
 		return err
 	}
+	state := p.beginLoad(path)
+	p.sortEntries(files)
+	p.installEntries(files, state)
+	p.TotalBytes = size
+	p.ItemCount = len(files)
+	p.InfoText = p.Remote.Label() + "\nRemote filesystem; terminal remains local"
+	return nil
+}
+
+// listFS reads one folder of a server or container file system into panel
+// entries, following a bounded number of links so links to folders open as
+// folders (the rest resolve on Enter). It returns the total size of files.
+func (p *Panel) listFS(f remotefs.FS, path string, o *fsops.Operation) ([]Entry, int64, error) {
+	entries, err := f.ReadDir(path)
+	if err != nil {
+		return nil, 0, err
+	}
 	if len(entries) > 100000 {
-		return fmt.Errorf("remote folder exceeds 100000 entries")
+		return nil, 0, fmt.Errorf("remote folder exceeds 100000 entries")
 	}
 	var files []Entry
+	var size int64
 	stater, _ := f.(remotefs.Stater)
 	links := 0
 	for _, info := range entries {
 		if err := o.Check(); err != nil {
-			return err
+			return nil, 0, err
 		}
 		name := info.Name()
 		if name == "." || name == ".." {
 			continue
 		}
 		if !remotefs.ValidName(name) {
-			return fmt.Errorf("server returned an unsafe filename")
+			return nil, 0, fmt.Errorf("server returned an unsafe filename")
 		}
 		if p.IgnoreDSStore && name == ".DS_Store" || p.HideHidden && strings.HasPrefix(name, ".") {
 			continue
 		}
-		// Listings report links themselves (lstat); follow a bounded number
-		// so links to folders open as folders. The rest resolve on Enter.
 		isDir := info.IsDir()
 		if info.Mode()&os.ModeSymlink != 0 && stater != nil && links < remoteLinkResolveLimit {
 			links++
 			if target, err := stater.Stat(filepath.Join(path, name)); err == nil {
 				isDir = target.IsDir()
 			} else if err := o.Check(); err != nil {
-				return err
+				return nil, 0, err
 			}
 		}
 		if !isDir && !matchesMask(name, p.activeFilter(), p.MaskGroups) {
 			continue
 		}
+		if !isDir {
+			size += info.Size()
+		}
 		files = append(files, Entry{Name: name, Info: info, Dir: isDir})
 	}
-	state := p.beginLoad(path)
-	p.sortEntries(files)
-	p.installEntries(files, state)
-	p.TotalBytes = 0
-	p.ItemCount = len(files)
-	for _, e := range files {
-		if !e.Dir {
-			p.TotalBytes += e.Info.Size()
-		}
-	}
-	p.InfoText = p.Remote.Label() + "\nRemote filesystem; terminal remains local"
-	return nil
+	return files, size, nil
 }
 
 func (a *App) networkMenu() {
@@ -422,7 +430,7 @@ func (a *App) disconnectRemote(index int) {
 func (a *App) remoteMkdir() {
 	index := a.Active
 	p := &a.Panels[index]
-	config := *p.Remote
+	endpoint := p.endpoint()
 	base := p.Path
 	a.prompt("Make remote folder", "Folder name", "", func(name string) {
 		if !remotefs.ValidName(name) {
@@ -431,7 +439,7 @@ func (a *App) remoteMkdir() {
 		}
 		target := filepath.Join(base, name)
 		a.backgroundTask("Creating remote folder", func(o *fsops.Operation) (func(), func(), error) {
-			f, err := config.Dial(o.Context())
+			f, err := endpoint.Open(o.Context())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -457,19 +465,19 @@ func (a *App) remoteDelete() {
 	if len(paths) == 0 {
 		return
 	}
-	config := *p.Remote
+	endpoint, label := p.endpoint(), p.label()
 	// Remote protocols have no portable Trash. Always make this distinction explicit.
-	a.confirm("Delete remote files permanently", fmt.Sprintf("Delete %d selected item(s) on %s? No remote Trash is available.", len(paths), config.Label()), []string{"Delete", "Cancel"}, func(i int) {
+	a.confirm("Delete remote files permanently", fmt.Sprintf("Delete %d selected item(s) on %s? No remote Trash is available.", len(paths), label), []string{"Delete", "Cancel"}, func(i int) {
 		if i != 0 {
 			return
 		}
 		a.workProgress("Deleting remote files", func(o *fsops.Operation) error {
 			o.Streaming() // Items are counted while the trees are deleted.
-			f, err := config.Dial(o.Context())
+			f, err := endpoint.Open(o.Context())
 			if err != nil {
 				return err
 			}
-			f = remotefs.NewSession(remotefs.RemoteEndpoint(&config), o.Context(), o, f)
+			f = remotefs.NewSession(endpoint, o.Context(), o, f)
 			defer f.Close()
 			for _, p := range paths {
 				if err = remotefs.RemoveTree(f, p, o); err != nil {
@@ -490,7 +498,8 @@ func (a *App) remoteUnsupported() bool {
 
 func (a *App) remoteMoveDialog() {
 	source, target := a.Panels[a.Active], a.Panels[1-a.Active]
-	if source.Remote == nil || target.Remote == nil || !(remotefs.RemoteEndpoint(source.Remote)).Same(remotefs.RemoteEndpoint(target.Remote)) {
+	endpoint := source.endpoint()
+	if endpoint.Opener == nil || !endpoint.Same(target.endpoint()) {
 		a.Status = "Remote move is available within the same server. Between servers use F5 Copy, then Delete."
 		return
 	}
@@ -498,7 +507,6 @@ func (a *App) remoteMoveDialog() {
 	if len(paths) == 0 {
 		return
 	}
-	config := *source.Remote
 	dest := target.Path
 	if len(paths) == 1 {
 		dest = filepath.Join(dest, filepath.Base(paths[0]))
@@ -514,11 +522,11 @@ func (a *App) remoteMoveDialog() {
 			o.Streaming()
 			a.collisionQuestions(o, ask)
 			a.moveMetadataQuestions(o)
-			f, err := config.Dial(o.Context())
+			f, err := endpoint.Open(o.Context())
 			if err != nil {
 				return err
 			}
-			f = remotefs.NewSession(remotefs.RemoteEndpoint(&config), o.Context(), o, f)
+			f = remotefs.NewSession(endpoint, o.Context(), o, f)
 			defer f.Close()
 			info, err := f.Lstat(dst)
 			if err != nil && !os.IsNotExist(err) {
@@ -549,7 +557,7 @@ func (a *App) remoteMoveDialog() {
 				if transferIntoDirectory(value, dst, dest, len(paths), isDir) {
 					to = filepath.Join(dst, filepath.Base(src))
 				}
-				if err = remotefs.Move(f, remotefs.RemoteEndpoint(&config), src, to, o); err != nil {
+				if err = remotefs.Move(f, endpoint, src, to, o); err != nil {
 					return err
 				}
 			}

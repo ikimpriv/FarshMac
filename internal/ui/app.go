@@ -326,6 +326,9 @@ type App struct {
 	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
 	Image                                                     *imageView       // F3 graphical view of an image or PDF.
 	mods                                                      modifiers        // Modifier keys held, for the key bar.
+	Foreign                                                   foreignStream    // Stream shown in the terminal instead of the shell (exec, logs).
+	foreignLabel                                              string
+	foreignDone                                               func()
 	modsAt                                                    time.Time
 	previewKey, previewText                                   string
 	previewPending                                            bool
@@ -398,6 +401,12 @@ func (a *App) Close() {
 	}
 	a.closed = true
 	a.stopSyntax()
+	a.stopForeign()
+	for i := range a.Panels {
+		if a.Panels[i].Kube != nil {
+			a.Panels[i].Kube.close()
+		}
+	}
 	if a.terminalHistory != nil {
 		h := a.terminalHistory
 		a.historyCleanup = make(chan struct{})
@@ -596,8 +605,10 @@ func (a *App) Handle(raw string) {
 		a.modsAt = time.Now()
 		return
 	case "inputBinary":
-		if a.Term != nil {
-			if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
+		if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
+			if a.Foreign != nil {
+				a.error(a.Foreign.Write(data))
+			} else if a.Term != nil {
 				a.error(a.Term.Write(string(data)))
 			}
 		}
@@ -617,9 +628,16 @@ func (a *App) Handle(raw string) {
 		if a.Term != nil {
 			a.error(a.Term.Resize(a.Cols, a.Rows-1))
 		}
+		if a.Foreign != nil {
+			a.error(a.Foreign.Resize(a.Cols, a.Rows-1))
+		}
 	case "quit":
 		a.RequestQuit()
 	case "input":
+		if a.Foreign != nil {
+			a.error(a.Foreign.Write([]byte(m.Text)))
+			return
+		}
 		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
 			a.retryShell()
 		}
@@ -863,6 +881,10 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && m.Key == "Enter" && m.Shift && !m.Meta && !m.Ctrl && !m.Alt {
 		a.FastFind = nil
 		a.openSystemSelected()
+		return
+	}
+	if a.Foreign != nil && m.Meta && !m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == ".") {
+		a.stopForeign()
 		return
 	}
 	if a.Menu == nil && m.Meta && m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == "." || m.Key == ">") {
@@ -1138,6 +1160,19 @@ func (a *App) function(n int) {
 	}
 }
 func (a *App) execute() {
+	if a.Foreign != nil {
+		a.Status = "A command is running in the container; ⌘O to see it, ⌘. to stop it"
+		a.TermVisible = true
+		return
+	}
+	if p := &a.Panels[a.Active]; p.can(capExecute) {
+		if command := a.Command; strings.TrimSpace(command) != "" && p.backend().Execute(a, p, command) {
+			a.history = appendUnique(a.history, command, a.Settings.HistoryLimit)
+			a.historyAt = len(a.history)
+			a.Command = ""
+			return
+		}
+	}
 	if a.Term == nil {
 		if a.retryShell() || !a.shellRestartAt.IsZero() {
 			a.Status = "Shell unavailable; retrying…"
@@ -1343,6 +1378,9 @@ jobsDone:
 	}
 	a.updateInfoPanels()
 	a.updatePreview()
+	if a.terminalCanDrain() {
+		a.pollForeign()
+	}
 	if a.Term != nil && a.terminalCanDrain() {
 		for i := 0; i < 8 && len(a.pending) < 256*1024; i++ {
 			select {
@@ -1480,6 +1518,14 @@ Cmd+0..9            Go to bookmark (keeps remembered cursor positions and marks)
                     to the window: a document bookmark opens that file at the
                     saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
+Kubernetes panel:   New Kubernetes cluster… (kubeconfig + context). Folders:
+                    namespaces > resource types > objects > owned objects > pod
+                    > containers > files. F3/F4 manifest (F4 saves with Update),
+                    F5 export manifests, F7 new namespace, F8 delete (Shift+F8
+                    keeps children), Shift+F3 logs, Alt+F3 follow logs, Shift+F4
+                    describe, Cmd+R refresh, F9 > Kubernetes > Open shell.
+                    In a container: files as on a server; a typed command runs
+                    in the container (Cmd+. stops it)
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
 

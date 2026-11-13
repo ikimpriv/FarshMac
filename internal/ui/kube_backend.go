@@ -29,12 +29,14 @@ type kubePanel struct {
 	namespacesAt time.Time
 	snapshots    map[string]*kube.Snapshot
 	pods         map[string]kube.PodSummary // "ns/pod" -> containers, for the containers level
+	probes       map[string]kube.Probe      // "ns/pod/container" -> shell and tools found (C6)
+	executor     kube.Executor              // Tests inject a local shell; nil = the client's.
 	last         kubePath                   // Level of the path last listed, for the key bar.
 	lastPath     string
 }
 
 func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.Object, s Settings) *kubePanel {
-	k := &kubePanel{profile: profile, client: client, ttl: 30 * time.Second, hidden: map[string]bool{}, snapshots: map[string]*kube.Snapshot{}, pods: map[string]kube.PodSummary{}}
+	k := &kubePanel{profile: profile, client: client, ttl: 30 * time.Second, hidden: map[string]bool{}, snapshots: map[string]*kube.Snapshot{}, pods: map[string]kube.PodSummary{}, probes: map[string]kube.Probe{}}
 	for _, name := range strings.Split(s.KubeHiddenTypes, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			k.hidden[name] = true
@@ -71,6 +73,17 @@ func (k *kubePanel) invalidate(ns string) {
 			delete(k.pods, key)
 		}
 	}
+	for key := range k.probes {
+		if strings.HasPrefix(key, ns+"/") {
+			delete(k.probes, key)
+		}
+	}
+}
+func (k *kubePanel) cachedPod(ns, name string) (kube.PodSummary, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	s, ok := k.pods[ns+"/"+name]
+	return s, ok
 }
 func (k *kubePanel) namespaceList(ctx context.Context) ([]*kube.Object, error) {
 	k.mu.Lock()
@@ -150,6 +163,7 @@ type kubePath struct {
 	Objects   []*kube.Object // Objects listed by a type folder.
 	Container string
 	FSPath    string
+	Prefix    string // Virtual path of the container root (containerFS level).
 	Snapshot  *kube.Snapshot
 	Unknown   bool // Resolved without a snapshot: level guessed from the segment count.
 }
@@ -238,11 +252,28 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 		}
 		if isPodObject(obj) {
 			r.Object = obj
+			// C3: a pod with exactly one ordinary container opens straight
+			// into its file system; otherwise the next segment names one.
+			summary, known := k.cachedPod(r.Namespace, obj.Name)
+			if !known && ctx != nil {
+				if summary, err = k.podSummary(ctx, r.Namespace, obj.Name); err != nil {
+					return r, err
+				}
+				known = true
+			}
+			single, direct := "", false
+			if known {
+				single, direct = summary.SingleContainer()
+			}
 			switch {
+			case direct:
+				r.Level, r.Container, r.FSPath = kubeContainerFS, single, "/"+path.Join(rest[i:]...)
+				r.Prefix = "/" + path.Join(segs[:i+1]...)
 			case i == len(rest):
 				r.Level = kubeContainers
 			default:
-				r.Level, r.Container, r.FSPath = kubeContainerFS, rest[i], "/"+path.Join(rest[i+1:]...)
+				r.Level, r.Container, r.FSPath = kubeContainerFS, containerName(rest[i]), "/"+path.Join(rest[i+1:]...)
+				r.Prefix = "/" + path.Join(segs[:i+2]...)
 			}
 			return r, nil
 		}
@@ -341,7 +372,33 @@ func (p *Panel) loadKube(abs string) error {
 		}
 		info += "\nPod " + r.Object.Name + " · " + summary.Phase + " · containers"
 	case kubeContainerFS:
-		return fmt.Errorf("container file systems are not available yet")
+		f, err := r.container(k).Open(ctx)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		var size int64
+		if files, size, err = p.listFS(f, abs, o); err != nil {
+			return err
+		}
+		probe, _ := k.probe(ctx, kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container})
+		info += "\nPod " + r.Object.Name + " · container " + r.Container + " · shell " + probe.Shell
+		if !probe.Tar {
+			info += " · no tar"
+		}
+		info += "\nCommands run in the container; the shell stays local"
+		state := p.beginLoad(abs)
+		p.cancelPanelLoad()
+		p.cancelTree()
+		p.sortEntries(files)
+		p.installEntries(files, state)
+		p.TotalBytes, p.ItemCount = size, len(files)
+		p.Descriptions = nil
+		p.InfoText = info
+		k.mu.Lock()
+		k.last, k.lastPath = r, abs
+		k.mu.Unlock()
+		return nil
 	}
 	if err := o.Check(); err != nil {
 		return err
@@ -399,13 +456,10 @@ func (p *Panel) kubeCurrent() *kube.Object {
 // objects and their owned children (docs/KUBERNETES_PANEL_SPEC.md).
 type kubeBackend struct{}
 
-func (kubeBackend) Kind() backendKind              { return backendKube }
-func (kubeBackend) Label(p *Panel) string          { return p.Kube.label() }
-func (kubeBackend) FilesystemPath(p *Panel) string { return p.RemoteLocalPath }
-func (kubeBackend) Virtual(*Panel, string) bool    { return true }
-func (kubeBackend) Endpoint(*Panel) remotefs.Endpoint {
-	return remotefs.Endpoint{}
-}
+func (kubeBackend) Kind() backendKind                        { return backendKube }
+func (kubeBackend) Label(p *Panel) string                    { return p.Kube.label() }
+func (kubeBackend) FilesystemPath(p *Panel) string           { return p.RemoteLocalPath }
+func (kubeBackend) Virtual(*Panel, string) bool              { return true }
 func (kubeBackend) HistoryEntry(p *Panel, abs string) string { return p.Kube.label() + abs }
 func (kubeBackend) SizeSource(p *Panel) string               { return p.Kube.label() }
 func (kubeBackend) InfoPlugin(p *Panel) string               { return p.Kube.label() + p.Path }
@@ -415,8 +469,30 @@ func (kubeBackend) Caps(p *Panel) panelCaps {
 		return capMkdir | capDelete
 	case kubeTypeFolder:
 		return capEdit | capDelete
+	case kubeContainerFS:
+		return capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute
 	}
 	return 0
+}
+func (kubeBackend) Endpoint(p *Panel) remotefs.Endpoint {
+	if r := p.kubeLevel(); r.Level == kubeContainerFS && r.Object != nil {
+		return remotefs.Endpoint{Opener: r.container(p.Kube)}
+	}
+	return remotefs.Endpoint{}
+}
+func (kubeBackend) CommandPrompt(p *Panel) string {
+	if r := p.kubeLevel(); r.Level == kubeContainerFS && r.Object != nil {
+		return "pod:" + r.Namespace + "/" + r.Object.Name + "/" + r.Container + ":" + r.FSPath
+	}
+	return ""
+}
+func (kubeBackend) Execute(a *App, p *Panel, command string) bool {
+	r := p.kubeLevel()
+	if r.Level != kubeContainerFS || r.Object == nil {
+		return false
+	}
+	a.kubeRunInContainer(p, r, command)
+	return true
 }
 func (kubeBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	plain := [10]string{"Help", "", "", "", "", "", "", "", "Menu", ""}
@@ -451,11 +527,21 @@ func (kubeBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	return keyBarFor(mods, plain, shift, ctrl, alt)
 }
 func (kubeBackend) DocumentSource(p *Panel, path string) documentSource {
+	if r := p.kubeLevel(); r.Level == kubeContainerFS && r.Object != nil {
+		return &remoteSource{Opener: r.container(p.Kube), Label: p.Kube.label(), Path: path}
+	}
 	return p.manifestSource(path)
 }
 func (kubeBackend) Open(a *App, p *Panel, edit bool) bool {
 	if len(p.Entries) == 0 || p.Entries[p.Cursor].Name == ".." {
 		a.Status = "Choose an entry first"
+		return true
+	}
+	if p.kubeLevel().Level == kubeContainerFS {
+		if p.Entries[p.Cursor].Dir {
+			return true
+		}
+		a.openSourceDocument(kubeBackend{}.DocumentSource(p, p.Current()), edit, a.showDocument, nil)
 		return true
 	}
 	src := p.manifestSource(p.Current())
@@ -470,10 +556,22 @@ func (kubeBackend) Enter(a *App, p *Panel) bool {
 	if len(p.Entries) == 0 {
 		return true
 	}
+	if e := p.Entries[p.Cursor]; p.kubeLevel().Level == kubeContainerFS && !e.Dir {
+		if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
+			a.enterRemoteLink()
+		} else {
+			a.openSourceDocument(kubeBackend{}.DocumentSource(p, p.Current()), false, a.showDocument, nil)
+		}
+		return true
+	}
 	a.error(p.Load(p.Current()))
 	return true
 }
 func (kubeBackend) Mkdir(a *App, p *Panel) bool {
+	if p.kubeLevel().Level == kubeContainerFS {
+		a.remoteMkdir()
+		return true
+	}
 	if p.kubeLevel().Level != kubeRoot {
 		a.Status = "Namespaces are created at the cluster root; objects come from manifests (F5)"
 		return true
@@ -482,14 +580,25 @@ func (kubeBackend) Mkdir(a *App, p *Panel) bool {
 	return true
 }
 func (kubeBackend) Delete(a *App, p *Panel, orphan bool) bool {
+	if p.kubeLevel().Level == kubeContainerFS {
+		a.remoteDelete()
+		return true
+	}
 	a.kubeDelete(p, orphan)
 	return true
 }
 func (kubeBackend) Move(a *App, p *Panel) bool {
+	if p.kubeLevel().Level == kubeContainerFS {
+		a.remoteMoveDialog()
+		return true
+	}
 	a.Status = "Kubernetes objects cannot be renamed; copy the manifest and apply it under a new name"
 	return true
 }
 func (kubeBackend) Copy(a *App, p *Panel) bool {
+	if p.kubeLevel().Level == kubeContainerFS {
+		return false // The transfer dialog copies files through the container endpoint.
+	}
 	a.kubeExport(p)
 	return true
 }
@@ -501,6 +610,9 @@ func (kubeBackend) Key(a *App, p *Panel, m Message) bool {
 	case m.Key == "F3" && m.Alt && !cmd && !m.Shift:
 		a.kubeLogs(p, true)
 	case m.Key == "F4" && m.Shift && !cmd && !m.Alt:
+		if p.kubeLevel().Level == kubeContainerFS {
+			return false // Shift+F4 creates a file there.
+		}
 		a.kubeDescribe(p)
 	case m.Key == "F1" && m.Shift, m.Key == "F2" && m.Shift, m.Key == "F3" && cmd && m.Shift, m.Key == "F4" && cmd && m.Shift:
 		a.Status = "Not available in a Kubernetes panel"
@@ -514,6 +626,7 @@ func (kubeBackend) MenuSection(a *App, p *Panel) *menuSection {
 		{"Logs…", "⇧F3", func() { a.kubeLogs(p, false) }},
 		{"Follow logs in terminal", "⌥F3", func() { a.kubeLogs(p, true) }},
 		{"Describe", "⇧F4", func() { a.kubeDescribe(p) }},
+		{"Open shell in container", "", func() { a.kubeShell(p) }},
 		{"Export manifests…", "F5", func() { a.kubeExport(p) }},
 		{"Refresh snapshot", "⌘R", func() { a.rereadPanel(a.Active) }},
 		{"Switch context…", "", func() { a.kubeConnectionForm(a.Active, p.Kube.profile) }},

@@ -37,6 +37,9 @@ func (a *App) Draw() *Grid {
 	if !a.Panels[a.Active].can(capShellSync) {
 		promptPath = "local:" + a.Panels[a.Active].filesystemPath()
 	}
+	if custom := a.Panels[a.Active].backend().CommandPrompt(&a.Panels[a.Active]); custom != "" {
+		promptPath = custom
+	}
 	prompt := promptPath + ">" + a.Command
 	g.Text(0, g.H-2, tail(prompt, g.W-1), Gray, Black, g.W-1)
 	cursor := min(len([]rune(prompt)), g.W-1)
