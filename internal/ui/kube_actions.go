@@ -28,6 +28,7 @@ type manifestSource struct {
 	ref             kube.Ref
 	edit            bool // The editor gets the manifest without server-managed fields.
 	resourceVersion string
+	schema          *kube.Schema // From the cluster's OpenAPI, for checks and completion (editor).
 }
 
 // Display ends in .yaml so the viewer and editor highlight it as YAML.
@@ -50,6 +51,12 @@ func (s *manifestSource) Fetch(o *fsops.Operation, dir string) (string, os.FileI
 		return "", nil, err
 	}
 	s.resourceVersion = obj.GetResourceVersion()
+	if s.edit {
+		// Missing schema (no OpenAPI for this kind) only disables the checks.
+		if schema, err := s.k.client.SchemaFor(o.Context(), obj.GroupVersionKind()); err == nil {
+			s.schema = schema
+		}
+	}
 	local := filepath.Join(dir, s.Name())
 	if err = os.WriteFile(local, data, 0600); err != nil {
 		return "", nil, err

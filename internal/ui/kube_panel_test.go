@@ -388,3 +388,55 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	}
 	a.disconnectRemote(0)
 }
+
+func TestKubeManifestSchemaCheckAndCompletion(t *testing.T) {
+	a, _ := kubeApp(t)
+	p := &a.Panels[0]
+	enterKube(t, a, "shop")
+	enterKube(t, a, "widgets")
+	selectEntry(t, p, "w1")
+	a.key(Message{Key: "F4"})
+	waitNetwork(t, a)
+	d := a.Doc
+	if d == nil || !d.Edit || d.manifestSchema() == nil {
+		t.Fatal("editor with schema", d, a.Status)
+	}
+	a.Poll()
+	if len(d.Problems) != 0 || !strings.Contains(gridLine(a.Draw(), 0), "schema") {
+		t.Fatal("a fetched manifest should pass its schema", d.Problems, gridLine(a.Draw(), 0))
+	}
+	// An unknown field is marked and reported in the title under the cursor.
+	d.Cursor = len(d.Text)
+	d.Insert("spec:\n  size: 3\n  bogus: 1\n")
+	d.modified()
+	a.Poll()
+	if len(d.Problems) == 0 {
+		t.Fatal("unknown field not reported", d.Text)
+	}
+	a.key(Message{Key: "F2", Alt: true})
+	row := d.Pos(d.Cursor).Row
+	if !d.problemRows[row] || !strings.Contains(gridLine(a.Draw(), 0), "bogus") {
+		t.Fatal("next problem", row, d.Problems, gridLine(a.Draw(), 0))
+	}
+	g := a.Draw()
+	if cell := g.Cells[(row+1)*g.W+5]; cell.BG != problemBackground {
+		t.Fatalf("problem line background %x", cell.BG)
+	}
+	// Ctrl+Space completes keys of the mapping at the cursor.
+	d.Cursor = len(d.Text)
+	d.Insert("  mo")
+	d.modified()
+	a.key(Message{Key: " ", Ctrl: true})
+	if d.Text[len(d.Text)-len("  mode: "):] != "  mode: " {
+		t.Fatal("single completion inserted", d.Text[len(d.Text)-20:], a.Form)
+	}
+	a.key(Message{Key: " ", Ctrl: true})
+	if a.Form == nil || a.Form.Title != "Complete" || len(a.Form.Choice) != 2 {
+		t.Fatal("enum completion list", a.Form)
+	}
+	a.Form.Focus = 1
+	a.key(Message{Key: "Enter"})
+	if !strings.HasSuffix(d.Text, "mode: slow") {
+		t.Fatal("enum inserted", d.Text[len(d.Text)-20:])
+	}
+}

@@ -119,6 +119,7 @@ In the viewer and editor:
 | F12 | Switch open document screens |
 | Cmd+R | Reload from disk (asks if there are unsaved changes) |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
+| Cmd+Left/Right, Cmd+Up/Down, Option+Left/Right | Editor: line start/end, document start/end, word movement |
 | Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark. Bookmarks are shared with the panels: a document bookmark reopens the file at the saved position from the panels or any other document (end of file if it shrank, nothing if the file is gone); a folder bookmark returns to the panels |
 | Ctrl+Insert / Shift+Delete | Copy / cut |
 
@@ -137,7 +138,7 @@ The cluster is shown as folders: `/` lists namespaces, a namespace lists resourc
 | Level | Keys |
 | --- | --- |
 | Namespaces | F3/F4 manifest, F5 export every manifest of a namespace, F7 new namespace, F8 delete (type the name), Shift+F4 describe |
-| Type folder | F3 manifest (read-only), F4 edit without status, managedFields and other server-managed fields and save with Update (conflicts are reported, your text is kept); manifests are highlighted as YAML, F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
+| Type folder | F3 manifest (read-only), F4 edit without status, managedFields and other server-managed fields and save with Update (conflicts are reported, your text is kept); manifests are highlighted as YAML, checked against the kind's schema from the cluster (CRDs included) with problem lines marked, Ctrl+Space completes fields and enum values, Alt+F2 jumps to the next problem, F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
 | Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
 | Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls` found in the container; a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
 

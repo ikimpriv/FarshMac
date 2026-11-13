@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -32,6 +33,8 @@ type Client struct {
 	mapper    meta.RESTMapper
 	version   string
 	resources *resourceCache
+	openapiMu sync.Mutex
+	openapi   *openAPICache // OpenAPI v3 documents and resolved schemas (SchemaFor).
 }
 
 // Connect opens the profile's context and verifies it by asking the server

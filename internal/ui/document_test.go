@@ -354,3 +354,36 @@ func TestModeCycleAndUndoPreserveSavedBytes(t *testing.T) {
 		t.Fatalf("undo saved stale preview bytes: %q, %v", after, err)
 	}
 }
+
+func TestEditorMacNavigationKeys(t *testing.T) {
+	a := textApp(t, "alpha beta gamma\nsecond line\n", true)
+	d := a.Doc
+	a.key(Message{Key: "ArrowRight", Alt: true})
+	if d.Cursor != 6 {
+		t.Fatal("Option+Right by word", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Meta: true})
+	if d.Cursor != len("alpha beta gamma") {
+		t.Fatal("Cmd+Right line end", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowLeft", Meta: true})
+	if d.Cursor != 0 {
+		t.Fatal("Cmd+Left line start", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowDown", Meta: true})
+	if d.Cursor != len(d.Text) {
+		t.Fatal("Cmd+Down document end", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowUp", Meta: true})
+	if d.Cursor != 0 {
+		t.Fatal("Cmd+Up document start", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Ctrl: true})
+	if d.Cursor != 6 {
+		t.Fatal("Ctrl+Right by word", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Alt: true, Shift: true})
+	if d.Anchor != 6 || d.Cursor != 11 || d.Rect {
+		t.Fatal("Option+Shift+Right selects by word", d.Anchor, d.Cursor, d.Rect)
+	}
+}

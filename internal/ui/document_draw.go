@@ -136,6 +136,7 @@ func (a *App) drawDoc(g *Grid) {
 	if a.Settings.EditorSyntax && a.syntax.doc == d && a.syntax.status != "" {
 		title += "  [" + a.syntax.status + "]"
 	}
+	title += d.manifestStatus(pos.Row)
 	if !d.Edit && d.Mode != "text" {
 		title = fmt.Sprintf(" %s  %s  Offset %d / %d", filepathLabel(d.displayPath()), mode, d.ByteOffset, d.Size)
 	}
@@ -212,6 +213,9 @@ func (a *App) drawDoc(g *Grid) {
 				}
 
 				fg, bg := syntax.Color(at), uint32(Blue)
+				if d.problemRows[rowIndex] {
+					bg = problemBackground
+				}
 				selected := d.Anchor >= 0 && at >= lo && at < hi
 				if d.Rect && d.Anchor >= 0 {
 					selected = rowIndex >= min(p.Row, q.Row) && rowIndex <= max(p.Row, q.Row) && rc >= min(p.Col, q.Col) && rc < max(p.Col, q.Col)
@@ -442,3 +446,6 @@ func (a *App) drawBinary(g *Grid, top, height int) {
 		}
 	}
 }
+
+// problemBackground marks lines a manifest schema check objects to.
+const problemBackground = 0x6e1a1a

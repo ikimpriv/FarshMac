@@ -1361,6 +1361,7 @@ func (a *App) Poll() Update {
 	a.pollTerminalHistory()
 	a.pollTask()
 	a.pollSyntax()
+	a.pollManifestCheck()
 	for {
 		select {
 		case fn := <-a.jobs:

@@ -271,9 +271,108 @@ var discoveryRoutes = map[string]any{
 	"/apis/other.io/v1":            resources("other.io/v1", res("deployments", "deployment", "Deployment", true)),
 }
 
+// openAPIRoutes serve /openapi/v3 like a real server: an index of
+// group/version documents and the documents with components.schemas.
+var openAPIRoutes = map[string]any{
+	"/openapi/v3": map[string]any{"paths": map[string]any{
+		"apis/example.com/v1": map[string]any{"serverRelativeURL": "/openapi/v3/apis/example.com/v1?hash=x"},
+		"apis/apps/v1":        map[string]any{"serverRelativeURL": "/openapi/v3/apis/apps/v1?hash=y"},
+		"api/v1":              map[string]any{"serverRelativeURL": "/openapi/v3/api/v1?hash=z"},
+	}},
+	"/openapi/v3/apis/example.com/v1": map[string]any{"openapi": "3.0.0", "components": map[string]any{"schemas": map[string]any{
+		"io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": objectMetaSchema,
+		"com.example.v1.Widget": map[string]any{
+			"type":                            "object",
+			"description":                     "Widget is a sample custom resource. It has a spec and a status.",
+			"x-kubernetes-group-version-kind": []any{map[string]any{"group": "example.com", "version": "v1", "kind": "Widget"}},
+			"properties": map[string]any{
+				"apiVersion": map[string]any{"type": "string", "description": "APIVersion defines the versioned schema."},
+				"kind":       map[string]any{"type": "string", "description": "Kind is a string value representing the REST resource."},
+				"metadata":   map[string]any{"allOf": []any{map[string]any{"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"}}},
+				"spec": map[string]any{
+					"type":        "object",
+					"description": "Desired state of the widget. Everything else is derived.",
+					"required":    []any{"size"},
+					"properties": map[string]any{
+						"size":     map[string]any{"type": "integer", "description": "Size in units."},
+						"mode":     map[string]any{"type": "string", "enum": []any{"fast", "slow"}, "description": "Operating mode."},
+						"replicas": map[string]any{"x-kubernetes-int-or-string": true, "description": "Replica count or percentage."},
+						"options":  map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true},
+						"items": map[string]any{"type": "array", "items": map[string]any{
+							"type": "object", "required": []any{"name"},
+							"properties": map[string]any{"name": map[string]any{"type": "string"}, "weight": map[string]any{"type": "number"}},
+						}},
+						"enabled": map[string]any{"type": "boolean"},
+					},
+				},
+				"status": map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true},
+			},
+		},
+	}}},
+	"/openapi/v3/apis/apps/v1": map[string]any{"openapi": "3.0.0", "components": map[string]any{"schemas": map[string]any{
+		"io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": objectMetaSchema,
+		"io.k8s.api.apps.v1.Deployment": map[string]any{
+			"type":                            "object",
+			"x-kubernetes-group-version-kind": []any{map[string]any{"group": "apps", "version": "v1", "kind": "Deployment"}},
+			"properties": map[string]any{
+				"apiVersion": map[string]any{"type": "string"},
+				"kind":       map[string]any{"type": "string"},
+				"metadata":   map[string]any{"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
+				"spec":       map[string]any{"$ref": "#/components/schemas/io.k8s.api.apps.v1.DeploymentSpec"},
+			},
+		},
+		"io.k8s.api.apps.v1.DeploymentSpec": map[string]any{
+			"type":     "object",
+			"required": []any{"selector", "template"},
+			"properties": map[string]any{
+				"replicas": map[string]any{"type": "integer", "format": "int32", "description": "Number of desired pods. Defaults to 1."},
+				"selector": map[string]any{"type": "object", "properties": map[string]any{"matchLabels": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}}},
+				"template": map[string]any{"$ref": "#/components/schemas/io.k8s.api.core.v1.PodTemplateSpec"},
+			},
+		},
+		"io.k8s.api.core.v1.PodTemplateSpec": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"metadata": map[string]any{"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
+				"spec": map[string]any{"type": "object", "properties": map[string]any{
+					"containers": map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []any{"name"}, "properties": map[string]any{"name": map[string]any{"type": "string"}, "image": map[string]any{"type": "string"}}}},
+				}},
+			},
+		},
+	}}},
+	"/openapi/v3/api/v1": map[string]any{"openapi": "3.0.0", "components": map[string]any{"schemas": map[string]any{
+		"io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": objectMetaSchema,
+	}}},
+}
+
+var objectMetaSchema = map[string]any{
+	"type":        "object",
+	"description": "ObjectMeta is metadata that all persisted resources must have.",
+	"properties": map[string]any{
+		"name":        map[string]any{"type": "string", "description": "Name must be unique within a namespace."},
+		"namespace":   map[string]any{"type": "string"},
+		"labels":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		"annotations": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		// Server-managed fields the real ObjectMeta also declares.
+		"uid":               map[string]any{"type": "string"},
+		"resourceVersion":   map[string]any{"type": "string"},
+		"generation":        map[string]any{"type": "integer"},
+		"creationTimestamp": map[string]any{"type": "string"},
+		"finalizers":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"ownerReferences": map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []any{"apiVersion", "kind", "name", "uid"}, "properties": map[string]any{
+			"apiVersion": map[string]any{"type": "string"}, "kind": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "uid": map[string]any{"type": "string"},
+			"controller": map[string]any{"type": "boolean"}, "blockOwnerDeletion": map[string]any{"type": "boolean"},
+		}}},
+	},
+}
+
 func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if v, ok := discoveryRoutes[path]; ok && r.Method == http.MethodGet {
+		writeJSON(w, v)
+		return
+	}
+	if v, ok := openAPIRoutes[path]; ok && r.Method == http.MethodGet {
 		writeJSON(w, v)
 		return
 	}

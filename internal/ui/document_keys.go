@@ -11,26 +11,54 @@ import (
 func (a *App) editorKey(m Message) {
 	d := a.Doc
 	cmd := m.Meta || m.Ctrl
+	if m.Key == " " && m.Ctrl && !m.Meta && !m.Alt {
+		a.manifestComplete()
+		return
+	}
+	if m.Key == "F2" && m.Alt && !cmd && !m.Shift && d.manifestSchema() != nil {
+		a.nextProblem()
+		return
+	}
 	pos := d.Pos(d.Cursor)
 	target := d.Cursor
 	move := true
+	// macOS conventions: Cmd+Left/Right line start/end, Cmd+Up/Down document
+	// start/end, Option+Left/Right by word (Ctrl+Left/Right too, as in Far).
+	// Option with Up/Down/Home/End keeps the rectangular selection.
+	rect := m.Alt
 	switch m.Key {
 	case "ArrowLeft":
-		if cmd {
+		rect = false
+		switch {
+		case m.Meta && !m.Ctrl && !m.Alt:
+			target = d.At(pos.Row, 0)
+		case m.Alt || cmd:
 			target = d.Word(d.Cursor, -1)
-		} else {
+		default:
 			target = d.Prev(d.Cursor)
 		}
 	case "ArrowRight":
-		if cmd {
+		rect = false
+		switch {
+		case m.Meta && !m.Ctrl && !m.Alt:
+			target = d.At(pos.Row, utf8.RuneCountInString(d.Line(pos.Row)))
+		case m.Alt || cmd:
 			target = d.Word(d.Cursor, 1)
-		} else {
+		default:
 			target = d.Next(d.Cursor)
 		}
 	case "ArrowUp":
-		target = d.At(pos.Row-1, pos.Col)
+		if m.Meta && !m.Ctrl && !m.Alt {
+			target = 0
+		} else {
+			target = d.At(pos.Row-1, pos.Col)
+		}
 	case "ArrowDown":
-		target = d.At(pos.Row+1, pos.Col)
+		if m.Meta && !m.Ctrl && !m.Alt {
+			target = len(d.Text)
+		} else {
+			target = d.At(pos.Row+1, pos.Col)
+		}
 	case "PageUp":
 		if cmd {
 			target = 0
@@ -57,7 +85,7 @@ func (a *App) editorKey(m Message) {
 		move = false
 	}
 	if move {
-		d.Move(target, m.Shift, m.Alt)
+		d.Move(target, m.Shift, rect)
 		return
 	}
 	switch m.Key {
