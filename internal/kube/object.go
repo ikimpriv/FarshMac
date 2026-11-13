@@ -16,16 +16,17 @@ type TableColumn struct{ Name, Value string }
 // Object is the panel's view of one resource instance: metadata and printer
 // columns, never the full manifest.
 type Object struct {
-	GVR       schema.GroupVersionResource
-	Kind      string
-	Name      string
-	Namespace string
-	UID       types.UID
-	Created   time.Time
-	Owners    []types.UID
-	Labels    map[string]string
-	Columns   []TableColumn
-	Selector  map[string]string // Services: spec.selector.
+	GVR             schema.GroupVersionResource
+	Kind            string
+	Name            string
+	Namespace       string
+	UID             types.UID
+	ResourceVersion string
+	Created         time.Time
+	Owners          []types.UID
+	Labels          map[string]string
+	Columns         []TableColumn
+	Selector        map[string]string // Services: spec.selector.
 }
 
 // Column returns the value of a printer column by name (case-insensitive).

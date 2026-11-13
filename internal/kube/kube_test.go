@@ -366,12 +366,12 @@ func TestShortStatusAndObjectInfo(t *testing.T) {
 
 func TestTableDecodeFallsBackToPlainList(t *testing.T) {
 	r := Resource{GVR: gvrPods, Kind: "Pod"}
-	objects, err := decodeTable([]byte(`{"kind":"PodList","items":[{"metadata":{"name":"a","uid":"u1","ownerReferences":[{"uid":"o"}]},"status":{"phase":"Running"}}]}`), r, ns)
+	objects, _, err := decodeTable([]byte(`{"kind":"PodList","items":[{"metadata":{"name":"a","uid":"u1","ownerReferences":[{"uid":"o"}]},"status":{"phase":"Running"}}]}`), r, ns)
 	if err != nil || len(objects) != 1 || objects[0].ShortStatus() != "Running" || objects[0].Owners[0] != "o" || objects[0].Namespace != ns {
 		t.Fatal(objects, err)
 	}
 	// Table rows without metadata still name the object from the NAME column.
-	objects, err = decodeTable([]byte(`{"kind":"Table","columnDefinitions":[{"name":"Name"},{"name":"Status"}],"rows":[{"cells":["b","Pending"]},{"cells":[null,null]}]}`), r, ns)
+	objects, _, err = decodeTable([]byte(`{"kind":"Table","columnDefinitions":[{"name":"Name"},{"name":"Status"}],"rows":[{"cells":["b","Pending"]},{"cells":[null,null]}]}`), r, ns)
 	if err != nil || len(objects) != 1 || objects[0].Name != "b" || objects[0].ShortStatus() != "Pending" {
 		t.Fatal(objects, err)
 	}

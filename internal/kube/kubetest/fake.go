@@ -28,12 +28,26 @@ type FakeAPI struct {
 	puts      []string
 	patches   []string
 	logs      string
+	rv        int                   // Cluster resourceVersion, bumped by every change.
+	watchers  map[string][]*watcher // Open watch streams per collection.
+	expire    map[string]bool       // Collections whose next watch answers 410 Gone.
+}
+
+// watcher is one open watch request: events are JSON lines; a Table watch
+// sends columnDefinitions in its first event only, like a real server.
+type watcher struct {
+	events chan []byte
+	drop   chan struct{}
+	table  bool
+	meta   bool
+	names  []string // Table column names fixed when the watch started.
+	first  bool
 }
 
 // New starts a server with the "default" and "shop" namespaces.
 func New(t testing.TB) *FakeAPI {
 	t.Helper()
-	f := &FakeAPI{objects: map[string][]map[string]any{}, forbidden: map[string]bool{}}
+	f := &FakeAPI{objects: map[string][]map[string]any{}, forbidden: map[string]bool{}, watchers: map[string][]*watcher{}, expire: map[string]bool{}, rv: 1}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
 	f.Add("/api/v1/namespaces", Obj("Namespace", "", "default", "ns-default", nil, nil, map[string]string{"STATUS": "Active"}))
@@ -55,7 +69,131 @@ func (f *FakeAPI) Add(collection string, items ...map[string]any) {
 	for _, it := range items {
 		it["apiVersion"] = apiVersion
 	}
+	f.rv++
 	f.objects[collection] = append(f.objects[collection], items...)
+}
+
+// Emit applies a change to the stored objects (ADDED appends, MODIFIED
+// replaces by name, DELETED removes) and pushes the event to every open
+// watch of the collection.
+func (f *FakeAPI) Emit(collection string, eventType string, obj map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rv++
+	meta := obj["metadata"].(map[string]any)
+	meta["resourceVersion"] = fmt.Sprint(f.rv)
+	if _, ok := obj["apiVersion"]; !ok {
+		obj["apiVersion"] = "v1"
+	}
+	name := meta["name"]
+	items := f.objects[collection]
+	index := -1
+	for i, it := range items {
+		if it["metadata"].(map[string]any)["name"] == name {
+			index = i
+		}
+	}
+	switch eventType {
+	case "DELETED":
+		if index >= 0 {
+			f.objects[collection] = append(items[:index], items[index+1:]...)
+		}
+	default:
+		if index >= 0 {
+			items[index] = obj
+		} else {
+			f.objects[collection] = append(items, obj)
+		}
+	}
+	for _, w := range f.watchers[collection] {
+		var object any
+		if w.table {
+			object = tableWith(w.names, []map[string]any{obj}, w.meta, !w.first, fmt.Sprint(f.rv))
+			w.first = true
+		} else {
+			object = stripColumns(obj)
+		}
+		line, _ := json.Marshal(map[string]any{"type": eventType, "object": object})
+		select {
+		case w.events <- append(line, '\n'):
+		default:
+		}
+	}
+}
+
+// ExpireWatch makes the next watch request of the collection answer 410
+// Gone, as a server does when the resourceVersion is too old.
+func (f *FakeAPI) ExpireWatch(collection string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.expire[collection] = true
+}
+
+// DropWatches closes every open watch stream of the collection without an
+// error, as a server does after its timeout; clients reconnect.
+func (f *FakeAPI) DropWatches(collection string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range f.watchers[collection] {
+		close(w.drop)
+	}
+	f.watchers[collection] = nil
+}
+
+// Watchers counts the open watch streams of the collection.
+func (f *FakeAPI) Watchers(collection string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.watchers[collection])
+}
+
+// serveWatch streams events for a collection until the client goes away or
+// the stream is dropped.
+func (f *FakeAPI) serveWatch(w http.ResponseWriter, r *http.Request, path string) {
+	f.mu.Lock()
+	if f.expire[path] {
+		delete(f.expire, path)
+		f.mu.Unlock()
+		status(w, 410, "Expired", "too old resource version")
+		return
+	}
+	items := f.objects[path]
+	wt := &watcher{events: make(chan []byte, 64), drop: make(chan struct{}), table: strings.Contains(r.Header.Get("Accept"), "as=Table"), meta: r.URL.Query().Get("includeObject") == "Metadata", names: columnNames(items)}
+	f.watchers[path] = append(f.watchers[path], wt)
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		list := f.watchers[path]
+		for i, x := range list {
+			if x == wt {
+				f.watchers[path] = append(list[:i], list[i+1:]...)
+				break
+			}
+		}
+		f.mu.Unlock()
+	}()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.WriteHeader(200)
+	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	for {
+		select {
+		case line := <-wt.events:
+			if _, err := w.Write(line); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-wt.drop:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // Obj builds an object; owners are UIDs, columns render in Table form.
@@ -154,15 +292,22 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Collection?
 	if items, ok := f.objects[path]; ok && r.Method == http.MethodGet {
+		if r.URL.Query().Get("watch") == "true" {
+			f.mu.Unlock()
+			f.serveWatch(w, r, path)
+			f.mu.Lock() // The deferred Unlock expects it held.
+			return
+		}
+		rv := fmt.Sprint(f.rv)
 		if strings.Contains(r.Header.Get("Accept"), "as=Table") {
-			writeJSON(w, table(items, r.URL.Query().Get("includeObject")))
+			writeJSON(w, tableWith(columnNames(items), items, r.URL.Query().Get("includeObject") == "Metadata", true, rv))
 			return
 		}
 		out := make([]any, 0, len(items))
 		for _, it := range items {
 			out = append(out, stripColumns(it))
 		}
-		writeJSON(w, map[string]any{"kind": "List", "apiVersion": "v1", "items": out})
+		writeJSON(w, map[string]any{"kind": "List", "apiVersion": "v1", "metadata": map[string]any{"resourceVersion": rv}, "items": out})
 		return
 	}
 	// Single object.
@@ -257,8 +402,8 @@ func stripColumns(it map[string]any) map[string]any {
 	return out
 }
 
-// table renders items as a metav1.Table: NAME, the items' columns, AGE.
-func table(items []map[string]any, includeObject string) map[string]any {
+// columnNames collects the custom column names of items, sorted.
+func columnNames(items []map[string]any) []string {
 	names := []string{}
 	seen := map[string]bool{}
 	for _, it := range items {
@@ -272,11 +417,12 @@ func table(items []map[string]any, includeObject string) map[string]any {
 		}
 	}
 	sort.Strings(names)
-	defs := []any{map[string]any{"name": "Name", "type": "string"}}
-	for _, n := range names {
-		defs = append(defs, map[string]any{"name": n, "type": "string"})
-	}
-	defs = append(defs, map[string]any{"name": "Age", "type": "string"})
+	return names
+}
+
+// tableWith renders items as a metav1.Table: NAME, the given columns, AGE.
+// withDefs includes columnDefinitions (a watch sends them once).
+func tableWith(names []string, items []map[string]any, includeMeta, withDefs bool, rv string) map[string]any {
 	rows := []any{}
 	for _, it := range items {
 		meta := it["metadata"].(map[string]any)
@@ -291,12 +437,21 @@ func table(items []map[string]any, includeObject string) map[string]any {
 		}
 		cells = append(cells, "5d")
 		row := map[string]any{"cells": cells}
-		if includeObject == "Metadata" {
+		if includeMeta {
 			row["object"] = map[string]any{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1", "metadata": meta}
 		}
 		rows = append(rows, row)
 	}
-	return map[string]any{"kind": "Table", "apiVersion": "meta.k8s.io/v1", "columnDefinitions": defs, "rows": rows}
+	t := map[string]any{"kind": "Table", "apiVersion": "meta.k8s.io/v1", "metadata": map[string]any{"resourceVersion": rv}, "rows": rows}
+	if withDefs {
+		defs := []any{map[string]any{"name": "Name", "type": "string"}}
+		for _, n := range names {
+			defs = append(defs, map[string]any{"name": n, "type": "string"})
+		}
+		defs = append(defs, map[string]any{"name": "Age", "type": "string"})
+		t["columnDefinitions"] = defs
+	}
+	return t
 }
 
 // URL is the server address.

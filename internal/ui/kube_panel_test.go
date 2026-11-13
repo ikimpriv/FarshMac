@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"farshmac/internal/fsops"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"farshmac/internal/kube"
 	"farshmac/internal/kube/kubetest"
@@ -103,9 +105,36 @@ func TestKubePanelLevels(t *testing.T) {
 		t.Fatal("deployments", got)
 	}
 	line := gridLine(a.Draw(), 3) + gridLine(a.Draw(), 4)
-	if !strings.Contains(line, "app") || !strings.Contains(line, "2/3") {
-		t.Fatal("deployment READY column", line)
+	if !strings.Contains(line, "app") || !strings.Contains(line, "2/3") || !strings.Contains(line, "Deployment") {
+		t.Fatal("deployment kind and READY columns", line)
 	}
+	if head := gridLine(a.Draw(), 2); !strings.Contains(head, "Name / Kind / Status / Age") {
+		t.Fatal("kube heading", head)
+	}
+	// An object that owns nothing is a file: Enter shows its manifest.
+	a.error(p.Load("/shop/configmaps"))
+	waitNetwork(t, a)
+	selectEntry(t, p, "settings")
+	if p.Entries[p.Cursor].Dir {
+		t.Fatal("a childless object must be a file")
+	}
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	if a.Doc == nil || !strings.Contains(a.Doc.Text, "kind: ConfigMap") {
+		t.Fatal("Enter on a file object must show the manifest", a.Doc, a.Status)
+	}
+	closeDoc(t, a, "settings")
+	a.error(p.Load("/shop/deployments.apps"))
+	waitNetwork(t, a)
+	if !p.Entries[1].Dir {
+		t.Fatal("an owner must stay a folder")
+	}
+	// While a listing is being read the panel says so.
+	p.load = &panelLoad{started: time.Now().Add(-2 * time.Second), done: make(chan panelResult, 1), o: fsops.NewOperation("x")}
+	if body := gridLine(a.Draw(), 3+(a.Rows-9)/2); !strings.Contains(body, "Reading cluster") || !strings.Contains(body, "Esc stops") {
+		t.Fatal("reading indicator", body)
+	}
+	p.load = nil
 	bar = gridLine(a.Draw(), a.Rows-1)
 	if !strings.Contains(bar, "Manif") || !strings.Contains(bar, "Delete") || !strings.Contains(bar, "Copy") {
 		t.Fatal("type folder key bar", bar)
@@ -292,4 +321,45 @@ func TestKubeExportManifests(t *testing.T) {
 	if a.Form != nil || !strings.Contains(a.Status, "destination") {
 		t.Fatal("copy into the cluster", a.Form, a.Status)
 	}
+}
+
+func TestKubeWatchUpdatesPanel(t *testing.T) {
+	a, f := kubeApp(t)
+	p := &a.Panels[0]
+	enterKube(t, a, "shop")
+	enterKube(t, a, "deployments.apps")
+	if !p.Kube.watching("shop") || !p.Kube.watching("") {
+		t.Fatal("watches must start after listing", p.Kube.watches)
+	}
+	f.Emit("/apis/apps/v1/namespaces/shop/deployments", "ADDED", kubetest.Obj("Deployment", "shop", "late", "dep-late", nil, nil, map[string]string{"READY": "0/1"}))
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(strings.Join(entryNames(p), ","), "late") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := strings.Join(entryNames(p), ","); !strings.Contains(got, "late") {
+		t.Fatal("added object not shown", got)
+	}
+	f.Emit("/apis/apps/v1/namespaces/shop/deployments", "DELETED", kubetest.Obj("Deployment", "shop", "late", "dep-late", nil, nil, nil))
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(strings.Join(entryNames(p), ","), "late") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := strings.Join(entryNames(p), ","); strings.Contains(got, "late") {
+		t.Fatal("deleted object still shown", got)
+	}
+	// Namespaces are watched too.
+	a.error(p.Load("/"))
+	waitNetwork(t, a)
+	f.Emit("/api/v1/namespaces", "ADDED", kubetest.Obj("Namespace", "", "watched", "ns-watched", nil, nil, map[string]string{"STATUS": "Active"}))
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(strings.Join(entryNames(p), ","), "watched") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := strings.Join(entryNames(p), ","); !strings.Contains(got, "watched") {
+		t.Fatal("added namespace not shown", got)
+	}
+	a.disconnectRemote(0)
 }

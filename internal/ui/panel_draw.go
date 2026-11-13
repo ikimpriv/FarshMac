@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func panelColumns(p *Panel) int {
@@ -66,6 +67,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	if p.View == "Info panel" {
 		label = "Information"
 	}
+	if p.load != nil {
+		label += " …"
+	}
 	title := " " + tail(label, w-8) + " "
 	fg, bg := uint32(LightCyan), uint32(Blue)
 	if index == a.Active {
@@ -120,6 +124,15 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				heading = "Name / Size / Modified"
 			}
 		}
+		if p.Kube != nil && columns == 1 && p.View != "Tree panel" {
+			heading = "Name / Kind / Status / Age"
+			if p.View == "Detailed" {
+				heading = "Name / Kind / Status / Created"
+			}
+			if p.kubeLevel().Level == kubeContainerFS {
+				heading = "Name / Size / Modified"
+			}
+		}
 		g.Text(xx+1, y+1, heading, Yellow, Blue, width-2)
 		sizeWidth := max(9, len(panelSize(p.TotalBytes, a.Settings.HumanReadableSizes)))
 		for _, r := range p.folderSizes {
@@ -132,7 +145,18 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			}
 			sizeWidth = max(sizeWidth, n)
 		}
-		extraWidth := min(width-4, max(sizeWidth, panelExtraWidth(p.View, width)+sizeWidth-9))
+		preferred := panelExtraWidth(p.View, width) + sizeWidth - 9
+		if p.Kube != nil && p.kubeLevel().Level != kubeContainerFS {
+			preferred = 30 // kind (11), status (12), age (5)
+			switch p.View {
+			case "Wide":
+				preferred = 12
+			case "Detailed":
+				preferred = 46
+			}
+			preferred = min(preferred, max(0, width*2/3))
+		}
+		extraWidth := min(width-4, max(sizeWidth, preferred))
 		nameWidth := max(0, width-extraWidth-3)
 		metadata := columns == 1 && p.View != "Tree panel" && width >= 12
 		for row := 0; row < rows; row++ {
@@ -188,7 +212,10 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				date = e.Info.ModTime().Format("02.01.06 15:04")
 			}
 			if k, ok := e.Info.(*kubeEntry); ok {
-				size = k.column
+				g.Text(xx+1, yy, name, fg, bg, nameWidth)
+				g.Set(xx+nameWidth+1, yy, "│", LightCyan, bg)
+				g.Text(xx+nameWidth+2, yy, k.panelColumns(p.View), fg, bg, width-nameWidth-2)
+				continue
 			} else if e.Info != nil {
 				if !e.Dir {
 					size = panelSize(e.Info.Size(), a.Settings.HumanReadableSizes)
@@ -247,6 +274,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			g.Set(xx+nameWidth+1, yy, "│", LightCyan, bg)
 			g.Text(xx+nameWidth+2, yy, extra, fg, bg, width-nameWidth-2)
 		}
+	}
+	if p.load != nil {
+		a.drawReading(g, p, x, y, w, h)
 	}
 	divider := y + h - 3
 	for col := x + 1; col < x+w-1; col++ {
@@ -313,4 +343,26 @@ func (p *Panel) loadInfo() {
 		}
 	}
 	p.InfoText = fmt.Sprintf("%s\n\n%d entries\n%s in files\n", p.Path, p.ItemCount, panelSizeLabel(p.TotalBytes, p.HumanReadableSizes))
+}
+
+// drawReading overlays a progress line while the folder is being read, so a
+// slow source (a cluster, a server) is visibly busy and Esc visibly stops it.
+func (a *App) drawReading(g *Grid, p *Panel, x, y, w, h int) {
+	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	elapsed := time.Since(p.load.started)
+	frame := spinner[int(elapsed/(100*time.Millisecond))%len(spinner)]
+	what := "folder"
+	if p.Kube != nil {
+		what = "cluster"
+	} else if p.Remote != nil {
+		what = "server"
+	}
+	text := fmt.Sprintf(" %s Reading %s… %ds · Esc stops ", frame, what, int(elapsed.Seconds()))
+	if elapsed < 300*time.Millisecond && p.Kube == nil {
+		return // Local folders usually finish before the overlay is worth drawing.
+	}
+	width := min(w-4, len([]rune(text)))
+	row := y + 2 + max(1, h-5)/2
+	g.Fill(x+(w-width)/2, row, width, 1, Black, Cyan)
+	g.Text(x+(w-width)/2, row, text, Black, Cyan, width)
 }

@@ -139,9 +139,9 @@ The cluster is shown as folders: `/` lists namespaces, a namespace lists resourc
 | Namespaces | F3/F4 manifest, F5 export every manifest of a namespace, F7 new namespace, F8 delete (type the name), Shift+F4 describe |
 | Type folder | F3 manifest (read-only), F4 edit and save with Update (conflicts are reported, your text is kept), F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
 | Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
-| Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls` found in the container; a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it; **Kubernetes → Open shell in container** gives an interactive shell |
+| Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls` found in the container; a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
 
-Cmd+R refreshes the namespace snapshot (also refreshed after 30 s). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. The terminal stays a local shell except while a container command or followed log runs in it.
+After a namespace is listed its resource types are watched, so the panel updates itself when objects appear, change or disappear (Cmd+R forces a full re-list). Objects that own nothing are shown as files (Enter shows the manifest); owners and pods are folders. The columns show kind, status and age (Detailed: creation time). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. The terminal stays a local shell except while a container command or followed log runs in it.
 
 ## Tests
 

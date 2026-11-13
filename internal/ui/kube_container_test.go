@@ -88,6 +88,14 @@ func TestKubeContainerFileSystem(t *testing.T) {
 	if a.Foreign != nil {
 		t.Fatal("stream did not end")
 	}
+	// The terminal keeps the output; the next key returns to the panels.
+	if !a.TermVisible || !a.foreignEnded {
+		t.Fatal("terminal should wait for a key", a.TermVisible, a.foreignEnded)
+	}
+	a.Handle(`{"Type":"input","Text":"x"}`)
+	if a.TermVisible || a.foreignEnded {
+		t.Fatal("key did not return to the panels")
+	}
 	if got, err := os.ReadFile(filepath.Join(root, "made-here.txt")); err != nil || string(got) != "hello" {
 		t.Fatal("command output", err, string(got), a.Status)
 	}

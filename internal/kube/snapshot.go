@@ -32,6 +32,11 @@ type Snapshot struct {
 	Objects   map[types.UID]*Object
 	ByFolder  map[string][]*Object // Type folder -> objects sorted by name.
 	Skipped   []SkippedResource
+	// Resources maps each listed folder to its resource, and
+	// ResourceVersions to the list's resourceVersion, so a watch can
+	// continue from the moment the snapshot was taken.
+	Resources        map[string]Resource
+	ResourceVersions map[string]string
 }
 
 // resourcePath is the collection URL of a resource, cluster-wide when ns is
@@ -51,34 +56,50 @@ func resourcePath(gvr schema.GroupVersionResource, ns string) string {
 }
 
 // listTable lists a resource in Table form; every row becomes an Object.
-func (c *Client) listTable(ctx context.Context, r Resource, ns string) ([]*Object, error) {
+// The list's resourceVersion is returned for watches.
+func (c *Client) listTable(ctx context.Context, r Resource, ns string) ([]*Object, string, error) {
 	raw, err := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).SetHeader("Accept", tableAccept).Param("includeObject", "Metadata").Do(ctx).Raw()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	return decodeTable(raw, r, ns)
 }
 
 // decodeTable converts a Table (or, if the server ignored the Accept header,
-// a plain list) into objects.
-func decodeTable(raw []byte, r Resource, ns string) ([]*Object, error) {
+// a plain list) into objects, with the list's resourceVersion.
+func decodeTable(raw []byte, r Resource, ns string) ([]*Object, string, error) {
 	var probe struct {
-		Kind string `json:"kind"`
+		Kind     string `json:"kind"`
+		Metadata struct {
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if probe.Kind != "Table" {
-		return decodePlainList(raw, r, ns)
+		objects, err := decodePlainList(raw, r, ns)
+		return objects, probe.Metadata.ResourceVersion, err
 	}
 	var table metav1.Table
 	if err := json.Unmarshal(raw, &table); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	objects, _ := decodeTableRows(&table, r, ns, nil)
+	return objects, table.ResourceVersion, nil
+}
+
+// decodeTableRows turns the rows of a Table into objects. A watch stream
+// carries columnDefinitions only in its first Table; defs remembers them
+// and is returned (updated when the table has its own).
+func decodeTableRows(table *metav1.Table, r Resource, ns string, defs []metav1.TableColumnDefinition) ([]*Object, []metav1.TableColumnDefinition) {
+	if len(table.ColumnDefinitions) > 0 {
+		defs = table.ColumnDefinitions
 	}
 	var objects []*Object
 	for _, row := range table.Rows {
 		o := &Object{GVR: r.GVR, Kind: r.Kind, Namespace: ns}
-		for i, col := range table.ColumnDefinitions {
+		for i, col := range defs {
 			if i < len(row.Cells) && row.Cells[i] != nil {
 				o.Columns = append(o.Columns, TableColumn{Name: col.Name, Value: fmt.Sprint(row.Cells[i])})
 			} else {
@@ -101,58 +122,77 @@ func decodeTable(raw []byte, r Resource, ns string) ([]*Object, error) {
 		}
 		objects = append(objects, o)
 	}
-	return objects, nil
+	return objects, defs
 }
 
 func applyMetadata(o *Object, m metav1.ObjectMeta) {
 	o.Name = m.Name
 	o.UID = m.UID
+	o.ResourceVersion = m.ResourceVersion
 	if m.Namespace != "" {
 		o.Namespace = m.Namespace
 	}
 	o.Created = m.CreationTimestamp.Time
 	o.Labels = m.Labels
+	o.Owners = nil
 	for _, owner := range m.OwnerReferences {
 		o.Owners = append(o.Owners, owner.UID)
 	}
 }
 
+// plainItem is an object as a server without Table support sends it.
+type plainItem struct {
+	Metadata metav1.ObjectMeta `json:"metadata"`
+	Status   struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+func (item plainItem) object(r Resource, ns string) *Object {
+	o := &Object{GVR: r.GVR, Kind: r.Kind, Namespace: ns}
+	applyMetadata(o, item.Metadata)
+	if item.Status.Phase != "" {
+		o.Columns = []TableColumn{{Name: "STATUS", Value: item.Status.Phase}}
+	}
+	return o
+}
+
 // decodePlainList handles servers (or tests) that answer a plain list.
 func decodePlainList(raw []byte, r Resource, ns string) ([]*Object, error) {
 	var list struct {
-		Items []struct {
-			Metadata metav1.ObjectMeta `json:"metadata"`
-			Status   struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
+		Items []plainItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, err
 	}
 	var objects []*Object
 	for _, item := range list.Items {
-		o := &Object{GVR: r.GVR, Kind: r.Kind, Namespace: ns}
-		applyMetadata(o, item.Metadata)
-		if item.Status.Phase != "" {
-			o.Columns = []TableColumn{{Name: "STATUS", Value: item.Status.Phase}}
-		}
-		if o.Name != "" {
+		if o := item.object(r, ns); o.Name != "" {
 			objects = append(objects, o)
 		}
 	}
 	return objects, nil
 }
 
+// NamespacesResource describes the cluster's namespaces for listing and
+// watching.
+var NamespacesResource = Resource{GVR: schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, Kind: "Namespace", Singular: "namespace", Folder: "namespaces"}
+
 // Namespaces lists the cluster's namespaces with their phase.
 func (c *Client) Namespaces(ctx context.Context) ([]*Object, error) {
-	r := Resource{GVR: schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, Kind: "Namespace", Singular: "namespace", Folder: "namespaces"}
-	objects, err := c.listTable(ctx, r, "")
+	objects, _, err := c.NamespacesRV(ctx)
+	return objects, err
+}
+
+// NamespacesRV lists the namespaces and returns the list's resourceVersion,
+// the starting point of a namespace watch.
+func (c *Client) NamespacesRV(ctx context.Context) ([]*Object, string, error) {
+	objects, rv, err := c.listTable(ctx, NamespacesResource, "")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	sortObjects(objects)
-	return objects, nil
+	return objects, rv, nil
 }
 
 func sortObjects(objects []*Object) {
@@ -170,7 +210,7 @@ func (c *Client) LoadSnapshot(ctx context.Context, ns string, hidden map[string]
 	if err != nil {
 		return nil, err
 	}
-	s := &Snapshot{Namespace: ns, Taken: time.Now(), Objects: map[types.UID]*Object{}, ByFolder: map[string][]*Object{}}
+	s := &Snapshot{Namespace: ns, Taken: time.Now(), Objects: map[types.UID]*Object{}, ByFolder: map[string][]*Object{}, Resources: map[string]Resource{}, ResourceVersions: map[string]string{}}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
@@ -187,7 +227,7 @@ func (c *Client) LoadSnapshot(ctx context.Context, ns string, hidden map[string]
 			case <-ctx.Done():
 				return
 			}
-			objects, err := c.listTable(ctx, r, ns)
+			objects, rv, err := c.listTable(ctx, r, ns)
 			if err == nil && r.GVR.Group == "" && r.GVR.Resource == "services" {
 				err = c.attachSelectors(ctx, ns, objects)
 			}
@@ -201,6 +241,8 @@ func (c *Client) LoadSnapshot(ctx context.Context, ns string, hidden map[string]
 			}
 			sortObjects(objects)
 			s.ByFolder[r.Folder] = objects
+			s.Resources[r.Folder] = r
+			s.ResourceVersions[r.Folder] = rv
 			for _, o := range objects {
 				if o.UID != "" {
 					s.Objects[o.UID] = o

@@ -329,6 +329,7 @@ type App struct {
 	Foreign                                                   foreignStream    // Stream shown in the terminal instead of the shell (exec, logs).
 	foreignLabel                                              string
 	foreignDone                                               func()
+	foreignEnded                                              bool // The next key returns to the panels.
 	modsAt                                                    time.Time
 	previewKey, previewText                                   string
 	previewPending                                            bool
@@ -608,6 +609,8 @@ func (a *App) Handle(raw string) {
 		if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
 			if a.Foreign != nil {
 				a.error(a.Foreign.Write(data))
+			} else if a.TermVisible && a.foreignReturn() {
+				return
 			} else if a.Term != nil {
 				a.error(a.Term.Write(string(data)))
 			}
@@ -636,6 +639,9 @@ func (a *App) Handle(raw string) {
 	case "input":
 		if a.Foreign != nil {
 			a.error(a.Foreign.Write([]byte(m.Text)))
+			return
+		}
+		if a.TermVisible && a.foreignReturn() {
 			return
 		}
 		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
@@ -764,6 +770,7 @@ func (a *App) key(m Message) {
 	if (m.Meta || m.Ctrl) && !m.Alt && !m.Shift && strings.EqualFold(m.Key, "o") && a.Dialog == nil && a.Form == nil {
 		a.Menu = nil
 		a.FastFind = nil
+		a.foreignEnded = false
 		if !a.TermVisible {
 			a.showTerminal()
 		} else {
@@ -1368,6 +1375,9 @@ jobsDone:
 			a.dirty = true
 			a.noteInvalidRemoteNames(i)
 		}
+		if a.Panels[i].load != nil && !a.TermVisible {
+			a.dirty = true // Animate the reading indicator.
+		}
 		if s := a.Panels[i].loadStatus; s != "" {
 			a.Panels[i].loadStatus = ""
 			a.Status = s
@@ -1378,6 +1388,7 @@ jobsDone:
 	}
 	a.updateInfoPanels()
 	a.updatePreview()
+	a.pollKubeWatches()
 	if a.terminalCanDrain() {
 		a.pollForeign()
 	}

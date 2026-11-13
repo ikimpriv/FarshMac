@@ -86,12 +86,27 @@ func (a *App) finishForeign() {
 			status = a.foreignLabel + ": " + err.Error()
 		}
 	}
-	a.pending = append(a.pending, "\r\n"...)
+	a.pending = append(a.pending, "\r\n\x1b[7m "+status+" · any key returns to the panels \x1b[0m\r\n"...)
+	a.foreignEnded = true
 	a.setShellStatus(status)
 	a.dirty = true
 	if done != nil {
 		done()
 	}
+}
+
+// foreignReturn consumes the first key after a container command ended and
+// returns to the panels, instead of passing the key to the local shell.
+func (a *App) foreignReturn() bool {
+	if !a.foreignEnded {
+		return false
+	}
+	a.foreignEnded = false
+	if a.TermVisible {
+		a.TermVisible = false
+		a.dirty = true
+	}
+	return true
 }
 
 // logStream follows a log in the terminal area: read-only, ⌘. stops it.

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"farshmac/internal/fsops"
@@ -33,6 +35,9 @@ type kubePanel struct {
 	executor     kube.Executor              // Tests inject a local shell; nil = the client's.
 	last         kubePath                   // Level of the path last listed, for the key bar.
 	lastPath     string
+	watches      map[string]*kubeNamespaceWatch // Namespace ("" = the list of namespaces) -> its watches.
+	changed      atomic.Bool                    // Watches changed a snapshot; the panel re-lists.
+	reloadedAt   time.Time
 }
 
 func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.Object, s Settings) *kubePanel {
@@ -52,9 +57,13 @@ func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.
 }
 func (k *kubePanel) label() string { return k.profile.Label() }
 func (k *kubePanel) close() {
+	k.stopWatches()
 	if k.client != nil {
 		k.client.Close()
 	}
+}
+func sortKubeObjects(list []*kube.Object) {
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 }
 
 // invalidate forgets cached listings: one namespace, or everything when ns is "".
@@ -62,10 +71,18 @@ func (k *kubePanel) invalidate(ns string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if ns == "" {
+		for name, w := range k.watches {
+			w.cancel()
+			delete(k.watches, name)
+		}
 		k.namespaces, k.namespacesAt = nil, time.Time{}
 		k.snapshots = map[string]*kube.Snapshot{}
 		k.pods = map[string]kube.PodSummary{}
 		return
+	}
+	if w, ok := k.watches[ns]; ok {
+		w.cancel()
+		delete(k.watches, ns)
 	}
 	delete(k.snapshots, ns)
 	for key := range k.pods {
@@ -88,24 +105,29 @@ func (k *kubePanel) cachedPod(ns, name string) (kube.PodSummary, bool) {
 func (k *kubePanel) namespaceList(ctx context.Context) ([]*kube.Object, error) {
 	k.mu.Lock()
 	cached, at := k.namespaces, k.namespacesAt
+	_, watched := k.watches[""]
 	k.mu.Unlock()
-	if cached != nil && time.Since(at) < k.ttl {
+	if cached != nil && (watched || time.Since(at) < k.ttl) {
 		return cached, nil
 	}
-	list, err := k.client.Namespaces(ctx)
+	list, rv, err := k.client.NamespacesRV(ctx)
 	if err != nil {
 		return nil, err
 	}
 	k.mu.Lock()
 	k.namespaces, k.namespacesAt = list, time.Now()
 	k.mu.Unlock()
+	if rv != "" {
+		k.startWatches("", nil, rv)
+	}
 	return list, nil
 }
 func (k *kubePanel) snapshot(ctx context.Context, ns string) (*kube.Snapshot, error) {
 	k.mu.Lock()
 	cached := k.snapshots[ns]
+	_, watched := k.watches[ns]
 	k.mu.Unlock()
-	if cached != nil && time.Since(cached.Taken) < k.ttl {
+	if cached != nil && (watched || time.Since(cached.Taken) < k.ttl) {
 		return cached, nil
 	}
 	snap, err := k.client.LoadSnapshot(ctx, ns, k.hidden)
@@ -115,6 +137,7 @@ func (k *kubePanel) snapshot(ctx context.Context, ns string) (*kube.Snapshot, er
 	k.mu.Lock()
 	k.snapshots[ns] = snap
 	k.mu.Unlock()
+	k.startWatches(ns, snap, "")
 	return snap, nil
 }
 func (k *kubePanel) cachedSnapshot(ns string) *kube.Snapshot {
@@ -281,27 +304,72 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 	}
 }
 
-// kubeEntry is the FileInfo of a panel entry: objects and folders are
-// directories; the size column shows a status or a count instead.
+// kubeEntry is the FileInfo of a panel entry. Objects that own other
+// objects (and pods) are folders; an object without children is a file whose
+// Enter shows the manifest. The panel columns show kind, status and age.
 type kubeEntry struct {
 	name    string
+	dir     bool
+	kind    string
 	modTime time.Time
-	column  string
+	column  string // Status, state or object count.
 	object  *kube.Object
 }
 
-func (e *kubeEntry) Name() string       { return e.name }
-func (e *kubeEntry) Size() int64        { return 0 }
-func (e *kubeEntry) Mode() os.FileMode  { return os.ModeDir | 0555 }
+func (e *kubeEntry) Name() string { return e.name }
+func (e *kubeEntry) Size() int64  { return 0 }
+func (e *kubeEntry) Mode() os.FileMode {
+	if e.dir {
+		return os.ModeDir | 0555
+	}
+	return 0444
+}
 func (e *kubeEntry) ModTime() time.Time { return e.modTime }
-func (e *kubeEntry) IsDir() bool        { return true }
+func (e *kubeEntry) IsDir() bool        { return e.dir }
 func (e *kubeEntry) Sys() any           { return e.object }
 
-func kubeObjectEntry(o *kube.Object) Entry {
-	return Entry{Name: o.Name, Dir: true, Info: &kubeEntry{name: o.Name, modTime: o.Created, column: o.ShortStatus(), object: o}}
+func kubeObjectEntry(o *kube.Object, dir bool) Entry {
+	return Entry{Name: o.Name, Dir: dir, Info: &kubeEntry{name: o.Name, dir: dir, kind: o.Kind, modTime: o.Created, column: o.ShortStatus(), object: o}}
 }
 func kubeFolderEntry(name string, count int) Entry {
-	return Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, column: strconv.Itoa(count)}}
+	return Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, column: strconv.Itoa(count) + " objects"}}
+}
+
+// kubeAge formats an age like kubectl: 45s, 12m, 3h, 5d, 2y.
+func kubeAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < 0:
+		return "0s"
+	case d < 2*time.Minute:
+		return strconv.Itoa(int(d.Seconds())) + "s"
+	case d < 2*time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + "m"
+	case d < 48*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + "h"
+	case d < 2*365*24*time.Hour:
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
+	}
+	return strconv.Itoa(int(d.Hours()/24/365)) + "y"
+}
+
+// panelColumns renders the metadata columns of a Kubernetes entry for the
+// panel view: kind, status and age (Detailed: the creation time instead).
+func (e *kubeEntry) panelColumns(view string) string {
+	switch view {
+	case "Wide":
+		return fmt.Sprintf("%-12.12s", e.column)
+	case "Detailed":
+		created := ""
+		if !e.modTime.IsZero() {
+			created = e.modTime.Local().Format("02.01.06 15:04")
+		}
+		return fmt.Sprintf("%-14.14s %-16.16s %s", e.kind, e.column, created)
+	}
+	return fmt.Sprintf("%-11.11s %-12.12s %5s", e.kind, e.column, kubeAge(e.modTime))
 }
 
 // loadKube lists one level of the cluster into the panel.
@@ -326,7 +394,7 @@ func (p *Panel) loadKube(abs string) error {
 			return err
 		}
 		for _, ns := range list {
-			files = append(files, kubeObjectEntry(ns))
+			files = append(files, kubeObjectEntry(ns, true))
 		}
 		info += "\nNamespaces · server " + k.client.ServerVersion()
 	case kubeNamespace:
@@ -339,7 +407,10 @@ func (p *Panel) loadKube(abs string) error {
 		}
 	case kubeTypeFolder:
 		for _, obj := range r.Objects {
-			files = append(files, kubeObjectEntry(obj))
+			// Owners of other objects and pods are folders; the rest are
+			// files whose Enter shows the manifest.
+			dir := isPodObject(obj) || len(r.Snapshot.Children(obj)) > 0
+			files = append(files, kubeObjectEntry(obj, dir))
 		}
 		info += "\n" + r.Folder
 		if r.Parent != nil {
@@ -368,7 +439,11 @@ func (p *Panel) loadKube(abs string) error {
 			if c.Kind != "" {
 				name += " (" + c.Kind + ")"
 			}
-			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, modTime: c.Started, column: c.State, object: r.Object}})
+			kind := "Container"
+			if c.Kind != "" {
+				kind = strings.ToUpper(c.Kind[:1]) + c.Kind[1:] + " container"
+			}
+			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, kind: kind, modTime: c.Started, column: c.State, object: r.Object}})
 		}
 		info += "\nPod " + r.Object.Name + " · " + summary.Phase + " · containers"
 	case kubeContainerFS:
@@ -556,12 +631,12 @@ func (kubeBackend) Enter(a *App, p *Panel) bool {
 	if len(p.Entries) == 0 {
 		return true
 	}
-	if e := p.Entries[p.Cursor]; p.kubeLevel().Level == kubeContainerFS && !e.Dir {
-		if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
+	if e := p.Entries[p.Cursor]; !e.Dir {
+		if p.kubeLevel().Level == kubeContainerFS && e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
 			a.enterRemoteLink()
-		} else {
-			a.openSourceDocument(kubeBackend{}.DocumentSource(p, p.Current()), false, a.showDocument, nil)
+			return true
 		}
+		kubeBackend{}.Open(a, p, false)
 		return true
 	}
 	a.error(p.Load(p.Current()))
