@@ -849,6 +849,9 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && a.selectionKey(m) {
 		return
 	}
+	if p := &a.Panels[a.Active]; a.Menu == nil && p.kind() != backendLocal && p.backend().Key(a, p, m) {
+		return
+	}
 	if a.Menu == nil && a.panelBookmarkKey(m) {
 		return
 	}

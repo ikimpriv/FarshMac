@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"farshmac/internal/kube/kubetest"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,48 +23,9 @@ var (
 	gvrPods   = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 )
 
-// seedShop fills the "shop" namespace with a Deployment -> ReplicaSets ->
-// Pods chain (old and new ReplicaSet), a StatefulSet with ControllerRevisions,
-// a CronJob -> Job -> Pod chain, Services with and without selectors, a Pod
-// with two owners, a CRD object, and a forbidden Secret collection.
-func seedShop(f *fakeAPI) {
-	p := func(resource string) string { return "/api/v1/namespaces/" + ns + "/" + resource }
-	apps := func(resource string) string { return "/apis/apps/v1/namespaces/" + ns + "/" + resource }
-	batch := func(resource string) string { return "/apis/batch/v1/namespaces/" + ns + "/" + resource }
-	dep := obj("Deployment", ns, "app", "dep-app", nil, nil, map[string]string{"READY": "2/3", "UP-TO-DATE": "3"})
-	dep["spec"] = map[string]any{"replicas": 3, "selector": map[string]any{"matchLabels": map[string]any{"app": "shop"}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "shop"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "app", "image": "shop:1"}}}}}
-	f.add(apps("deployments"), dep)
-	f.add(apps("replicasets"), obj("ReplicaSet", ns, "app-new", "rs-new", []string{"dep-app"}, nil, map[string]string{"READY": "2"}),
-		obj("ReplicaSet", ns, "app-old", "rs-old", []string{"dep-app"}, nil, map[string]string{"READY": "0"}))
-	f.add(apps("statefulsets"), obj("StatefulSet", ns, "db", "sts-db", nil, nil, map[string]string{"READY": "1/1"}))
-	f.add(apps("controllerrevisions"), obj("ControllerRevision", ns, "db-1", "cr-1", []string{"sts-db"}, nil, nil))
-	f.add(batch("cronjobs"), obj("CronJob", ns, "backup", "cj-backup", nil, nil, map[string]string{"SCHEDULE": "0 * * * *"}))
-	f.add(batch("jobs"), obj("Job", ns, "backup-1", "job-1", []string{"cj-backup"}, nil, map[string]string{"STATUS": "Complete"}))
-	f.add(p("pods"),
-		obj("Pod", ns, "app-new-x", "pod-new-x", []string{"rs-new"}, map[string]string{"app": "shop"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
-		obj("Pod", ns, "app-old-y", "pod-old-y", []string{"rs-old"}, map[string]string{"app": "shop"}, map[string]string{"STATUS": "Terminating", "READY": "0/1"}),
-		obj("Pod", ns, "db-0", "pod-db-0", []string{"sts-db"}, map[string]string{"app": "db"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
-		obj("Pod", ns, "backup-1-z", "pod-backup", []string{"job-1"}, nil, map[string]string{"STATUS": "Succeeded", "READY": "0/1"}),
-		obj("Pod", ns, "shared", "pod-shared", []string{"dep-app", "sts-db"}, map[string]string{"app": "shared"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
-		obj("Pod", ns, "loner", "pod-loner", nil, map[string]string{"app": "loner"}, map[string]string{"STATUS": "Pending", "READY": "0/1"}),
-	)
-	svc := obj("Service", ns, "web", "svc-web", nil, nil, map[string]string{"TYPE": "ClusterIP"})
-	svc["spec"] = map[string]any{"selector": map[string]any{"app": "shop"}}
-	empty := obj("Service", ns, "headless", "svc-headless", nil, nil, map[string]string{"TYPE": "ClusterIP"})
-	empty["spec"] = map[string]any{}
-	f.add(p("services"), svc, empty)
-	f.add(p("configmaps"), obj("ConfigMap", ns, "settings", "cm-settings", nil, nil, map[string]string{"DATA": "3"}))
-	f.add(p("events"))
-	f.add("/apis/example.com/v1/namespaces/"+ns+"/widgets", obj("Widget", ns, "w1", "widget-1", []string{"dep-app"}, nil, map[string]string{"PHASE": "Ready"}))
-	f.add("/apis/other.io/v1/namespaces/" + ns + "/deployments")
-	f.add(p("secrets"))
-	f.forbidden[p("secrets")] = true
-	f.add(apps("daemonsets"))
-}
-
-func testClient(t *testing.T, f *fakeAPI) *Client {
+func testClient(t *testing.T, f *kubetest.FakeAPI) *Client {
 	t.Helper()
-	c, err := NewFromConfig(context.Background(), &rest.Config{Host: f.server.URL}, Profile{Context: "fake"})
+	c, err := NewFromConfig(context.Background(), &rest.Config{Host: f.URL()}, Profile{Context: "fake"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +42,7 @@ func names(objects []*Object) []string {
 }
 
 func TestConnectAndDiscovery(t *testing.T) {
-	f := newFakeAPI(t)
+	f := kubetest.New(t)
 	c := testClient(t, f)
 	if c.ServerVersion() != "v1.30.0-fake" || c.Profile.Label() != "k8s:fake" {
 		t.Fatal(c.ServerVersion(), c.Profile.Label())
@@ -158,8 +121,8 @@ func TestEnsureLoginPathAddsExtra(t *testing.T) {
 }
 
 func TestNamespacesAndSnapshot(t *testing.T) {
-	f := newFakeAPI(t)
-	seedShop(f)
+	f := kubetest.New(t)
+	kubetest.SeedShop(f)
 	c := testClient(t, f)
 	ctx := context.Background()
 	namespaces, err := c.Namespaces(ctx)
@@ -213,8 +176,8 @@ func TestNamespacesAndSnapshot(t *testing.T) {
 }
 
 func TestTreeRules(t *testing.T) {
-	f := newFakeAPI(t)
-	seedShop(f)
+	f := kubetest.New(t)
+	kubetest.SeedShop(f)
 	c := testClient(t, f)
 	s, err := c.LoadSnapshot(context.Background(), ns, nil)
 	if err != nil {
@@ -266,8 +229,8 @@ func TestTreeRules(t *testing.T) {
 }
 
 func TestManifests(t *testing.T) {
-	f := newFakeAPI(t)
-	seedShop(f)
+	f := kubetest.New(t)
+	kubetest.SeedShop(f)
 	c := testClient(t, f)
 	ctx := context.Background()
 	ref := Ref{GVR: gvrDeploy, Namespace: ns, Name: "app"}
@@ -309,16 +272,16 @@ func TestManifests(t *testing.T) {
 		t.Fatal("stale update", err)
 	}
 	updated, err := c.Update(ctx, obj)
-	if err != nil || updated.GetResourceVersion() != "2" || len(f.puts) != 1 {
-		t.Fatal(err, f.puts)
+	if err != nil || updated.GetResourceVersion() != "2" || len(f.Puts()) != 1 {
+		t.Fatal(err, f.Puts())
 	}
 	// Apply is a server-side apply patch with our field manager into the target namespace.
 	applied, err := c.Apply(ctx, docs[0], ns)
-	if err != nil || applied.GetName() != "a" || len(f.patches) != 1 || !strings.Contains(f.patches[0], "application/apply-patch+yaml") || !strings.Contains(f.patches[0], "fieldManager=farshmac") {
-		t.Fatal(err, f.patches)
+	if err != nil || applied.GetName() != "a" || len(f.Patches()) != 1 || !strings.Contains(f.Patches()[0], "application/apply-patch+yaml") || !strings.Contains(f.Patches()[0], "fieldManager=farshmac") {
+		t.Fatal(err, f.Patches())
 	}
-	if !strings.HasPrefix(f.patches[0], "/api/v1/namespaces/shop/configmaps/a") {
-		t.Fatal(f.patches[0])
+	if !strings.HasPrefix(f.Patches()[0], "/api/v1/namespaces/shop/configmaps/a") {
+		t.Fatal(f.Patches()[0])
 	}
 	unknown := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "nope/v1", "kind": "Nope", "metadata": map[string]any{"name": "x"}}}
 	if _, err := c.Apply(ctx, unknown, ns); err == nil {
@@ -331,21 +294,21 @@ func TestManifests(t *testing.T) {
 	if err := c.Delete(ctx, Ref{GVR: gvrPods, Namespace: ns, Name: "loner"}, true); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(f.deletes, " ") != "/apis/apps/v1/namespaces/shop/deployments/app?Background /api/v1/namespaces/shop/pods/loner?Orphan" {
-		t.Fatal(f.deletes)
+	if strings.Join(f.Deletes(), " ") != "/apis/apps/v1/namespaces/shop/deployments/app?Background /api/v1/namespaces/shop/pods/loner?Orphan" {
+		t.Fatal(f.Deletes())
 	}
 	if err := c.CreateNamespace(ctx, "created"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DeleteNamespace(ctx, "default"); err != nil || !strings.HasSuffix(f.deletes[len(f.deletes)-1], "/api/v1/namespaces/default?") {
-		t.Fatal(err, f.deletes)
+	if err := c.DeleteNamespace(ctx, "default"); err != nil || !strings.HasSuffix(f.Deletes()[len(f.Deletes())-1], "/api/v1/namespaces/default?") {
+		t.Fatal(err, f.Deletes())
 	}
 }
 
 func TestLogsAndDescribe(t *testing.T) {
-	f := newFakeAPI(t)
-	seedShop(f)
-	f.logs = "line one\nline two\n"
+	f := kubetest.New(t)
+	kubetest.SeedShop(f)
+	f.SetLogs("line one\nline two\n")
 	c := testClient(t, f)
 	ctx := context.Background()
 	r, err := c.Logs(ctx, ns, "app-new-x", LogOptions{Container: "app", TailLines: 10})
@@ -354,7 +317,7 @@ func TestLogsAndDescribe(t *testing.T) {
 	}
 	data, _ := io.ReadAll(r)
 	r.Close()
-	if string(data) != f.logs {
+	if string(data) != f.Logs() {
 		t.Fatal(string(data))
 	}
 	text, err := c.Describe(ctx, Ref{GVR: gvrDeploy, Namespace: ns, Name: "app"})
@@ -414,5 +377,17 @@ func TestTableDecodeFallsBackToPlainList(t *testing.T) {
 	}
 	if resourcePath(gvrDeploy, ns) != "/apis/apps/v1/namespaces/shop/deployments" || resourcePath(gvrPods, "") != "/api/v1/pods" {
 		t.Fatal(resourcePath(gvrDeploy, ns))
+	}
+}
+
+func TestConnectThroughKubeconfig(t *testing.T) {
+	f := kubetest.New(t)
+	c, err := Connect(context.Background(), Profile{Kubeconfig: f.Kubeconfig(t), Context: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.ServerVersion() == "" {
+		t.Fatal("no server version")
 	}
 }

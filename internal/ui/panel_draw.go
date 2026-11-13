@@ -184,8 +184,12 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				continue
 			}
 			size, date := "<DIR>", ""
-			if e.Info != nil {
+			if e.Info != nil && !e.Info.ModTime().IsZero() {
 				date = e.Info.ModTime().Format("02.01.06 15:04")
+			}
+			if k, ok := e.Info.(*kubeEntry); ok {
+				size = k.column
+			} else if e.Info != nil {
 				if !e.Dir {
 					size = panelSize(e.Info.Size(), a.Settings.HumanReadableSizes)
 				}

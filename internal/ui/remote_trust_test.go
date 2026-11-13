@@ -218,10 +218,10 @@ func TestDeleteConnectionProfile(t *testing.T) {
 		}
 	}
 	a.networkMenu()
-	if len(a.Form.Choice) != 4 {
+	if len(a.Form.Choice) != 5 {
 		t.Fatal("profiles with different folders do not coexist", a.Form.Choice)
 	}
-	a.Form.Focus = 1
+	a.Form.Focus = 2
 	a.key(Message{Key: "F8"})
 	if a.Form == nil || a.Form.Title != "Delete connection profile" || !strings.Contains(a.Form.Message, "/one") {
 		t.Fatal("no delete confirmation")

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"farshmac/internal/fsops"
+	"farshmac/internal/kube"
 	"farshmac/internal/remotefs"
 	"golang.org/x/crypto/ssh"
 )
@@ -123,30 +124,59 @@ func (p *Panel) loadRemote(path string) error {
 
 func (a *App) networkMenu() {
 	a.loadConnectionProfiles()
-	choices := []string{"New FTP / SFTP connection…"}
+	a.loadKubeProfiles()
+	choices := []string{"New FTP / SFTP connection…", "New Kubernetes cluster…"}
 	profiles := append([]remotefs.Config(nil), a.Settings.RemoteConnections...)
 	for _, c := range profiles {
 		choices = append(choices, c.Label()+c.Directory)
 	}
+	clusters := append([]kube.Profile(nil), a.Settings.KubeProfiles...)
+	for _, c := range clusters {
+		label := c.Label()
+		if c.Name != "" {
+			label = c.Name + " (" + label + ")"
+		}
+		choices = append(choices, label+"  "+c.Kubeconfig)
+	}
 	choices = append(choices, "Disconnect active panel")
+	first := 2
 	a.choose("Network connections", choices, func(i int) {
-		if i == len(choices)-1 {
+		switch {
+		case i == len(choices)-1:
 			a.disconnectRemote(a.Active)
-			return
+		case i == 0:
+			a.connectionDialog(remotefs.Config{Protocol: "sftp", Port: 22, Directory: "/", User: os.Getenv("USER")})
+		case i == 1:
+			a.kubeConnectionForm(a.Active, kube.Profile{})
+		case i < first+len(profiles):
+			a.connectionDialog(profiles[i-first])
+		default:
+			a.connectKube(a.Active, clusters[i-first-len(profiles)])
 		}
-		c := remotefs.Config{Protocol: "sftp", Port: 22, Directory: "/", User: os.Getenv("USER")}
-		if i > 0 {
-			c = profiles[i-1]
-		}
-		a.connectionDialog(c)
 	})
 	menu := a.Form
 	menu.OnKey = func(m Message) bool {
 		i := menu.choiceIndex(menu.Focus)
-		if m.Key != "F8" && m.Key != "Delete" || i < 1 || i > len(profiles) {
+		if m.Key != "F8" && m.Key != "Delete" || i < first || i >= first+len(profiles)+len(clusters) {
 			return false
 		}
-		profile := profiles[i-1]
+		if i >= first+len(profiles) {
+			cluster := clusters[i-first-len(profiles)]
+			a.confirm("Delete cluster profile", "Remove "+cluster.Label()+" ("+cluster.Kubeconfig+") from kubernetes.json?", []string{"Delete", "Cancel"}, func(i int) {
+				if i != 0 {
+					a.networkMenu()
+					return
+				}
+				if err := a.deleteKubeProfile(cluster); err != nil {
+					a.Status = "Profile not deleted: " + err.Error()
+					return
+				}
+				a.networkMenu()
+				a.Status = "Deleted " + cluster.Label()
+			})
+			return true
+		}
+		profile := profiles[i-first]
 		a.confirm("Delete connection profile", "Remove "+profile.Label()+profile.Directory+" from connections.json?", []string{"Delete", "Cancel"}, func(i int) {
 			if i != 0 {
 				a.networkMenu()
@@ -162,6 +192,7 @@ func (a *App) networkMenu() {
 		return true
 	}
 }
+
 func (a *App) connectionDialog(c remotefs.Config) {
 	a.connectionForm(a.Active, c, 0)
 }
@@ -361,16 +392,22 @@ func hostKeyWarning(e *remotefs.HostKeyChanged) string {
 }
 func (a *App) disconnectRemote(index int) {
 	p := &a.Panels[index]
-	if p.Remote == nil {
+	if p.Remote == nil && p.Kube == nil {
 		return
 	}
 	p.cancelPanelLoad()
 	p.cancelTree()
-	profileErr := a.syncRemoteProfiles()
+	var profileErr error
+	if p.Remote != nil {
+		profileErr = a.syncRemoteProfiles()
+	}
 	home, _ := os.UserHomeDir()
 	local := accessibleFolder(p.RemoteLocalPath, home)
 	previous := *p
-	p.Remote = nil
+	if p.Kube != nil {
+		p.Kube.close()
+	}
+	p.Remote, p.Kube = nil, nil
 	p.RemoteLocalPath = ""
 	p.states = nil
 	if err := p.loadSource(local, previous, "Cannot disconnect: "); err != nil {

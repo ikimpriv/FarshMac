@@ -224,10 +224,10 @@ func TestConnectionProfilesPersistWithoutSaveSetup(t *testing.T) {
 		t.Fatal("secrets stored", err)
 	}
 	b.networkMenu()
-	if len(b.Form.Choice) != 3 {
+	if len(b.Form.Choice) != 4 {
 		t.Fatal("saved connection missing from menu")
 	}
-	b.Form.Select(1)
+	b.Form.Select(2)
 	if b.Form.Title != "FTP / SFTP connection" || b.Form.Fields[1].Value != "demo" {
 		t.Fatal("profile not selected")
 	}

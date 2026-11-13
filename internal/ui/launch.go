@@ -119,7 +119,7 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 		return
 	}
 	p0 := &a.Panels[a.Active]
-	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir {
+	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir && p0.can(capFolderSize) {
 		a.folderSize()
 		return
 	}

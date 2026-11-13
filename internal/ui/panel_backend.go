@@ -109,6 +109,12 @@ type panelBackend interface {
 	Mkdir(a *App, p *Panel) bool
 	Delete(a *App, p *Panel, permanent bool) bool
 	Move(a *App, p *Panel) bool
+	// Copy handles F5 with this panel as the source; false leaves it to the
+	// transfer dialog.
+	Copy(a *App, p *Panel) bool
+	// Key handles source-specific keys (Shift+F3 logs, Ctrl+R refresh…);
+	// false leaves the key to the common handlers.
+	Key(a *App, p *Panel, m Message) bool
 	// MenuSection is an extra F9 menu for this source, or nil.
 	MenuSection(a *App, p *Panel) *menuSection
 }
@@ -308,3 +314,10 @@ func (remoteBackend) Move(a *App, _ *Panel) bool {
 func (remoteBackend) MenuSection(*App, *Panel) *menuSection { return nil }
 
 func itoa64(n uint64) string { return strconv.FormatUint(n, 10) }
+
+func (localBackend) Copy(*App, *Panel) bool           { return false }
+func (localBackend) Key(*App, *Panel, Message) bool   { return false }
+func (archiveBackend) Copy(*App, *Panel) bool         { return false }
+func (archiveBackend) Key(*App, *Panel, Message) bool { return false }
+func (remoteBackend) Copy(*App, *Panel) bool          { return false }
+func (remoteBackend) Key(*App, *Panel, Message) bool  { return false }

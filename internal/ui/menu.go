@@ -38,7 +38,7 @@ func (a *App) menuSections() []menuSection {
 		}...)
 	}
 	settings := func(kind string) func() { return func() { a.settingsMenu(kind) } }
-	return []menuSection{
+	sections := []menuSection{
 		{"Left", 2, panel(0)},
 		{"Files", 11, []menuItem{
 			{"Open with macOS", "⇧Enter", a.openSystemSelected},
@@ -88,6 +88,12 @@ func (a *App) menuSections() []menuSection {
 		}},
 		{"Right", 46, panel(1)},
 	}
+	if extra := a.Panels[a.Active].backend().MenuSection(a, &a.Panels[a.Active]); extra != nil {
+		extra.X = 46
+		sections = append(sections[:4], *extra, sections[4])
+		sections[5].X = 46 + len([]rune(extra.Name)) + 2
+	}
+	return sections
 }
 
 func (a *App) menuKey(m Message) {

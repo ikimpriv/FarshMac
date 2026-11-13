@@ -20,6 +20,9 @@ func (a *App) transferDialog(move bool) {
 	if move && p.backend().Move(a, p) {
 		return
 	}
+	if !move && p.backend().Copy(a, p) {
+		return
+	}
 	if move && other.kind() != backendLocal {
 		if other.kind() == backendRemote {
 			a.remoteMoveDialog()

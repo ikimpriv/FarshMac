@@ -220,6 +220,9 @@ func (a *App) togglePanel(index int) {
 func (a *App) rereadPanel(index int) {
 	p := &a.Panels[index]
 	a.infoKeys = [2]string{}
+	if p.Kube != nil {
+		p.Kube.invalidate("")
+	}
 	if p.Archive != nil {
 		a.openArchive(index, p.Archive.Path)
 	} else {

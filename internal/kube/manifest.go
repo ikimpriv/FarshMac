@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -125,15 +124,19 @@ func (c *Client) Delete(ctx context.Context, ref Ref, orphan bool) error {
 	return c.dyn.Resource(ref.GVR).Namespace(ref.Namespace).Delete(ctx, ref.Name, metav1.DeleteOptions{PropagationPolicy: &policy})
 }
 
-// CreateNamespace creates an empty namespace.
+var namespacesGVR = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+
+// CreateNamespace creates an empty namespace. The dynamic client speaks JSON,
+// which every server and proxy accepts (the typed client prefers protobuf).
 func (c *Client) CreateNamespace(ctx context.Context, name string) error {
-	_, err := c.core.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{FieldManager: "farshmac"})
+	ns := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": name}}}
+	_, err := c.dyn.Resource(namespacesGVR).Create(ctx, ns, metav1.CreateOptions{FieldManager: "farshmac"})
 	return err
 }
 
 // DeleteNamespace deletes a namespace and everything in it.
 func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
-	return c.core.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	return c.dyn.Resource(namespacesGVR).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 // Mapping resolves the REST mapping of a resource, for describers.

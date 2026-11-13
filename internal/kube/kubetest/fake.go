@@ -1,20 +1,25 @@
-package kube
+// Package kubetest is a hand-written fake Kubernetes API server for tests of
+// package kube and of the panel: discovery, LIST (Table or plain),
+// GET/PUT/PATCH/DELETE, namespaces and logs. It imports nothing from kube.
+package kubetest
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 )
 
-// fakeAPI is a hand-written API server: discovery, LIST (Table or plain),
-// GET/PUT/PATCH/DELETE, namespaces and logs. Objects are stored by
-// collection path; a "_columns" map on an object renders as Table columns.
-type fakeAPI struct {
+// FakeAPI serves a small cluster. Objects are stored by collection path; a
+// "_columns" map on an object renders as Table columns.
+type FakeAPI struct {
 	mu        sync.Mutex
 	server    *httptest.Server
 	objects   map[string][]map[string]any // "/apis/apps/v1/namespaces/ns/deployments" -> items
@@ -25,17 +30,20 @@ type fakeAPI struct {
 	logs      string
 }
 
-func newFakeAPI(t *testing.T) *fakeAPI {
+// New starts a server with the "default" and "shop" namespaces.
+func New(t testing.TB) *FakeAPI {
 	t.Helper()
-	f := &fakeAPI{objects: map[string][]map[string]any{}, forbidden: map[string]bool{}}
+	f := &FakeAPI{objects: map[string][]map[string]any{}, forbidden: map[string]bool{}}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
-	f.add("/api/v1/namespaces", obj("Namespace", "", "default", "ns-default", nil, nil, map[string]string{"STATUS": "Active"}))
-	f.add("/api/v1/namespaces", obj("Namespace", "", "shop", "ns-shop", nil, nil, map[string]string{"STATUS": "Active"}))
+	f.Add("/api/v1/namespaces", Obj("Namespace", "", "default", "ns-default", nil, nil, map[string]string{"STATUS": "Active"}))
+	f.Add("/api/v1/namespaces", Obj("Namespace", "", "shop", "ns-shop", nil, nil, map[string]string{"STATUS": "Active"}))
 	return f
 }
 
-func (f *fakeAPI) add(collection string, items ...map[string]any) {
+// Add stores items under a collection path such as
+// "/apis/apps/v1/namespaces/ns/deployments".
+func (f *FakeAPI) Add(collection string, items ...map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// apiVersion follows the collection: /apis/apps/v1/... -> apps/v1.
@@ -50,8 +58,8 @@ func (f *fakeAPI) add(collection string, items ...map[string]any) {
 	f.objects[collection] = append(f.objects[collection], items...)
 }
 
-// obj builds an object; owners are UIDs, columns render in Table form.
-func obj(kind, ns, name, uid string, owners []string, labels map[string]string, columns map[string]string) map[string]any {
+// Obj builds an object; owners are UIDs, columns render in Table form.
+func Obj(kind, ns, name, uid string, owners []string, labels map[string]string, columns map[string]string) map[string]any {
 	meta := map[string]any{"name": name, "uid": uid, "resourceVersion": "1", "creationTimestamp": "2024-01-02T03:04:05Z"}
 	if ns != "" {
 		meta["namespace"] = ns
@@ -125,7 +133,7 @@ var discoveryRoutes = map[string]any{
 	"/apis/other.io/v1":            resources("other.io/v1", res("deployments", "deployment", "Deployment", true)),
 }
 
-func (f *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
+func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if v, ok := discoveryRoutes[path]; ok && r.Method == http.MethodGet {
 		writeJSON(w, v)
@@ -167,7 +175,18 @@ func (f *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodPost && path == "/api/v1/namespaces" {
-			f.objects[path] = append(f.objects[path], obj("Namespace", "", "created", "ns-created", nil, nil, nil))
+			// The created namespace takes the name from the request body.
+			name := "created"
+			var body map[string]any
+			raw, _ := io.ReadAll(r.Body)
+			if json.Unmarshal(raw, &body) == nil {
+				if meta, ok := body["metadata"].(map[string]any); ok {
+					if n, ok := meta["name"].(string); ok && n != "" {
+						name = n
+					}
+				}
+			}
+			f.objects[path] = append(f.objects[path], Obj("Namespace", "", name, "ns-"+name, nil, nil, map[string]string{"STATUS": "Active"}))
 			writeJSON(w, stripColumns(f.objects[path][len(f.objects[path])-1]))
 			return
 		}
@@ -278,4 +297,94 @@ func table(items []map[string]any, includeObject string) map[string]any {
 		rows = append(rows, row)
 	}
 	return map[string]any{"kind": "Table", "apiVersion": "meta.k8s.io/v1", "columnDefinitions": defs, "rows": rows}
+}
+
+// URL is the server address.
+func (f *FakeAPI) URL() string { return f.server.URL }
+
+// Deletes lists DELETE requests as "path?propagationPolicy".
+func (f *FakeAPI) Deletes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.deletes...)
+}
+
+// Puts lists PUT request paths.
+func (f *FakeAPI) Puts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.puts...)
+}
+
+// Patches lists PATCH requests as "path?contentType&fieldManager=...".
+func (f *FakeAPI) Patches() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.patches...)
+}
+
+// SetLogs sets the text every pod log request returns.
+func (f *FakeAPI) SetLogs(text string) { f.mu.Lock(); defer f.mu.Unlock(); f.logs = text }
+
+// Logs returns the text pod log requests return.
+func (f *FakeAPI) Logs() string { f.mu.Lock(); defer f.mu.Unlock(); return f.logs }
+
+// Forbid makes a collection path answer 403.
+func (f *FakeAPI) Forbid(collection string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forbidden[collection] = true
+}
+
+// Kubeconfig writes a kubeconfig for this server into t.TempDir(): one
+// cluster, a user without credentials, and a current context named "fake".
+func (f *FakeAPI) Kubeconfig(t testing.TB) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	text := "apiVersion: v1\nkind: Config\ncurrent-context: fake\nclusters:\n- name: fake\n  cluster:\n    server: " + f.server.URL + "\ncontexts:\n- name: fake\n  context:\n    cluster: fake\n    user: fake\nusers:\n- name: fake\n  user: {}\n"
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const shopNS = "shop"
+
+// SeedShop fills the "shop" namespace with a Deployment -> ReplicaSets ->
+// Pods chain (old and new ReplicaSet), a StatefulSet with ControllerRevisions,
+// a CronJob -> Job -> Pod chain, Services with and without selectors, a Pod
+// with two owners, a CRD object, and a forbidden Secret collection.
+func SeedShop(f *FakeAPI) {
+	p := func(resource string) string { return "/api/v1/namespaces/" + shopNS + "/" + resource }
+	apps := func(resource string) string { return "/apis/apps/v1/namespaces/" + shopNS + "/" + resource }
+	batch := func(resource string) string { return "/apis/batch/v1/namespaces/" + shopNS + "/" + resource }
+	dep := Obj("Deployment", shopNS, "app", "dep-app", nil, nil, map[string]string{"READY": "2/3", "UP-TO-DATE": "3"})
+	dep["spec"] = map[string]any{"replicas": 3, "selector": map[string]any{"matchLabels": map[string]any{"app": "shop"}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "shop"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "app", "image": "shop:1"}}}}}
+	f.Add(apps("deployments"), dep)
+	f.Add(apps("replicasets"), Obj("ReplicaSet", shopNS, "app-new", "rs-new", []string{"dep-app"}, nil, map[string]string{"READY": "2"}),
+		Obj("ReplicaSet", shopNS, "app-old", "rs-old", []string{"dep-app"}, nil, map[string]string{"READY": "0"}))
+	f.Add(apps("statefulsets"), Obj("StatefulSet", shopNS, "db", "sts-db", nil, nil, map[string]string{"READY": "1/1"}))
+	f.Add(apps("controllerrevisions"), Obj("ControllerRevision", shopNS, "db-1", "cr-1", []string{"sts-db"}, nil, nil))
+	f.Add(batch("cronjobs"), Obj("CronJob", shopNS, "backup", "cj-backup", nil, nil, map[string]string{"SCHEDULE": "0 * * * *"}))
+	f.Add(batch("jobs"), Obj("Job", shopNS, "backup-1", "job-1", []string{"cj-backup"}, nil, map[string]string{"STATUS": "Complete"}))
+	f.Add(p("pods"),
+		Obj("Pod", shopNS, "app-new-x", "pod-new-x", []string{"rs-new"}, map[string]string{"app": "shop"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
+		Obj("Pod", shopNS, "app-old-y", "pod-old-y", []string{"rs-old"}, map[string]string{"app": "shop"}, map[string]string{"STATUS": "Terminating", "READY": "0/1"}),
+		Obj("Pod", shopNS, "db-0", "pod-db-0", []string{"sts-db"}, map[string]string{"app": "db"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
+		Obj("Pod", shopNS, "backup-1-z", "pod-backup", []string{"job-1"}, nil, map[string]string{"STATUS": "Succeeded", "READY": "0/1"}),
+		Obj("Pod", shopNS, "shared", "pod-shared", []string{"dep-app", "sts-db"}, map[string]string{"app": "shared"}, map[string]string{"STATUS": "Running", "READY": "1/1"}),
+		Obj("Pod", shopNS, "loner", "pod-loner", nil, map[string]string{"app": "loner"}, map[string]string{"STATUS": "Pending", "READY": "0/1"}),
+	)
+	svc := Obj("Service", shopNS, "web", "svc-web", nil, nil, map[string]string{"TYPE": "ClusterIP"})
+	svc["spec"] = map[string]any{"selector": map[string]any{"app": "shop"}}
+	empty := Obj("Service", shopNS, "headless", "svc-headless", nil, nil, map[string]string{"TYPE": "ClusterIP"})
+	empty["spec"] = map[string]any{}
+	f.Add(p("services"), svc, empty)
+	f.Add(p("configmaps"), Obj("ConfigMap", shopNS, "settings", "cm-settings", nil, nil, map[string]string{"DATA": "3"}))
+	f.Add(p("events"))
+	f.Add("/apis/example.com/v1/namespaces/"+shopNS+"/widgets", Obj("Widget", shopNS, "w1", "widget-1", []string{"dep-app"}, nil, map[string]string{"PHASE": "Ready"}))
+	f.Add("/apis/other.io/v1/namespaces/" + shopNS + "/deployments")
+	f.Add(p("secrets"))
+	f.forbidden[p("secrets")] = true
+	f.Add(apps("daemonsets"))
 }
