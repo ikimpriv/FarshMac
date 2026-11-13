@@ -62,13 +62,7 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 		return
 	}
 	g.Box(x, y, w, h, LightCyan, Blue)
-	label := p.Path
-	if p.Remote != nil {
-		label = p.Remote.Label() + p.Path
-	}
-	if p.Archive != nil {
-		label = "[Archive] " + label
-	}
+	label := p.label() + p.Path
 	if p.View == "Info panel" {
 		label = "Information"
 	}

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {context,sent,terminals,elements,flushTimers,docListeners,docListenerOptions}=require('./harness.cjs')();
+const {context,sent,terminals,elements,flushTimers,docListeners,docListenerOptions,listeners}=require('./harness.cjs')();
 const term=terminals[1],panels=elements.get('panels');
 const event=extra=>({clientX:25,clientY:70,button:0,buttons:1,pointerId:1,detail:1,preventDefault(){this.prevented=true},stopImmediatePropagation(){},...extra});
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
@@ -22,6 +22,17 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  const optionDigit=event({key:'£',code:'Digit3',metaKey:true,altKey:true});
  docListeners.keydown(optionDigit);assert.equal(optionDigit.prevented,true);
  assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Code,'Digit3');assert.equal(sent.at(-1).Meta,true);assert.equal(sent.at(-1).Alt,true);
+ // Held modifiers are reported once per change; keyup and blur release them.
+ sent.length=0;
+ docListeners.keydown(event({key:'Shift',shiftKey:true}));
+ assert.equal(sent[0].Type,'modifiers');assert.equal(sent[0].Shift,true);assert.equal(sent[0].Ctrl,false);
+ docListeners.keydown(event({key:'Shift',shiftKey:true}));
+ assert.equal(sent.filter(m=>m.Type==='modifiers').length,1,'repeat must not duplicate');
+ docListeners.keyup(event({key:'Shift'}));
+ assert.equal(sent.at(-1).Type,'modifiers');assert.equal(sent.at(-1).Shift,false);
+ docListeners.keydown(event({key:'Alt',altKey:true}));assert.equal(sent.at(-1).Alt,true);
+ listeners.blur();assert.equal(sent.at(-1).Type,'modifiers');assert.equal(sent.at(-1).Alt,false);assert.equal(sent.at(-1).Meta,false);
+ sent.length=0;
  panels.events.pointerdown(event({button:2,buttons:2}));assert.equal(sent.at(-1).Button,2);
  panels.events.pointermove(event({button:2,buttons:2,clientY:90}));panels.events.pointermove(event({button:2,buttons:2,clientY:100}));
  assert.equal(sent.filter(m=>m.Type==='drag').length,0);flushTimers();assert.equal(sent.filter(m=>m.Type==='drag').length,1);

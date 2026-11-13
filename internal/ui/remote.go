@@ -432,7 +432,7 @@ func (a *App) remoteDelete() {
 			if err != nil {
 				return err
 			}
-			f = remotefs.NewSession(remotefs.Endpoint{Remote: &config}, o.Context(), o, f)
+			f = remotefs.NewSession(remotefs.RemoteEndpoint(&config), o.Context(), o, f)
 			defer f.Close()
 			for _, p := range paths {
 				if err = remotefs.RemoveTree(f, p, o); err != nil {
@@ -453,7 +453,7 @@ func (a *App) remoteUnsupported() bool {
 
 func (a *App) remoteMoveDialog() {
 	source, target := a.Panels[a.Active], a.Panels[1-a.Active]
-	if source.Remote == nil || target.Remote == nil || !(remotefs.Endpoint{Remote: source.Remote}).Same(remotefs.Endpoint{Remote: target.Remote}) {
+	if source.Remote == nil || target.Remote == nil || !(remotefs.RemoteEndpoint(source.Remote)).Same(remotefs.RemoteEndpoint(target.Remote)) {
 		a.Status = "Remote move is available within the same server. Between servers use F5 Copy, then Delete."
 		return
 	}
@@ -481,7 +481,7 @@ func (a *App) remoteMoveDialog() {
 			if err != nil {
 				return err
 			}
-			f = remotefs.NewSession(remotefs.Endpoint{Remote: &config}, o.Context(), o, f)
+			f = remotefs.NewSession(remotefs.RemoteEndpoint(&config), o.Context(), o, f)
 			defer f.Close()
 			info, err := f.Lstat(dst)
 			if err != nil && !os.IsNotExist(err) {
@@ -512,7 +512,7 @@ func (a *App) remoteMoveDialog() {
 				if transferIntoDirectory(value, dst, dest, len(paths), isDir) {
 					to = filepath.Join(dst, filepath.Base(src))
 				}
-				if err = remotefs.Move(f, remotefs.Endpoint{Remote: &config}, src, to, o); err != nil {
+				if err = remotefs.Move(f, remotefs.RemoteEndpoint(&config), src, to, o); err != nil {
 					return err
 				}
 			}

@@ -47,7 +47,7 @@ type Session struct {
 
 // NewSession wraps an already dialed remote FS. Local endpoints need no session.
 func NewSession(endpoint Endpoint, ctx context.Context, o *fsops.Operation, f FS) FS {
-	if endpoint.Remote == nil {
+	if endpoint.Opener == nil {
 		return f
 	}
 	return &Session{endpoint: endpoint, ctx: ctx, o: o, fs: f}
@@ -74,7 +74,7 @@ func (s *Session) current() (FS, error) {
 	if err := s.ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.o.Begin("Reconnecting to "+s.endpoint.Remote.Label(), 0)
+	s.o.Begin("Reconnecting to "+s.endpoint.Opener.Identity(), 0)
 	f, err := s.endpoint.Open(s.ctx)
 	if err != nil {
 		if s.ctx.Err() != nil {

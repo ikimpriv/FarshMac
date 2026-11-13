@@ -15,12 +15,12 @@ type panelViewReturn struct {
 
 func (a *App) toggleOtherView(view string) {
 	p := &a.Panels[1-a.Active]
-	if p.Remote != nil && view != "Quick view" {
-		a.Status = "This panel view requires a local folder"
+	if view == "Tree panel" && !p.can(capTree) && p.kind() == backendArchive {
+		a.Status = "Tree view is unavailable inside archives"
 		return
 	}
-	if p.Archive != nil && view == "Tree panel" {
-		a.Status = "Tree view is unavailable inside archives"
+	if view == "Tree panel" && !p.can(capTree) || view == "Info panel" && !p.can(capInfo) {
+		a.Status = "This panel view requires a local folder"
 		return
 	}
 	if p.load != nil || p.tree != nil {
@@ -186,7 +186,7 @@ func (a *App) farPanelKey(m Message) bool {
 	if !m.Shift {
 		sorts := map[string]string{"F3": "Name", "F4": "Extension", "F5": "Modified", "F6": "Size", "F7": "Unsorted", "F8": "Created", "F9": "Accessed", "F10": "Description", "F11": "Owner"}
 		if mode, ok := sorts[m.Key]; ok {
-			if p.Remote != nil && (mode == "Created" || mode == "Accessed" || mode == "Owner" || mode == "Description") {
+			if !p.can(capMetadataSort) && (mode == "Created" || mode == "Accessed" || mode == "Owner" || mode == "Description") {
 				a.Status = "This sort mode requires local file metadata"
 				return true
 			}

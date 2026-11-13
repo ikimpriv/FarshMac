@@ -16,19 +16,38 @@ import (
 	"farshmac/internal/fsops"
 )
 
-type Endpoint struct{ Remote *Config }
+// Opener connects to a non-local file system: a server (*Config) or a
+// container. Identity names the place so two endpoints on the same server
+// can rename instead of copying.
+type Opener interface {
+	Open(ctx context.Context) (FS, error)
+	Identity() string
+}
+
+// Endpoint is one side of a transfer; a nil Opener is the local file system.
+type Endpoint struct{ Opener Opener }
+
+// RemoteEndpoint wraps a server configuration; nil stays local.
+func RemoteEndpoint(c *Config) Endpoint {
+	if c == nil {
+		return Endpoint{}
+	}
+	return Endpoint{Opener: c}
+}
+func (c *Config) Open(ctx context.Context) (FS, error) { return c.Dial(ctx) }
+func (c *Config) Identity() string                     { return c.Label() }
 
 func (e Endpoint) Open(ctx context.Context) (FS, error) {
-	if e.Remote != nil {
-		return e.Remote.Dial(ctx)
+	if e.Opener != nil {
+		return e.Opener.Open(ctx)
 	}
 	return Local{}, nil
 }
 func (e Endpoint) Same(other Endpoint) bool {
-	if e.Remote == nil || other.Remote == nil {
-		return e.Remote == nil && other.Remote == nil
+	if e.Opener == nil || other.Opener == nil {
+		return e.Opener == nil && other.Opener == nil
 	}
-	return e.Remote.Label() == other.Remote.Label()
+	return e.Opener.Identity() == other.Opener.Identity()
 }
 
 type Pair struct{ Source, Destination string }
@@ -49,7 +68,7 @@ type job struct {
 func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.Operation) error {
 	metadata := options.Metadata
 	o.CopyMetadata = &metadata
-	if source.Remote == nil && target.Remote == nil {
+	if source.Opener == nil && target.Opener == nil {
 		// Smart symbolic links keep links into the copied items verbatim.
 		sources := make([]string, len(pairs))
 		for i, pair := range pairs {
@@ -115,7 +134,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 				}
 				child := o.Fork(ctx)
 				o.Worker(1)
-				if source.Remote == nil && target.Remote == nil {
+				if source.Opener == nil && target.Opener == nil {
 					err = fsops.Transfer(task.Source, task.Destination, false, options.Conflict, child)
 				} else {
 					err = fsops.IgnoreSkipped(child.Attempt("copy", task.Source, task.Destination, func() error {
@@ -176,7 +195,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		err = o.Attempt("create folder", pair.Source, pair.Destination, func() error {
 			existing, e := dest.Lstat(pair.Destination)
 			if os.IsNotExist(e) {
-				if target.Remote == nil && options.Metadata.Permissions {
+				if target.Opener == nil && options.Metadata.Permissions {
 					e = os.Mkdir(pair.Destination, 0700)
 				} else {
 					e = dest.Mkdir(pair.Destination)
@@ -197,7 +216,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			if entry.Name() == "." || entry.Name() == ".." {
 				return nil
 			}
-			if (source.Remote != nil || target.Remote != nil) && !ValidName(entry.Name()) {
+			if (source.Opener != nil || target.Opener != nil) && !ValidName(entry.Name()) {
 				return fmt.Errorf("unsafe filename from server")
 			}
 			if err := validUTF8Name(source, entry.Name()); err != nil {
@@ -205,7 +224,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			}
 			return walk(Pair{path.Join(pair.Source, entry.Name()), path.Join(pair.Destination, entry.Name())}, depth+1, entry)
 		}
-		if source.Remote == nil {
+		if source.Opener == nil {
 			err = fsops.ReadDirectory(pair.Source, o, func(entry os.DirEntry) error {
 				info, err := entry.Info()
 				if err != nil {
@@ -237,7 +256,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		if err = validUTF8Name(source, path.Base(pair.Source)); err != nil {
 			break
 		}
-		if source.Remote != nil && target.Remote != nil {
+		if source.Opener != nil && target.Opener != nil {
 			if err = validateRemotePair(scan, dest, pair); err != nil {
 				break
 			}
@@ -253,7 +272,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 			}
 		}
 		// Local Copy retains its real-path/symlink checks even for parallel trees.
-		if source.Remote == nil && target.Remote == nil {
+		if source.Opener == nil && target.Opener == nil {
 			if err = validateLocalPair(pair); err != nil {
 				break
 			}
@@ -276,7 +295,7 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 	}
 	for i := len(directories) - 1; i >= 0; i-- {
 		j := directories[i]
-		if source.Remote == nil && target.Remote == nil {
+		if source.Opener == nil && target.Opener == nil {
 			err = fsops.ApplyMetadata(j.Source, j.Destination, o)
 		} else {
 			err = applyPortableMetadata(dest, j.Source, j.Destination, j.Info, options, o)
@@ -329,7 +348,7 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 	published, created := false, false
 	defer func() {
 		if !published && created {
-			if cleanupErr := d.Remove(tmp, false); cleanupErr != nil && target.Remote != nil {
+			if cleanupErr := d.Remove(tmp, false); cleanupErr != nil && target.Opener != nil {
 				// The cancelled data session is already closed. A short independent
 				// cleanup session can remove only our unpredictable temporary name.
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -643,8 +662,8 @@ func regularSize(info os.FileInfo) int64 {
 func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Operation) (FS, error) {
 	var f FS
 	name := "local filesystem"
-	if endpoint.Remote != nil {
-		name = endpoint.Remote.Label()
+	if endpoint.Opener != nil {
+		name = endpoint.Opener.Identity()
 	}
 	err := o.AttemptRequired("connect", name, "", func() error {
 		if ctx.Err() != nil {
@@ -666,7 +685,7 @@ func openTransferEndpoint(endpoint Endpoint, ctx context.Context, o *fsops.Opera
 // Remote servers may send names in a legacy encoding; macOS file systems and
 // the UI cannot represent them faithfully, so copying them is refused.
 func validUTF8Name(source Endpoint, name string) error {
-	if source.Remote != nil && !utf8.ValidString(name) {
+	if source.Opener != nil && !utf8.ValidString(name) {
 		return fmt.Errorf("filename is not valid UTF-8: %x", name)
 	}
 	return nil

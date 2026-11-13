@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"farshmac/internal/remotefs"
 	"fmt"
 	"io"
 	"os"
@@ -20,9 +19,8 @@ import (
 const maxTextBytes = 64 * 1024 * 1024
 
 type Document struct {
-	Remote        *remotefs.Config
-	RemotePath    string
-	RemoteInfo    os.FileInfo
+	Source        documentSource // Non-local origin (server, container, manifest); nil for local files.
+	SourceInfo    os.FileInfo    // Attributes of the source at the last fetch or store; nil when unknown.
 	ArchiveSource bool
 	TempDir       string
 	TabSize       int
@@ -355,8 +353,8 @@ func (a *App) saveAs() {
 }
 func (a *App) saveAsThen(d *Document, done func()) {
 	initial, base := d.Path, a.Panels[a.Active].filesystemPath()
-	if d.Remote != nil {
-		initial = filepath.Join(base, filepath.Base(d.RemotePath))
+	if d.Source != nil {
+		initial = filepath.Join(base, d.Source.Name())
 	}
 	a.prompt("Save as", "Local file name", initial, func(s string) {
 		path := expand(s, base)

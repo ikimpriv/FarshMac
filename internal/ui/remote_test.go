@@ -102,7 +102,7 @@ func TestRemotePanelConnectNavigateCopyEditAndDisconnect(t *testing.T) {
 	selectEntry(t, p, "file.txt")
 	a.key(Message{Key: "F4"})
 	waitNetwork(t, a)
-	if a.Doc == nil || !a.Doc.Edit || a.Doc.Remote == nil {
+	if a.Doc == nil || !a.Doc.Edit || a.Doc.Source == nil {
 		t.Fatal("remote editor", a.Status)
 	}
 	a.Doc.Insert("edited ")

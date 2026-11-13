@@ -138,7 +138,7 @@ func (a *App) configurePanel(i int) {
 func (a *App) setupSnapshot() savedSetup {
 	a.normalizeSettings()
 	for _, p := range a.Panels {
-		if p.Remote != nil {
+		if p.served() {
 			continue
 		}
 		// History entries carry their source (see historyEntry); remote

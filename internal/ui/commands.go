@@ -435,11 +435,9 @@ func (a *App) runUserCommand(command string) {
 	}
 	panel := &a.Panels[a.Active]
 	p := panel.Current()
-	if panel.Archive != nil {
-		if _, inside := panel.Archive.Relative(p); inside {
-			a.Status = "Use F5 to copy this archive item out before running commands on it"
-			return
-		}
+	if panel.virtual(p) {
+		a.Status = "Use F5 to copy this archive item out before running commands on it"
+		return
 	}
 	a.Command = strings.ReplaceAll(command, "{}", terminal.Quote(p))
 	a.execute()
@@ -578,7 +576,7 @@ func (a *App) updatePreview() {
 		return
 	}
 	source := &a.Panels[1-index]
-	if source.Remote != nil {
+	if !source.can(capQuickView) {
 		a.previewImage = ""
 		a.previewText = "Remote file: use F3 to download and view"
 		return
@@ -589,12 +587,10 @@ func (a *App) updatePreview() {
 		a.previewText = "No file selected"
 		return
 	}
-	if source.Archive != nil {
-		if _, inside := source.Archive.Relative(path); inside {
-			a.previewKey, a.previewImage = "", ""
-			a.previewText = "Archive member: press F3 to extract and view"
-			return
-		}
+	if source.virtual(path) {
+		a.previewKey, a.previewImage = "", ""
+		a.previewText = "Archive member: press F3 to extract and view"
+		return
 	}
 	key := path
 	if len(source.Entries) > 0 {

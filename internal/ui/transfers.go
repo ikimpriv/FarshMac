@@ -16,15 +16,19 @@ func (a *App) transferDialog(move bool) {
 		return
 	}
 	p := &a.Panels[a.Active]
-
-	if move && (p.Remote != nil || a.Panels[1-a.Active].Remote != nil) {
-		a.remoteMoveDialog()
+	other := &a.Panels[1-a.Active]
+	if move && p.backend().Move(a, p) {
 		return
 	}
-	if move && a.archiveReadOnly() {
+	if move && other.kind() != backendLocal {
+		if other.kind() == backendRemote {
+			a.remoteMoveDialog()
+		} else {
+			a.Status = "Moving into this panel is not supported. Use F5 Copy, then Delete."
+		}
 		return
 	}
-	if a.Panels[1-a.Active].Archive != nil {
+	if !other.can(capCopyIn) {
 		a.Status = "Choose a regular destination panel; writing into archives is not supported"
 		return
 	}
@@ -35,10 +39,10 @@ func (a *App) transferDialog(move bool) {
 	}
 	p.RestoreMarked = cloneMarks(p.Marked)
 	base := p.filesystemPath()
-	dest := a.Panels[1-a.Active].Path
-	sourceEndpoint := remotefs.Endpoint{Remote: p.Remote}
-	targetEndpoint := remotefs.Endpoint{Remote: a.Panels[1-a.Active].Remote}
-	if p.Remote != nil || targetEndpoint.Remote != nil {
+	dest := other.Path
+	sourceEndpoint := p.endpoint()
+	targetEndpoint := other.endpoint()
+	if sourceEndpoint.Opener != nil || targetEndpoint.Opener != nil {
 		base = dest
 	}
 	if len(paths) == 1 {
@@ -50,7 +54,7 @@ func (a *App) transferDialog(move bool) {
 	}
 	// Symbolic-link handling applies only to local-to-local transfers; archive
 	// contents are extracted to a temporary folder and keep their links as is.
-	links := catalog == nil && p.Remote == nil && targetEndpoint.Remote == nil
+	links := catalog == nil && sourceEndpoint.Opener == nil && targetEndpoint.Opener == nil
 	symlinkField := Field{Label: "Symbolic links", Toggle: true, Value: fsops.ParseSymlinkMode(a.Settings.CopySymlinks).String(), Options: []string{fsops.SymlinksSmart.String(), fsops.SymlinksAsIs.String(), fsops.SymlinksContents.String()}}
 	symlinks := func(fields []Field) fsops.SymlinkMode {
 		if !links {
@@ -61,7 +65,7 @@ func (a *App) transferDialog(move bool) {
 		return mode
 	}
 	start := func(s string, metadata fsops.MetadataOptions, symlinks fsops.SymlinkMode) {
-		if targetEndpoint.Remote != nil && remoteTilde(s) {
+		if targetEndpoint.Opener != nil && remoteTilde(s) {
 			a.Status = remoteTildeStatus
 			return
 		}
@@ -130,7 +134,7 @@ func (a *App) transferDialog(move bool) {
 					err = fmt.Errorf("destination is not a directory: %s", dst)
 				} else if !exists {
 					err = o.AttemptRequired("create folder", dst, "", func() error {
-						if targetEndpoint.Remote == nil {
+						if targetEndpoint.Opener == nil {
 							return os.MkdirAll(dst, 0777)
 						}
 						return destination.Mkdir(dst)
@@ -213,7 +217,7 @@ const archiveRemoteStatus = "Archives are extracted and created on local panels.
 // archiveRemoteTarget refuses archive output into a remote opposite panel; its
 // filesystemPath is the hidden local folder from before connecting.
 func (a *App) archiveRemoteTarget() bool {
-	if a.Panels[1-a.Active].Remote == nil {
+	if a.Panels[1-a.Active].can(capLocalOutput) {
 		return false
 	}
 	a.Status = archiveRemoteStatus
@@ -290,7 +294,7 @@ func (a *App) archiveExtractPath(src string) {
 		return
 	}
 	base := a.Panels[1-a.Active].filesystemPath()
-	if a.Panels[1-a.Active].Remote != nil {
+	if !a.Panels[1-a.Active].can(capLocalOutput) {
 		base = a.Panels[a.Active].filesystemPath() // Never the remote panel's hidden local folder.
 	}
 	dst := filepath.Join(base, fsops.ArchiveStem(filepath.Base(src)))

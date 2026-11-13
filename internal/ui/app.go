@@ -34,8 +34,9 @@ type Panel struct {
 	InfoOffset             int
 	viewReturns            map[string]panelViewReturn
 	Remote                 *remotefs.Config
-	RemoteLocalPath        string
+	RemoteLocalPath        string // Local folder behind a remote or Kubernetes panel.
 	Archive                *fsops.ArchiveIndex
+	Kube                   *kubePanel
 	Async                  bool
 	load                   *panelLoad
 	rollback               *panelRollback
@@ -97,6 +98,12 @@ func (p *Panel) Load(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
+	}
+	if p.Kube != nil {
+		if p.Async {
+			return p.loadPanel(abs)
+		}
+		return p.loadKube(abs)
 	}
 	if p.Remote != nil {
 		if p.Async {
@@ -318,6 +325,8 @@ type App struct {
 	viewHistory                                               []viewRecord
 	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
 	Image                                                     *imageView       // F3 graphical view of an image or PDF.
+	mods                                                      modifiers        // Modifier keys held, for the key bar.
+	modsAt                                                    time.Time
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
@@ -579,6 +588,13 @@ func (a *App) Handle(raw string) {
 	case "historyRead":
 		a.readTerminalHistory(m)
 		return
+	case "modifiers":
+		if mods := modifiersOf(m); mods != a.mods {
+			a.mods = mods
+			a.dirty = true
+		}
+		a.modsAt = time.Now()
+		return
 	case "inputBinary":
 		if a.Term != nil {
 			if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
@@ -638,6 +654,11 @@ func (a *App) Handle(raw string) {
 	case "click":
 		a.click(m)
 	case "key":
+		// A modifier report can be lost (focus changes); a key without the
+		// held modifier after a quiet spell resets the key bar row.
+		if a.mods != 0 && modifiersOf(m)&a.mods != a.mods && time.Since(a.modsAt) > 2*time.Second {
+			a.mods = modifiersOf(m)
+		}
 		a.key(m)
 	case "paste":
 		if a.FastFind != nil && a.Form == nil && a.Dialog == nil && a.Doc == nil && a.Menu == nil {
@@ -1056,9 +1077,6 @@ func expand(s, base string) string {
 }
 func (a *App) function(n int) {
 	p := &a.Panels[a.Active]
-	if (n == 4 || n == 6 || n == 7 || n == 8) && a.archiveReadOnly() {
-		return
-	}
 	switch n {
 	case 1:
 		d := newDocument("FarshMac — Help", help)
@@ -1068,6 +1086,9 @@ func (a *App) function(n int) {
 	case 2:
 		a.userMenu()
 	case 3, 4:
+		if n == 4 && !p.can(capEdit) && p.backend().Open(a, p, true) {
+			return
+		}
 		a.openConfigured(n == 4, false, false)
 	case 5, 6:
 		a.transferDialog(n == 6)
@@ -1075,8 +1096,7 @@ func (a *App) function(n int) {
 		if !a.requireFilePanel() {
 			return
 		}
-		if p.Remote != nil {
-			a.remoteMkdir()
+		if p.backend().Mkdir(a, p) {
 			return
 		}
 		base, index := p.Path, a.Active
@@ -1153,7 +1173,7 @@ func (a *App) showTerminal() {
 			return
 		}
 	}
-	if a.Panels[a.Active].Remote == nil {
+	if a.Panels[a.Active].can(capShellSync) {
 		a.pendingShellCwd = a.Panels[a.Active].filesystemPath()
 		a.syncShellCwd()
 	}
@@ -1185,7 +1205,7 @@ func (a *App) returnFromTerminal() {
 		a.syncCwd()
 		return
 	}
-	if a.Panels[a.Active].Remote == nil && a.pendingShellCwd == "" {
+	if a.Panels[a.Active].can(capShellSync) && a.pendingShellCwd == "" {
 		a.shellPanelReturn = &shellPanelReturn{a.Active, a.Panels[a.Active].Path}
 	}
 }
@@ -1195,7 +1215,7 @@ func (a *App) finishPanelReturn() {
 		return
 	}
 	a.shellPanelReturn = nil
-	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
+	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].can(capShellSync) && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
 		a.error(a.Panels[r.index].Load(a.ShellCwd))
 	}
 }
@@ -1222,7 +1242,7 @@ func (a *App) shellAtArchive(i int) bool {
 	return shell == folder
 }
 func (a *App) syncCwd() {
-	if a.Panels[a.Active].Remote != nil || a.shellAtArchive(a.Active) {
+	if !a.Panels[a.Active].can(capShellSync) || a.shellAtArchive(a.Active) {
 		return
 	}
 	if a.ShellCwd != "" && a.ShellReady && a.pendingShellCwd == "" {

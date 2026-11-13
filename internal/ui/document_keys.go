@@ -296,7 +296,7 @@ func (a *App) viewerKey(m Message) {
 }
 func (a *App) adjacentFile(next bool) {
 	p := &a.Panels[a.Active]
-	if a.Doc.ArchiveSource || p.Archive != nil {
+	if a.Doc.ArchiveSource || p.kind() == backendArchive {
 		a.Status = "Return to the archive panel to choose another file"
 		return
 	}
@@ -319,8 +319,8 @@ func (a *App) adjacentFile(next bool) {
 				a.showDocument(d)
 			}
 			proceed := func() {
-				if p.Remote != nil {
-					a.downloadRemoteDocument(*p.Remote, filepath.Join(p.Path, name), false, replace, nil)
+				if src := p.backend().DocumentSource(p, filepath.Join(p.Path, name)); src != nil {
+					a.openSourceDocument(src, false, replace, nil)
 					return
 				}
 				path := filepath.Join(p.Path, name)

@@ -10,15 +10,7 @@ import (
 	"farshmac/internal/fsops"
 )
 
-func (p *Panel) filesystemPath() string {
-	if p.Remote != nil {
-		return p.RemoteLocalPath
-	}
-	if p.Archive != nil {
-		return filepath.Dir(p.Archive.Path)
-	}
-	return p.Path
-}
+func (p *Panel) filesystemPath() string { return p.backend().FilesystemPath(p) }
 func (p *Panel) loadArchiveDirectory(path string) error {
 	rel, ok := p.Archive.Relative(path)
 	if !ok {

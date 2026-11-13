@@ -1,7 +1,5 @@
 package ui
 
-import "fmt"
-
 // Historical directory snapshots are bounded independently of the current panel.
 // Maps are immutable after publication, including when shared with a read worker.
 const folderSizeCacheDirectories = 128
@@ -23,13 +21,7 @@ func (p *Panel) sizeKey(path string) folderSizeKey {
 		p.sizeArchive = p.Archive
 		p.sizeArchiveGeneration++
 	}
-	source := "local"
-	if p.Remote != nil {
-		source = p.Remote.Label()
-	} else if p.Archive != nil {
-		// A reopened archive gets a new index; never reuse sizes from old contents.
-		source = fmt.Sprintf("archive:%d:%s", p.sizeArchiveGeneration, p.Archive.Path)
-	}
+	source := p.backend().SizeSource(p)
 	return folderSizeKey{path, source, p.IgnoreDSStore}
 }
 
