@@ -25,16 +25,18 @@ import (
 type Client struct {
 	Profile Profile
 
-	config    *rest.Config
-	raw       *rest.RESTClient // Unversioned client for Table LISTs by absolute path.
-	core      kubernetes.Interface
-	dyn       dynamic.Interface
-	disc      discovery.CachedDiscoveryInterface
-	mapper    meta.RESTMapper
-	version   string
-	resources *resourceCache
-	openapiMu sync.Mutex
-	openapi   *openAPICache // OpenAPI v3 documents and resolved schemas (SchemaFor).
+	config       *rest.Config
+	raw          *rest.RESTClient // Unversioned client for Table LISTs by absolute path.
+	core         kubernetes.Interface
+	stream       kubernetes.Interface // Without a request timeout, for logs and exec.
+	streamConfig *rest.Config
+	dyn          dynamic.Interface
+	disc         discovery.CachedDiscoveryInterface
+	mapper       meta.RESTMapper
+	version      string
+	resources    *resourceCache
+	openapiMu    sync.Mutex
+	openapi      *openAPICache // OpenAPI v3 documents and resolved schemas (SchemaFor).
 }
 
 // Connect opens the profile's context and verifies it by asking the server
@@ -69,7 +71,15 @@ func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, e
 	if err != nil {
 		return nil, err
 	}
-	rawCfg := rest.CopyConfig(cfg)
+	// Streams (watches, followed logs, exec) outlive any request timeout:
+	// they get clients without one; cancellation comes from their contexts.
+	streamCfg := rest.CopyConfig(cfg)
+	streamCfg.Timeout = 0
+	stream, err := kubernetes.NewForConfig(streamCfg)
+	if err != nil {
+		return nil, err
+	}
+	rawCfg := rest.CopyConfig(streamCfg)
 	rawCfg.GroupVersion = &schema.GroupVersion{}
 	rawCfg.APIPath = "/"
 	rawCfg.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
@@ -78,7 +88,7 @@ func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, e
 		return nil, err
 	}
 	disc := memory.NewMemCacheClient(core.Discovery())
-	c := &Client{Profile: p, config: cfg, raw: raw, core: core, dyn: dyn, disc: disc, mapper: restmapper.NewDeferredDiscoveryRESTMapper(disc)}
+	c := &Client{Profile: p, config: cfg, streamConfig: streamCfg, raw: raw, core: core, stream: stream, dyn: dyn, disc: disc, mapper: restmapper.NewDeferredDiscoveryRESTMapper(disc)}
 	version, err := core.Discovery().ServerVersion()
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach %s: %w", cfg.Host, err)

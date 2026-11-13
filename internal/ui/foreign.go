@@ -150,7 +150,12 @@ func newLogStream(ctx context.Context, open func(context.Context) (io.ReadCloser
 	}()
 	return s
 }
-func (s *logStream) Write([]byte) error    { return nil }
+func (s *logStream) Write(p []byte) error {
+	if bytes.IndexByte(p, 0x03) >= 0 { // Ctrl+C ends the stream like ⌘.
+		s.cancel()
+	}
+	return nil
+}
 func (s *logStream) Resize(int, int) error { return nil }
 func (s *logStream) Output() <-chan []byte { return s.out }
 func (s *logStream) Done() <-chan struct{} { return s.done }

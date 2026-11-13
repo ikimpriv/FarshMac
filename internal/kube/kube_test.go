@@ -272,7 +272,7 @@ func TestManifests(t *testing.T) {
 		t.Fatal("stale update", err)
 	}
 	updated, err := c.Update(ctx, obj)
-	if err != nil || updated.GetResourceVersion() != "2" || len(f.Puts()) != 1 {
+	if err != nil || updated.GetResourceVersion() == obj.GetResourceVersion() || updated.GetResourceVersion() == "" || len(f.Puts()) != 1 {
 		t.Fatal(err, f.Puts())
 	}
 	// Apply is a server-side apply patch with our field manager into the target namespace.

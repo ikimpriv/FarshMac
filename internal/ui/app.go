@@ -334,6 +334,7 @@ type App struct {
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
+	previewOffset                                             int // First line shown in the Quick view (scrolled with the arrows when it is the active panel).
 	lastMenu                                                  MenuState
 	Panels                                                    [2]Panel
 	Active                                                    int
@@ -909,6 +910,9 @@ func (a *App) key(m Message) {
 	}
 	if (m.Key == "F3" || m.Key == "F4") && m.Shift && (m.Meta || m.Ctrl) {
 		a.openConfigured(m.Key == "F4", false, true)
+		return
+	}
+	if a.Menu == nil && a.Form == nil && a.Dialog == nil && a.Panels[a.Active].View == "Quick view" && a.quickViewKey(m) {
 		return
 	}
 	if a.Menu == nil && a.farPanelKey(m) {

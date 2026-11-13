@@ -95,6 +95,15 @@ func sortKubeObjects(list []*kube.Object) {
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 }
 
+// noteChanged is called after this app changed the cluster: a watched
+// namespace receives the change as an event, an unwatched one is re-read.
+func (k *kubePanel) noteChanged(ns string) {
+	if k.watching(ns) {
+		return
+	}
+	k.invalidate(ns)
+}
+
 // invalidate forgets cached listings: one namespace, or everything when ns is "".
 func (k *kubePanel) invalidate(ns string) {
 	k.mu.Lock()

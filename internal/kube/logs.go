@@ -31,5 +31,5 @@ func (c *Client) Logs(ctx context.Context, ns, pod string, opts LogOptions) (io.
 		}
 		o.SinceSeconds = &seconds
 	}
-	return c.core.CoreV1().Pods(ns).GetLogs(pod, o).Stream(ctx)
+	return c.stream.CoreV1().Pods(ns).GetLogs(pod, o).Stream(ctx)
 }

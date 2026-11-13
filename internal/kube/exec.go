@@ -120,4 +120,4 @@ func ExitCode(err error) (int, bool) {
 }
 
 // Executor returns the exec transport of this client.
-func (c *Client) Executor() Executor { return NewExecutor(c.config, c.core) }
+func (c *Client) Executor() Executor { return NewExecutor(c.streamConfig, c.stream) }

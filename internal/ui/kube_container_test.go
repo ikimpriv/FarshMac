@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,43 @@ func TestKubeContainerFileSystem(t *testing.T) {
 	waitNetwork(t, a)
 	if p.Err != "" || !strings.Contains(p.InfoText, "container sidecar") {
 		t.Fatal("second container", p.Err, p.InfoText)
+	}
+}
+
+func TestKubeQuickViewShowsContainerFiles(t *testing.T) {
+	a, f := kubeApp(t)
+	p := &a.Panels[0]
+	podWithContainers(f, "solo", "app")
+	p.Kube.invalidate("")
+	root := localexec.Fixture(t)
+	p.Kube.executor = localexec.New(t, "", strings.Fields(localexec.BaseTools)...)
+	a.error(p.Load("/shop/pods/solo" + root))
+	waitNetwork(t, a)
+	selectEntry(t, p, "plain.txt")
+	want, _ := os.ReadFile(filepath.Join(root, "plain.txt"))
+	a.key(Message{Key: "q", Ctrl: true})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && a.previewText != string(want) {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if a.previewText != string(want) {
+		t.Fatalf("container file preview %q (want %q)", a.previewText, string(want))
+	}
+	// Scrolling: the Quick view panel scrolls with the arrows when active.
+	a.previewText = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nl19\nl20\nl21\nl22\nl23\nl24\nl25\nl26\nl27\nl28\nl29\nl30\nl31\nl32\nl33\nl34\nl35\nl36\nl37\nl38\nl39\nl40\nl41\nl42\nl43\nl44\nl45\nl46\nl47\nl48\nl49\nl50"
+	a.Active = 1
+	a.key(Message{Key: "ArrowDown"})
+	a.key(Message{Key: "PageDown"})
+	if a.previewOffset < 2 {
+		t.Fatal("quick view did not scroll", a.previewOffset)
+	}
+	x, _ := a.panelRect(1)
+	if line := gridLine(a.Draw(), 3); !strings.Contains(line[x:], "l"+fmt.Sprint(a.previewOffset+1)) {
+		t.Fatal("scrolled view", a.previewOffset, line)
+	}
+	a.key(Message{Key: "Home"})
+	if a.previewOffset != 0 {
+		t.Fatal("Home")
 	}
 }

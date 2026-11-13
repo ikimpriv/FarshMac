@@ -83,6 +83,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	if p.View == "Quick view" {
 		lines := strings.Split(a.previewText, "\n")
 		describe := a.Panels[1-index].Kube != nil
+		if a.previewOffset > 0 && a.previewOffset < len(lines) {
+			lines = lines[a.previewOffset:]
+		}
 		for row, line := range lines {
 			if row >= h-3 {
 				break

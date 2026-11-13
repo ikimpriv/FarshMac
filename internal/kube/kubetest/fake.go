@@ -105,6 +105,12 @@ func (f *FakeAPI) Emit(collection string, eventType string, obj map[string]any) 
 			f.objects[collection] = append(items, obj)
 		}
 	}
+	f.push(collection, eventType, obj)
+}
+
+// push sends an event to the open watches of a collection; callers hold f.mu.
+// Mutating requests (PUT, PATCH, POST, DELETE) push too, as a real server does.
+func (f *FakeAPI) push(collection, eventType string, obj map[string]any) {
 	for _, w := range f.watchers[collection] {
 		var object any
 		if w.table {
@@ -430,8 +436,12 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			f.objects[path] = append(f.objects[path], Obj("Namespace", "", name, "ns-"+name, nil, nil, map[string]string{"STATUS": "Active"}))
-			writeJSON(w, stripColumns(f.objects[path][len(f.objects[path])-1]))
+			created := Obj("Namespace", "", name, "ns-"+name, nil, nil, map[string]string{"STATUS": "Active"})
+			f.rv++
+			created["metadata"].(map[string]any)["resourceVersion"] = fmt.Sprint(f.rv)
+			f.objects[path] = append(f.objects[path], created)
+			f.push(path, "ADDED", created)
+			writeJSON(w, stripColumns(created))
 			return
 		}
 		status(w, 404, "NotFound", "unknown path "+path)
@@ -477,18 +487,26 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 				in["_columns"] = v
 			}
 		}
-		newMeta["resourceVersion"] = "2"
+		f.rv++
+		newMeta["resourceVersion"] = fmt.Sprint(f.rv)
 		items[index] = in
 		f.puts = append(f.puts, path)
+		f.push(collection, "MODIFIED", in)
 		writeJSON(w, in)
 	case http.MethodPatch:
 		var in map[string]any
 		json.NewDecoder(r.Body).Decode(&in)
 		f.patches = append(f.patches, path+"?"+r.Header.Get("Content-Type")+"&fieldManager="+r.URL.Query().Get("fieldManager"))
+		f.rv++
+		if meta, ok := in["metadata"].(map[string]any); ok {
+			meta["resourceVersion"] = fmt.Sprint(f.rv)
+		}
 		if index < 0 {
 			f.objects[collection] = append(items, in)
+			f.push(collection, "ADDED", in)
 		} else {
 			items[index] = in
+			f.push(collection, "MODIFIED", in)
 		}
 		writeJSON(w, in)
 	case http.MethodDelete:
@@ -497,7 +515,10 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		policy, _ := opts["propagationPolicy"].(string)
 		f.deletes = append(f.deletes, path+"?"+policy)
 		if index >= 0 {
+			gone := items[index]
 			f.objects[collection] = append(items[:index], items[index+1:]...)
+			f.rv++
+			f.push(collection, "DELETED", gone)
 		}
 		writeJSON(w, map[string]any{"kind": "Status", "status": "Success"})
 	default:

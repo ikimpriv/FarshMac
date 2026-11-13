@@ -49,7 +49,8 @@ func ExportYAML(obj *unstructured.Unstructured, clean bool) ([]byte, error) {
 type ExportMode int
 
 const (
-	ExportFull  ExportMode = iota // Everything, as the server returns it (viewer).
+	ExportFull  ExportMode = iota // Everything, as the server returns it.
+	ExportView                    // Without managedFields, which only clutter reading (viewer).
 	ExportEdit                    // Without status, managedFields, uid, resourceVersion, creationTimestamp, generation, selfLink; ownerReferences kept (editor: Update replaces the whole object).
 	ExportClean                   // ExportEdit without ownerReferences (copies to another namespace or cluster).
 )
@@ -60,7 +61,10 @@ func ExportYAMLMode(obj *unstructured.Unstructured, mode ExportMode) ([]byte, er
 		return nil, fmt.Errorf("no object")
 	}
 	out := obj.DeepCopy()
-	if mode != ExportFull {
+	if mode == ExportView {
+		unstructured.RemoveNestedField(out.Object, "metadata", "managedFields")
+	}
+	if mode != ExportFull && mode != ExportView {
 		unstructured.RemoveNestedField(out.Object, "status")
 		for _, field := range []string{"managedFields", "uid", "resourceVersion", "creationTimestamp", "generation", "selfLink"} {
 			unstructured.RemoveNestedField(out.Object, "metadata", field)

@@ -616,6 +616,7 @@ func (a *App) updatePreview() {
 	}
 	a.previewKey = key
 	a.previewPath = path
+	a.previewOffset = 0
 	a.previewPending = true
 	o := fsops.NewOperation("Quick view")
 	o.IgnoreDSStore = a.Settings.IgnoreDSStore
@@ -714,4 +715,36 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// quickViewKey scrolls the Quick view when it is the active panel: arrows,
+// pages, Home and End move through the preview text.
+func (a *App) quickViewKey(m Message) bool {
+	if m.Meta || m.Ctrl || m.Alt || m.Shift {
+		return false
+	}
+	lines := strings.Count(a.previewText, "\n") + 1
+	_, w := a.panelRect(a.Active)
+	_ = w
+	page := max(1, a.Rows-9)
+	offset := a.previewOffset
+	switch m.Key {
+	case "ArrowUp":
+		offset--
+	case "ArrowDown":
+		offset++
+	case "PageUp":
+		offset -= page
+	case "PageDown":
+		offset += page
+	case "Home":
+		offset = 0
+	case "End":
+		offset = lines - page
+	default:
+		return false
+	}
+	a.previewOffset = max(0, min(offset, max(0, lines-page)))
+	a.dirty = true
+	return true
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ func (s *manifestSource) Fetch(o *fsops.Operation, dir string) (string, os.FileI
 	if err != nil {
 		return "", nil, err
 	}
-	mode := kube.ExportFull
+	mode := kube.ExportView
 	if s.edit {
 		mode = kube.ExportEdit
 	}
@@ -101,7 +102,7 @@ func (s *manifestSource) Store(o *fsops.Operation, staged string, _ os.FileInfo,
 		return nil, err
 	}
 	s.resourceVersion = updated.GetResourceVersion()
-	s.k.invalidate(s.ref.Namespace)
+	s.k.noteChanged(s.ref.Namespace)
 	return nil, nil
 }
 
@@ -149,7 +150,7 @@ func (a *App) kubeCreateNamespace(p *Panel) {
 			if err := k.client.CreateNamespace(o.Context(), name); err != nil {
 				return err
 			}
-			k.invalidate("")
+			k.noteChanged("")
 			return nil
 		})
 		a.Panels[a.Active].pendingPosition(name, "")
@@ -178,7 +179,7 @@ func (a *App) kubeDelete(p *Panel, orphan bool) {
 				if err := k.client.DeleteNamespace(o.Context(), ns.Name); err != nil {
 					return err
 				}
-				k.invalidate("")
+				k.noteChanged("")
 				return nil
 			})
 		})
@@ -223,7 +224,7 @@ func (a *App) kubeDelete(p *Panel, orphan bool) {
 					}
 					o.Complete(obj.Name)
 				}
-				k.invalidate(level.Namespace)
+				k.noteChanged(level.Namespace)
 				return nil
 			})
 		})
@@ -614,7 +615,12 @@ func (a *App) updateKubePreview(source *Panel) {
 	case level.Level == kubeContainers && level.Object != nil:
 		ref = level.Object.Ref()
 	case level.Level == kubeContainerFS:
-		label = "Container file: press F3 to view it"
+		if source.Entries[source.Cursor].Dir {
+			label = "Directory"
+			break
+		}
+		a.updateContainerFilePreview(source, level)
+		return
 	default:
 		label = "Type folder: enter it and choose an object"
 	}
@@ -636,6 +642,7 @@ func (a *App) updateKubePreview(source *Panel) {
 	}
 	a.previewKey = key
 	a.previewPath = source.Current()
+	a.previewOffset = 0
 	a.previewPending = true
 	o := fsops.NewOperation("Quick view")
 	a.previewOperation = o
@@ -645,6 +652,66 @@ func (a *App) updateKubePreview(source *Panel) {
 		text, err := k.client.Describe(o.Context(), ref)
 		if err != nil {
 			text = ref.String() + "\n" + err.Error()
+		}
+		a.jobs <- func() {
+			if a.previewKey == key && o.Check() == nil {
+				a.previewText = text
+			}
+			a.previewOperation = nil
+			a.previewPending = false
+			a.dirty = true
+		}
+	}()
+}
+
+// updateContainerFilePreview shows the start of a file inside a container
+// in the Quick view, read through the container's shell.
+func (a *App) updateContainerFilePreview(source *Panel, level kubePath) {
+	k := source.Kube
+	path := source.Current()
+	e := source.Entries[source.Cursor]
+	key := k.label() + path
+	if e.Info != nil {
+		key += fmt.Sprint(e.Info.Size(), e.Info.ModTime())
+	}
+	if a.previewPending {
+		if key != a.previewKey && a.previewOperation != nil {
+			a.previewOperation.Cancel()
+			a.previewKey = ""
+		}
+		return
+	}
+	if key == a.previewKey {
+		return
+	}
+	a.previewKey = key
+	a.previewPath = path
+	a.previewOffset = 0
+	a.previewPending = true
+	o := fsops.NewOperation("Quick view")
+	a.previewOperation = o
+	a.previewText = "Reading " + filepath.Base(path) + "…"
+	a.previewImage = ""
+	opener := level.container(k)
+	go func() {
+		text := ""
+		f, err := opener.Open(o.Context())
+		if err == nil {
+			var r io.ReadCloser
+			if r, err = f.Open(path); err == nil {
+				var data []byte
+				data, err = io.ReadAll(io.LimitReader(o.Reader(r), 64*1024))
+				r.Close()
+				if bytes.IndexByte(data, 0) >= 0 {
+					text = fmt.Sprintf("%s\nBinary file: press F3 to view in hex", filepath.Base(path))
+				} else {
+					text = string(data)
+				}
+			}
+			f.Close()
+		}
+		if err != nil {
+			text = filepath.Base(path) + "\n" + err.Error()
 		}
 		a.jobs <- func() {
 			if a.previewKey == key && o.Check() == nil {
