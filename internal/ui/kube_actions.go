@@ -595,3 +595,64 @@ func (a *App) kubeFollowLogs(p *Panel, pod *kube.Object, container string) {
 	})
 	a.startForeign(stream, "logs "+pod.Namespace+"/"+pod.Name+"/"+container, nil)
 }
+
+// updateKubePreview fills the Quick view (Ctrl+Q) next to a Kubernetes
+// panel with kubectl's describe of the entry under the cursor: namespaces,
+// objects and pods; type folders and container files only explain.
+func (a *App) updateKubePreview(source *Panel) {
+	k := source.Kube
+	level := source.kubeLevel()
+	var ref kube.Ref
+	label := ""
+	switch {
+	case len(source.Entries) == 0 || source.Entries[source.Cursor].Name == "..":
+		label = "No entry selected"
+	case level.Level == kubeRoot && source.kubeCurrent() != nil:
+		ref = kube.Ref{GVR: namespaceGVR, Name: source.kubeCurrent().Name}
+	case level.Level == kubeTypeFolder && source.kubeCurrent() != nil:
+		ref = source.kubeCurrent().Ref()
+	case level.Level == kubeContainers && level.Object != nil:
+		ref = level.Object.Ref()
+	case level.Level == kubeContainerFS:
+		label = "Container file: press F3 to view it"
+	default:
+		label = "Type folder: enter it and choose an object"
+	}
+	if label != "" {
+		a.previewKey, a.previewImage = "", ""
+		a.previewText = label
+		return
+	}
+	key := k.label() + "/describe/" + ref.String()
+	if a.previewPending {
+		if key != a.previewKey && a.previewOperation != nil {
+			a.previewOperation.Cancel()
+			a.previewKey = ""
+		}
+		return
+	}
+	if key == a.previewKey {
+		return
+	}
+	a.previewKey = key
+	a.previewPath = source.Current()
+	a.previewPending = true
+	o := fsops.NewOperation("Quick view")
+	a.previewOperation = o
+	a.previewText = "Describing " + ref.Name + "…"
+	a.previewImage = ""
+	go func() {
+		text, err := k.client.Describe(o.Context(), ref)
+		if err != nil {
+			text = ref.String() + "\n" + err.Error()
+		}
+		a.jobs <- func() {
+			if a.previewKey == key && o.Check() == nil {
+				a.previewText = text
+			}
+			a.previewOperation = nil
+			a.previewPending = false
+			a.dirty = true
+		}
+	}()
+}

@@ -245,8 +245,10 @@ func (a *App) menuItemDisabled(section menuSection, item menuItem) bool {
 			p = a.Panels[1]
 		}
 		switch label {
-		case "Info panel", "Quick view":
+		case "Info panel":
 			return !p.can(capInfo)
+		case "Quick view":
+			return false // Previews the other panel, whatever this one shows.
 		case "Tree panel":
 			return !p.can(capTree)
 		}

@@ -570,9 +570,11 @@ func (kubeBackend) InfoPlugin(p *Panel) string               { return p.Kube.lab
 func (kubeBackend) Caps(p *Panel) panelCaps {
 	switch p.kubeLevel().Level {
 	case kubeRoot:
-		return capMkdir | capDelete
+		return capMkdir | capDelete | capQuickView
 	case kubeTypeFolder:
-		return capEdit | capDelete
+		return capEdit | capDelete | capQuickView
+	case kubeContainers:
+		return capQuickView
 	case kubeContainerFS:
 		return capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute
 	}

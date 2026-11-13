@@ -471,3 +471,39 @@ func TestKubeManifestSchemaCheckAndCompletion(t *testing.T) {
 		t.Fatalf("item field completion %q", d.Text[len(d.Text)-30:])
 	}
 }
+
+func TestKubeQuickViewDescribes(t *testing.T) {
+	a, _ := kubeApp(t)
+	p := &a.Panels[0]
+	enterKube(t, a, "shop")
+	enterKube(t, a, "deployments.apps")
+	selectEntry(t, p, "app")
+	a.key(Message{Key: "q", Ctrl: true})
+	if a.Panels[1].View != "Quick view" {
+		t.Fatal("Ctrl+Q must open the quick view next to a cluster panel", a.Panels[1].View, a.Status)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(a.previewText, "Name:") {
+		a.Poll()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(a.previewText, "Name:") || !strings.Contains(a.previewText, "app") {
+		t.Fatal("describe in quick view", a.previewText)
+	}
+	g := a.Draw()
+	x, _ := a.panelRect(1)
+	line := gridLine(g, 3)
+	if !strings.Contains(line, "Name:") {
+		t.Fatal("quick view line", line)
+	}
+	if cell := g.Cells[3*g.W+x+2]; cell.FG != Yellow && cell.FG != White {
+		t.Fatalf("describe key colour %x", cell.FG)
+	}
+	// Type folders only explain; the preview follows the cursor.
+	a.error(p.Load("/shop"))
+	waitNetwork(t, a)
+	a.Poll()
+	if !strings.Contains(a.previewText, "Type folder") {
+		t.Fatal("type folder preview", a.previewText)
+	}
+}

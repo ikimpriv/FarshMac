@@ -576,6 +576,10 @@ func (a *App) updatePreview() {
 		return
 	}
 	source := &a.Panels[1-index]
+	if source.Kube != nil {
+		a.updateKubePreview(source)
+		return
+	}
 	if !source.can(capQuickView) {
 		a.previewImage = ""
 		a.previewText = "Remote file: use F3 to download and view"

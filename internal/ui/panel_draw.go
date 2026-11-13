@@ -82,9 +82,14 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	}
 	if p.View == "Quick view" {
 		lines := strings.Split(a.previewText, "\n")
+		describe := a.Panels[1-index].Kube != nil
 		for row, line := range lines {
 			if row >= h-3 {
 				break
+			}
+			if describe {
+				drawDescribeLine(g, x+2, y+2+row, w-4, line)
+				continue
 			}
 			g.Text(x+2, y+2+row, line, LightCyan, Blue, w-4)
 		}
@@ -365,4 +370,31 @@ func (a *App) drawReading(g *Grid, p *Panel, x, y, w, h int) {
 	row := y + 2 + max(1, h-5)/2
 	g.Fill(x+(w-width)/2, row, width, 1, Black, Cyan)
 	g.Text(x+(w-width)/2, row, text, Black, Cyan, width)
+}
+
+// drawDescribeLine colours one line of kubectl describe output: section
+// headers (no indentation) in white, keys in yellow, values in cyan, so the
+// structure reads at a glance in the quick view.
+func drawDescribeLine(g *Grid, x, y, width int, line string) {
+	if width <= 0 {
+		return
+	}
+	trimmed := strings.TrimLeft(line, " ")
+	indent := len(line) - len(trimmed)
+	key, value, found := strings.Cut(trimmed, ":")
+	switch {
+	case found && !strings.ContainsAny(key, " \t") || found && indent == 0 && len(key) < 40:
+		// "Name:  value" or "Containers:"; a header has no value and no indent.
+		keyColor := uint32(Yellow)
+		if indent == 0 && strings.TrimSpace(value) == "" {
+			keyColor = White
+		}
+		g.Text(x, y, strings.Repeat(" ", indent)+key+":", keyColor, Blue, width)
+		rest := indent + len([]rune(key)) + 1
+		if rest < width {
+			g.Text(x+rest, y, value, LightCyan, Blue, width-rest)
+		}
+	default:
+		g.Text(x, y, line, LightCyan, Blue, width)
+	}
 }
