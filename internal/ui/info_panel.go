@@ -37,13 +37,7 @@ func (a *App) updateInfoPanels() {
 			source = p
 		}
 		path := source.filesystemPath()
-		plugin := ""
-		if source.Remote != nil {
-			plugin = source.Remote.Label() + source.Path
-		}
-		if source.Archive != nil {
-			plugin = "Archive: " + source.Archive.Path
-		}
+		plugin := source.backend().InfoPlugin(source)
 		settings := a.Settings
 		key := fmt.Sprintf("%s|%s|%t%t%t%t%t%t|%s", path, plugin, settings.InfoHost, settings.InfoVolume, settings.InfoMemory, settings.InfoPower, settings.InfoDescription, settings.HumanReadableSizes, settings.FolderDescriptions)
 		if job := a.infoJobs[i]; job != nil {

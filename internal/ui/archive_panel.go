@@ -10,15 +10,7 @@ import (
 	"farshmac/internal/fsops"
 )
 
-func (p *Panel) filesystemPath() string {
-	if p.Remote != nil {
-		return p.RemoteLocalPath
-	}
-	if p.Archive != nil {
-		return filepath.Dir(p.Archive.Path)
-	}
-	return p.Path
-}
+func (p *Panel) filesystemPath() string { return p.backend().FilesystemPath(p) }
 func (p *Panel) loadArchiveDirectory(path string) error {
 	rel, ok := p.Archive.Relative(path)
 	if !ok {
@@ -228,6 +220,9 @@ func (a *App) togglePanel(index int) {
 func (a *App) rereadPanel(index int) {
 	p := &a.Panels[index]
 	a.infoKeys = [2]string{}
+	if p.Kube != nil {
+		p.Kube.invalidate("")
+	}
 	if p.Archive != nil {
 		a.openArchive(index, p.Archive.Path)
 	} else {

@@ -100,7 +100,7 @@ func (a *App) openSystemSelected() {
 		return
 	}
 	p := &a.Panels[a.Active]
-	if p.Remote != nil {
+	if !p.can(capSystemOpen) {
 		a.Status = "Copy remote files to a local panel before opening them with macOS"
 		return
 	}
@@ -108,11 +108,9 @@ func (a *App) openSystemSelected() {
 	if path == "" {
 		return
 	}
-	if p.Archive != nil {
-		if _, inside := p.Archive.Relative(path); inside {
-			a.Status = "Use F5 to copy this archive item out before opening it with macOS"
-			return
-		}
+	if p.virtual(path) {
+		a.Status = "Use F5 to copy this archive item out before opening it with macOS"
+		return
 	}
 	a.launch(path, externalPlan(path, "", false))
 }
@@ -121,23 +119,14 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 		return
 	}
 	p0 := &a.Panels[a.Active]
-	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir {
+	if !edit && len(p0.Entries) > 0 && p0.Entries[p0.Cursor].Dir && p0.can(capFolderSize) {
 		a.folderSize()
 		return
 	}
-	if a.Panels[a.Active].Remote != nil {
-		a.openRemoteDocument(edit)
-		return
-	}
-	if a.Panels[a.Active].Archive != nil {
-		if edit {
-			a.archiveReadOnly()
-		} else {
-			a.viewArchiveMember()
-		}
-		return
-	}
 	p := &a.Panels[a.Active]
+	if p.backend().Open(a, p, edit) {
+		return
+	}
 	path := p.Current()
 	if path == "" {
 		return
@@ -167,24 +156,10 @@ func (a *App) enterFile() {
 		return
 	}
 
-	if p := &a.Panels[a.Active]; p.Remote != nil {
-		if len(p.Entries) == 0 {
-			return
-		}
-		if e := p.Entries[p.Cursor]; e.Dir {
-			a.error(p.Load(p.Current()))
-		} else if e.Info != nil && e.Info.Mode()&os.ModeSymlink != 0 {
-			a.enterRemoteLink()
-		} else {
-			a.openRemoteDocument(false)
-		}
-		return
-	}
-	if a.Panels[a.Active].Archive != nil {
-		a.enterArchiveMember()
-		return
-	}
 	p := &a.Panels[a.Active]
+	if p.backend().Enter(a, p) {
+		return
+	}
 	path := p.Current()
 	if path == "" {
 		return

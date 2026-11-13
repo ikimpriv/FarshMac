@@ -14,11 +14,7 @@ func (a *App) deleteSelected(permanent bool) {
 		return
 	}
 
-	if a.Panels[a.Active].Remote != nil {
-		a.remoteDelete()
-		return
-	}
-	if a.archiveReadOnly() {
+	if p := &a.Panels[a.Active]; p.backend().Delete(a, p, permanent) {
 		return
 	}
 	paths := a.Panels[a.Active].Selected()

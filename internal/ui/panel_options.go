@@ -173,7 +173,7 @@ func (a *App) sortMenu(index int) {
 	a.choose("Sort mode", labels, func(i int) {
 		switch i {
 		case 9, 10, 11, 12:
-			if p.Remote != nil {
+			if !p.can(capMetadataSort) {
 				a.Status = "This sort mode requires local file metadata"
 				return
 			}
@@ -358,18 +358,18 @@ func writeConfigFile(path string, data []byte, ops ...*fsops.Operation) error {
 func (a *App) setView(index int, view string) {
 	// Quick view only previews the other panel, so it works for remote
 	// panels like Ctrl+Q; Tree and Info panel need a local folder.
-	if a.Panels[index].Remote != nil && (view == "Tree panel" || view == "Info panel") {
-		a.Status = "Choose a file view for remote panels"
+	p := &a.Panels[index]
+	if view == "Tree panel" && !p.can(capTree) && p.kind() == backendArchive {
+		a.Status = "Tree view is unavailable inside archives"
 		return
 	}
-	p := &a.Panels[index]
-	if p.Archive != nil && view == "Tree panel" {
-		a.Status = "Tree view is unavailable inside archives"
+	if view == "Tree panel" && !p.can(capTree) || view == "Info panel" && !p.can(capInfo) {
+		a.Status = "Choose a file view for remote panels"
 		return
 	}
 	p.View = view
 	p.Hidden = false
-	if p.Remote == nil || view != "Quick view" {
+	if !p.served() || view != "Quick view" {
 		a.error(p.Load(p.Path))
 	}
 	a.previewKey = ""

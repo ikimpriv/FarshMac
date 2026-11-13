@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"farshmac/internal/remotefs"
 	"fmt"
 	"io"
 	"os"
@@ -14,15 +13,15 @@ import (
 	"strings"
 
 	"farshmac/internal/fsops"
+	"farshmac/internal/kube"
 	"farshmac/internal/textfile"
 )
 
 const maxTextBytes = 64 * 1024 * 1024
 
 type Document struct {
-	Remote        *remotefs.Config
-	RemotePath    string
-	RemoteInfo    os.FileInfo
+	Source        documentSource // Non-local origin (server, container, manifest); nil for local files.
+	SourceInfo    os.FileInfo    // Attributes of the source at the last fetch or store; nil when unknown.
 	ArchiveSource bool
 	TempDir       string
 	TabSize       int
@@ -46,6 +45,10 @@ type Document struct {
 	SavedBOM                        bool
 	Positions                       []docPosition
 	Search                          textfile.Search
+	Problems                        []kube.Problem // Schema problems of a manifest (editor).
+	problemRows                     map[int]bool
+	checked                         bool
+	checkedText                     string
 	HexQuery                        []byte
 	MatchStart, MatchEnd            int64
 	ViewStart                       int
@@ -355,8 +358,8 @@ func (a *App) saveAs() {
 }
 func (a *App) saveAsThen(d *Document, done func()) {
 	initial, base := d.Path, a.Panels[a.Active].filesystemPath()
-	if d.Remote != nil {
-		initial = filepath.Join(base, filepath.Base(d.RemotePath))
+	if d.Source != nil {
+		initial = filepath.Join(base, d.Source.Name())
 	}
 	a.prompt("Save as", "Local file name", initial, func(s string) {
 		path := expand(s, base)
@@ -1127,11 +1130,13 @@ Shift+F4    Open/create another file
 Shift+F10   Save and close this document
 Cmd+Z / Cmd+Shift+Z Undo / redo
 Insert      Insert / overwrite
-Shift+arrows Stream selection   Alt+Shift+arrows Rectangular selection
+Shift+arrows Stream selection   Alt+Shift+Up/Down/Home/End Rectangular selection
 Cmd+C/X/V   Copy / cut / paste  Cmd+A Select all
 Ctrl+Insert Copy                Shift+Delete Cut
 Cmd+D       Delete selection
-Cmd+Left/Right  Word movement   Cmd+Home/End File start/end
+Cmd+Left/Right  Line start/end  Cmd+Up/Down, Cmd+Home/End File start/end
+Alt+Left/Right  Word movement   (Ctrl+Left/Right too)
+Ctrl+Space      Complete a Kubernetes manifest from its schema; Alt+F2 next problem
 Cmd+Backspace/Delete Delete word   Cmd+Y Delete line
 Cmd+K       Delete to line end  Alt+U / Alt+I Unindent / indent
 Enter       Newline with auto-indent    Tab Insert tab

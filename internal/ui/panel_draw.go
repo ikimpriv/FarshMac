@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func panelColumns(p *Panel) int {
@@ -62,15 +63,12 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 		return
 	}
 	g.Box(x, y, w, h, LightCyan, Blue)
-	label := p.Path
-	if p.Remote != nil {
-		label = p.Remote.Label() + p.Path
-	}
-	if p.Archive != nil {
-		label = "[Archive] " + label
-	}
+	label := p.label() + p.Path
 	if p.View == "Info panel" {
 		label = "Information"
+	}
+	if p.load != nil {
+		label += " …"
 	}
 	title := " " + tail(label, w-8) + " "
 	fg, bg := uint32(LightCyan), uint32(Blue)
@@ -84,9 +82,17 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	}
 	if p.View == "Quick view" {
 		lines := strings.Split(a.previewText, "\n")
+		describe := a.Panels[1-index].Kube != nil
+		if a.previewOffset > 0 && a.previewOffset < len(lines) {
+			lines = lines[a.previewOffset:]
+		}
 		for row, line := range lines {
 			if row >= h-3 {
 				break
+			}
+			if describe {
+				drawDescribeLine(g, x+2, y+2+row, w-4, line)
+				continue
 			}
 			g.Text(x+2, y+2+row, line, LightCyan, Blue, w-4)
 		}
@@ -126,6 +132,15 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				heading = "Name / Size / Modified"
 			}
 		}
+		if p.Kube != nil && columns == 1 && p.View != "Tree panel" {
+			heading = "Name / Kind / Status / Age"
+			if p.View == "Detailed" {
+				heading = "Name / Kind / Status / Created"
+			}
+			if p.kubeLevel().Level == kubeContainerFS {
+				heading = "Name / Size / Modified"
+			}
+		}
 		g.Text(xx+1, y+1, heading, Yellow, Blue, width-2)
 		sizeWidth := max(9, len(panelSize(p.TotalBytes, a.Settings.HumanReadableSizes)))
 		for _, r := range p.folderSizes {
@@ -138,7 +153,18 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			}
 			sizeWidth = max(sizeWidth, n)
 		}
-		extraWidth := min(width-4, max(sizeWidth, panelExtraWidth(p.View, width)+sizeWidth-9))
+		preferred := panelExtraWidth(p.View, width) + sizeWidth - 9
+		if p.Kube != nil && p.kubeLevel().Level != kubeContainerFS {
+			preferred = 30 // kind (11), status (12), age (5)
+			switch p.View {
+			case "Wide":
+				preferred = 12
+			case "Detailed":
+				preferred = 46
+			}
+			preferred = min(preferred, max(0, width*2/3))
+		}
+		extraWidth := min(width-4, max(sizeWidth, preferred))
 		nameWidth := max(0, width-extraWidth-3)
 		metadata := columns == 1 && p.View != "Tree panel" && width >= 12
 		for row := 0; row < rows; row++ {
@@ -190,8 +216,15 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				continue
 			}
 			size, date := "<DIR>", ""
-			if e.Info != nil {
+			if e.Info != nil && !e.Info.ModTime().IsZero() {
 				date = e.Info.ModTime().Format("02.01.06 15:04")
+			}
+			if k, ok := e.Info.(*kubeEntry); ok {
+				g.Text(xx+1, yy, name, fg, bg, nameWidth)
+				g.Set(xx+nameWidth+1, yy, "│", LightCyan, bg)
+				g.Text(xx+nameWidth+2, yy, k.panelColumns(p.View), fg, bg, width-nameWidth-2)
+				continue
+			} else if e.Info != nil {
 				if !e.Dir {
 					size = panelSize(e.Info.Size(), a.Settings.HumanReadableSizes)
 				}
@@ -249,6 +282,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			g.Set(xx+nameWidth+1, yy, "│", LightCyan, bg)
 			g.Text(xx+nameWidth+2, yy, extra, fg, bg, width-nameWidth-2)
 		}
+	}
+	if p.load != nil {
+		a.drawReading(g, p, x, y, w, h)
 	}
 	divider := y + h - 3
 	for col := x + 1; col < x+w-1; col++ {
@@ -315,4 +351,53 @@ func (p *Panel) loadInfo() {
 		}
 	}
 	p.InfoText = fmt.Sprintf("%s\n\n%d entries\n%s in files\n", p.Path, p.ItemCount, panelSizeLabel(p.TotalBytes, p.HumanReadableSizes))
+}
+
+// drawReading overlays a progress line while the folder is being read, so a
+// slow source (a cluster, a server) is visibly busy and Esc visibly stops it.
+func (a *App) drawReading(g *Grid, p *Panel, x, y, w, h int) {
+	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	elapsed := time.Since(p.load.started)
+	frame := spinner[int(elapsed/(100*time.Millisecond))%len(spinner)]
+	what := "folder"
+	if p.Kube != nil {
+		what = "cluster"
+	} else if p.Remote != nil {
+		what = "server"
+	}
+	text := fmt.Sprintf(" %s Reading %s… %ds · Esc stops ", frame, what, int(elapsed.Seconds()))
+	if elapsed < 300*time.Millisecond && p.Kube == nil {
+		return // Local folders usually finish before the overlay is worth drawing.
+	}
+	width := min(w-4, len([]rune(text)))
+	row := y + 2 + max(1, h-5)/2
+	g.Fill(x+(w-width)/2, row, width, 1, Black, Cyan)
+	g.Text(x+(w-width)/2, row, text, Black, Cyan, width)
+}
+
+// drawDescribeLine colours one line of kubectl describe output: section
+// headers (no indentation) in white, keys in yellow, values in cyan, so the
+// structure reads at a glance in the quick view.
+func drawDescribeLine(g *Grid, x, y, width int, line string) {
+	if width <= 0 {
+		return
+	}
+	trimmed := strings.TrimLeft(line, " ")
+	indent := len(line) - len(trimmed)
+	key, value, found := strings.Cut(trimmed, ":")
+	switch {
+	case found && !strings.ContainsAny(key, " \t") || found && indent == 0 && len(key) < 40:
+		// "Name:  value" or "Containers:"; a header has no value and no indent.
+		keyColor := uint32(Yellow)
+		if indent == 0 && strings.TrimSpace(value) == "" {
+			keyColor = White
+		}
+		g.Text(x, y, strings.Repeat(" ", indent)+key+":", keyColor, Blue, width)
+		rest := indent + len([]rune(key)) + 1
+		if rest < width {
+			g.Text(x+rest, y, value, LightCyan, Blue, width-rest)
+		}
+	default:
+		g.Text(x, y, line, LightCyan, Blue, width)
+	}
 }

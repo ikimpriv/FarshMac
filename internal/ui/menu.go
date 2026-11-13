@@ -38,7 +38,7 @@ func (a *App) menuSections() []menuSection {
 		}...)
 	}
 	settings := func(kind string) func() { return func() { a.settingsMenu(kind) } }
-	return []menuSection{
+	sections := []menuSection{
 		{"Left", 2, panel(0)},
 		{"Files", 11, []menuItem{
 			{"Open with macOS", "⇧Enter", a.openSystemSelected},
@@ -88,6 +88,12 @@ func (a *App) menuSections() []menuSection {
 		}},
 		{"Right", 46, panel(1)},
 	}
+	if extra := a.Panels[a.Active].backend().MenuSection(a, &a.Panels[a.Active]); extra != nil {
+		extra.X = 46
+		sections = append(sections[:4], *extra, sections[4])
+		sections[5].X = 46 + len([]rune(extra.Name)) + 2
+	}
+	return sections
 }
 
 func (a *App) menuKey(m Message) {
@@ -240,26 +246,47 @@ func (a *App) menuItemDisabled(section menuSection, item menuItem) bool {
 		}
 		switch label {
 		case "Info panel", "Quick view":
-			return p.Remote != nil
+			// Turning a server or cluster panel itself into a view loses its
+			// listing; Ctrl+Q previews it from the other panel instead.
+			return !p.can(capInfo)
 		case "Tree panel":
-			return p.Remote != nil || p.Archive != nil
+			return !p.can(capTree)
 		}
 		return false
 	}
 	p := a.Panels[a.Active]
 	other := a.Panels[1-a.Active]
-	remote, archive := p.Remote != nil, p.Archive != nil
 	switch label {
-	case "Open with macOS", "Archive commands…", "Find file…", "Find folder…", "Folder tree", "User menu":
-		return remote
-	case "Edit", "Rename or move…", "Make folder…", "Move to Trash…", "Delete permanently…":
-		return archive
-	case "New file…", "Link…", "File attributes…", "Apply command…", "Describe files…":
-		return remote || archive
+	case "Open with macOS":
+		return !p.can(capSystemOpen)
+	case "Archive commands…":
+		return !p.can(capArchiveOps)
+	case "Find file…", "Find folder…":
+		return !p.can(capFind)
+	case "Folder tree":
+		return !p.can(capTree)
+	case "User menu":
+		return !p.can(capUserMenu)
+	case "Edit":
+		return !p.can(capEdit)
+	case "Rename or move…":
+		return !p.can(capRename)
+	case "Make folder…":
+		return !p.can(capMkdir)
+	case "Move to Trash…", "Delete permanently…":
+		return !p.can(capDelete)
+	case "New file…":
+		return !p.can(capNewFile)
+	case "Link…":
+		return !p.can(capLinks)
+	case "File attributes…", "Describe files…":
+		return !p.can(capAttributes)
+	case "Apply command…":
+		return !p.can(capUserMenu)
 	case "Create archive…":
-		return remote || archive || other.Remote != nil
+		return !p.can(capArchiveOps) || p.virtual(p.Path) || !other.can(capLocalOutput)
 	case "Extract archive…":
-		return remote || other.Remote != nil
+		return !p.can(capArchiveOps) || !other.can(capLocalOutput)
 	}
 	return false
 }

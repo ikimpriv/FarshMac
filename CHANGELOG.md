@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Kubernetes panel
+
+- Add Kubernetes panels: Commands → Network connections → New Kubernetes cluster… connects through client-go (kubeconfig + context, exec auth plugins via the login shell PATH); profiles live in `kubernetes.json`.
+- Show the cluster as folders: namespaces, resource types with objects and their `kubectl get` columns, owned objects with ReplicaSets and ControllerRevisions collapsed, Service pods by selector, pod containers and container file systems.
+- F3/F4 open manifests (F4 saves with Update and reports conflicts), F5 exports manifests (recursively for folders, asking before Secrets), F7 creates a namespace, F8 deletes objects or a namespace (name typed), Shift+F8 keeps children, Shift+F3 logs, Alt+F3 follows logs in the terminal, Shift+F4 describes, Cmd+R refreshes.
+- Container file systems work like server panels (view, edit, copy in both directions, rename, mkdir, delete); a command typed at the prompt runs inside the container with a TTY in the terminal area, and Kubernetes → Open shell in container starts an interactive shell.
+- Check manifests in the editor against the kind's OpenAPI schema from the cluster (CRDs included): unknown fields, wrong types, enum values and missing required fields are marked, Ctrl+Space completes fields and values (required fields first and marked, object and array fields are inserted with their first child line or `- ` item ready), a dim hint after the cursor line shows the expected type, required fields, enum values and description, Alt+F2 jumps to the next problem.
+- F5 into a cluster namespace applies manifests: local YAML/JSON files and folders of them (recursively), or objects from another cluster panel exported clean; every object gets the target namespace, Retry / Skip / Cancel per manifest, optional force over other field managers.
+- Quick view scrolls (arrows, pages, Home/End when it is the active panel) and previews files inside containers; F3 shows manifests without managedFields; followed logs stop with Ctrl+C and no longer hit the request timeout (streams, watches and exec use clients without one); editing or deleting objects no longer re-reads a watched namespace.
+- Container file systems work on BusyBox images (stat separators), images whose find rejects the GNU format (Harbor), and shell-only images (kube-proxy: names and types through shell builtins, files read with a shell loop when cat is missing); exec failures such as "container not found" are reported as such instead of "no shell".
+- Ctrl+Q next to a Kubernetes panel shows kubectl describe of the current namespace, object or pod in the Quick view, with headers and keys highlighted.
+- YAML documents always indent with two spaces: Tab, selection indent, Alt+I and pasted text never produce tabs, whatever the editor settings.
+- Editor: Cmd+Left/Right go to line start/end, Cmd+Up/Down to document start/end, Option+Left/Right move by word.
+- Highlight manifests as YAML; the editor strips status, managedFields, uid, resourceVersion, creationTimestamp and generation and keeps ownerReferences.
+- Watch listed namespaces (Table watch, like `kubectl get -w`) and update the panel in place; show childless objects as files, kind/status/age columns, a visible reading indicator, and return to the panels with a key after a container command.
+- Panel modes are now strategies behind one `panelBackend` interface with capabilities; the key bar shows Far's Shift/Ctrl/Alt rows while a modifier is held.
+
 ## 0.21.0 — File safety, links, and window bookmarks
 
 - Improve editor permission checks, open/save errors, external-change detection, and explicit save-in-place recovery.

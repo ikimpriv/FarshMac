@@ -34,6 +34,7 @@ Unzip the universal macOS archive and move **FarshMac.app** to Applications. App
 - Internal viewer and editor, Chroma syntax highlighting, autoindent, search, and external application integration.
 - ZIP, TAR, compressed TAR, and other archive formats; enter archives as folders and copy files out.
 - FTP, FTPS, and SFTP panels, saved connection profiles, and configurable parallel copying.
+- Kubernetes panels (client-go, no kubectl needed): namespaces, resource types and objects as folders, manifests in the viewer/editor, logs, describe, container file systems and commands run inside containers.
 - Trash by default, explicit permanent deletion, cancellable background operations, and copy metadata options.
 - Link-aware local copy and move: relative symbolic links keep pointing at the same object (Smart, the default; As is and Copy contents are also available in the F5/F6 dialog), and hard-linked files copied together stay hard links.
 - Graphical image/PDF quick view and an information panel with macOS disk, memory, and power data.
@@ -80,6 +81,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Tab | Switch active panel (a hidden panel is skipped) |
 | Cmd+O | Switch between panels and terminal; synchronize the folder |
 | Cmd+Option+F3 | Calculate all displayed folder sizes |
+| Shift+F3 / Alt+F3 / Shift+F4 | Kubernetes panel: logs / follow logs in the terminal / describe |
 | F3 / F4 | View / edit; F3 on an image or PDF opens a graphical view (black background, picture centred, Esc closes); F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
@@ -117,6 +119,7 @@ In the viewer and editor:
 | F12 | Switch open document screens |
 | Cmd+R | Reload from disk (asks if there are unsaved changes) |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (viewer: previous position) |
+| Cmd+Left/Right, Cmd+Up/Down, Option+Left/Right | Editor: line start/end, document start/end, word movement |
 | Cmd+0…9 / Cmd+Option+0…9 | Go to / set a bookmark. Bookmarks are shared with the panels: a document bookmark reopens the file at the saved position from the panels or any other document (end of file if it shrank, nothing if the file is gone); a folder bookmark returns to the panels |
 | Ctrl+Insert / Shift+Delete | Copy / cut |
 
@@ -125,6 +128,22 @@ The editor saves atomically and keeps extended attributes, ACLs and hidden/nodum
 The terminal is bash by default (sh or zsh in Options → Terminal settings) and gets `TERM_PROGRAM=FarshMac`. If the shell exits it restarts with a 1/2/4/8 s backoff and stops after 5 failed starts; press Enter or Cmd+O to retry. Click the status line, or use Commands → **Last messages…**, to see the last 20 messages.
 
 F1 opens the complete in-app keyboard reference. On keyboards configured for media keys, hold Fn to use F1–F12. Files → **Calculate all folder sizes** calculates all displayed folders. Calculated sizes participate in size sorting. They remain in memory when navigating back or refreshing; `~` marks a cached, possibly outdated value, and `>=` marks an incomplete scan. Recalculate with F3 or Cmd+Option+F3. Previous-directory snapshots are limited to 128 directories, 16,384 results, and a 2 MiB estimated storage budget per panel; least recently used snapshots expire. The current panel is separate from this history budget. Sizes are not saved across application restarts.
+
+## Kubernetes panel
+
+**Commands → Network connections → New Kubernetes cluster…** asks for a kubeconfig file and a context. Profiles are saved in `kubernetes.json` next to the other settings and carry no secrets: credentials stay in the kubeconfig, and exec auth plugins (`gke-gcloud-auth-plugin`, `aws`, `kubelogin`) are found through the login shell's PATH, with an optional extra PATH per profile.
+
+The cluster is shown as folders: `/` lists namespaces, a namespace lists resource types that have objects (`deployments`, `services`, `configmaps`, CRD types; a type present in several API groups is named `plural.group`), a type lists its objects with the same STATUS/READY column as `kubectl get`, and an object lists the types of objects it owns. ReplicaSets and ControllerRevisions are collapsed, so `deployments/app/pods` holds the Deployment's pods directly, and `services/web/pods` holds the pods matched by the Service selector. Cluster-scoped objects (nodes, volumes, cluster roles) are not shown.
+
+| Level | Keys |
+| --- | --- |
+| Namespaces | F3/F4 manifest, F5 export every manifest of a namespace, F7 new namespace, F8 delete (type the name), Shift+F4 describe |
+| Type folder | F3 manifest without managedFields (read-only), F4 edit without status, managedFields and other server-managed fields and save with Update (conflicts are reported, your text is kept); manifests are highlighted as YAML, checked against the kind's schema from the cluster (CRDs included) with problem lines marked, Ctrl+Space completes fields and enum values (required first; objects and arrays are inserted with their first child line or `- ` item), a dim hint after the cursor line shows what the field expects, Alt+F2 jumps to the next problem, F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
+| Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
+| Namespace, type folder, object | F5 from a local panel applies the selected YAML/JSON files (folders recursively, as exported) with server-side apply into that namespace, which replaces the namespace named in the manifests; F5 from another cluster panel applies the selected objects' cleaned manifests there; a Force toggle takes fields over from other field managers |
+| Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls`/`cat` found in the container (GNU, BusyBox and shell-only images: without ls/stat/find the listing shows names and types only, without cat files are read-only); a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
+
+After a namespace is listed its resource types are watched, so the panel updates itself when objects appear, change or disappear (Cmd+R forces a full re-list). Ctrl+Q opens a Quick view that shows `kubectl describe` of the entry under the cursor (headers and keys highlighted) or the start of a file inside a container; Tab into the Quick view and scroll it with the arrows, PageUp/PageDown, Home and End. Objects that own nothing are shown as files (Enter shows the manifest); owners and pods are folders. The columns show kind, status and age (Detailed: creation time). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. The terminal stays a local shell except while a container command or followed log runs in it.
 
 ## Tests
 
@@ -139,7 +158,7 @@ GitHub Actions runs checks and produces an ad-hoc universal ZIP artifact. A sepa
 
 ## Scope and limitations
 
-This is an early release. Far Manager plugin binaries and macros are not compatible. Archive panels are read-only; editing an archive member requires extracting it first. Encrypted archives are refused ("Encrypted archives are not supported"), and some nested archive workflows are not supported. Remote metadata and rename behavior depend on the server. SFTP host keys are checked against `~/.ssh/known_hosts`; an unknown host can be trusted once or with **Trust and save**, while a changed or revoked key is refused. Settings are shared live between windows; one instance owns the window session at a time. Windows-specific information and actions are replaced with macOS equivalents.
+This is an early release. Far Manager plugin binaries and macros are not compatible. Kubernetes panels do not calculate folder sizes, and are not restored with the session. Archive panels are read-only; editing an archive member requires extracting it first. Encrypted archives are refused ("Encrypted archives are not supported"), and some nested archive workflows are not supported. Remote metadata and rename behavior depend on the server. SFTP host keys are checked against `~/.ssh/known_hosts`; an unknown host can be trusted once or with **Trust and save**, while a changed or revoked key is refused. Settings are shared live between windows; one instance owns the window session at a time. Windows-specific information and actions are replaced with macOS equivalents.
 
 See [archive support](ARCHIVE_SUPPORT.md), [terminal behavior](TERMINAL_PARITY.md), and [viewer/editor notes](VIEWER_EDITOR_PARITY.md). The detailed parity audits and [development history](docs/DEVELOPMENT_HISTORY.md) record implementation work over time; some older entries describe previous versions.
 

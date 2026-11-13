@@ -354,3 +354,76 @@ func TestModeCycleAndUndoPreserveSavedBytes(t *testing.T) {
 		t.Fatalf("undo saved stale preview bytes: %q, %v", after, err)
 	}
 }
+
+func TestEditorMacNavigationKeys(t *testing.T) {
+	a := textApp(t, "alpha beta gamma\nsecond line\n", true)
+	d := a.Doc
+	a.key(Message{Key: "ArrowRight", Alt: true})
+	if d.Cursor != 6 {
+		t.Fatal("Option+Right by word", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Meta: true})
+	if d.Cursor != len("alpha beta gamma") {
+		t.Fatal("Cmd+Right line end", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowLeft", Meta: true})
+	if d.Cursor != 0 {
+		t.Fatal("Cmd+Left line start", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowDown", Meta: true})
+	if d.Cursor != len(d.Text) {
+		t.Fatal("Cmd+Down document end", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowUp", Meta: true})
+	if d.Cursor != 0 {
+		t.Fatal("Cmd+Up document start", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Ctrl: true})
+	if d.Cursor != 6 {
+		t.Fatal("Ctrl+Right by word", d.Cursor)
+	}
+	a.key(Message{Key: "ArrowRight", Alt: true, Shift: true})
+	if d.Anchor != 6 || d.Cursor != 11 || d.Rect {
+		t.Fatal("Option+Shift+Right selects by word", d.Anchor, d.Cursor, d.Rect)
+	}
+}
+
+func TestYAMLEditorNeverInsertsTabs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.yaml")
+	os.WriteFile(path, []byte("a:\n"), 0644)
+	a, _ := New(root, root)
+	defer a.Close()
+	a.Settings.EditorExpandTabs = false
+	a.Settings.EditorTabSize = 8
+	a.openDocument(path, true)
+	d := a.Doc
+	d.Cursor = len(d.Text)
+	a.key(Message{Key: "Tab"})
+	if !strings.HasSuffix(d.Text, "\n  ") {
+		t.Fatalf("Tab in YAML must insert two spaces: %q", d.Text)
+	}
+	a.Handle(`{"Type":"paste","Text":"\tb: 1\n"}`)
+	if strings.Contains(d.Text, "\t") {
+		t.Fatalf("pasted tabs must become spaces: %q", d.Text)
+	}
+	// Indenting a selection with Tab (and Alt+I) adds spaces as well.
+	d.Anchor, d.Cursor = 0, len(d.Text)
+	a.key(Message{Key: "Tab"})
+	if strings.Contains(d.Text, "\t") || !strings.HasPrefix(d.Text, "  a:") {
+		t.Fatalf("selection indent in YAML: %q", d.Text)
+	}
+	a.key(Message{Key: "i", Alt: true})
+	if strings.Contains(d.Text, "\t") || !strings.HasPrefix(d.Text, "    a:") {
+		t.Fatalf("Alt+I indent in YAML: %q", d.Text)
+	}
+	// Other documents follow the settings.
+	txt := filepath.Join(root, "notes.txt")
+	os.WriteFile(txt, []byte("x\n"), 0644)
+	a.openDocument(txt, true)
+	a.Doc.Cursor = len(a.Doc.Text)
+	a.key(Message{Key: "Tab"})
+	if !strings.HasSuffix(a.Doc.Text, "\t") {
+		t.Fatalf("text files keep real tabs when configured: %q", a.Doc.Text)
+	}
+}

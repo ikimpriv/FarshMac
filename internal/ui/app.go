@@ -34,8 +34,9 @@ type Panel struct {
 	InfoOffset             int
 	viewReturns            map[string]panelViewReturn
 	Remote                 *remotefs.Config
-	RemoteLocalPath        string
+	RemoteLocalPath        string // Local folder behind a remote or Kubernetes panel.
 	Archive                *fsops.ArchiveIndex
+	Kube                   *kubePanel
 	Async                  bool
 	load                   *panelLoad
 	rollback               *panelRollback
@@ -97,6 +98,12 @@ func (p *Panel) Load(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
+	}
+	if p.Kube != nil {
+		if p.Async && !p.Kube.cachedFor(abs) {
+			return p.loadPanel(abs)
+		}
+		return p.loadKube(abs)
 	}
 	if p.Remote != nil {
 		if p.Async {
@@ -318,9 +325,16 @@ type App struct {
 	viewHistory                                               []viewRecord
 	Bookmarks                                                 map[int]bookmark // Folder and document bookmarks 0…9, per window.
 	Image                                                     *imageView       // F3 graphical view of an image or PDF.
+	mods                                                      modifiers        // Modifier keys held, for the key bar.
+	Foreign                                                   foreignStream    // Stream shown in the terminal instead of the shell (exec, logs).
+	foreignLabel                                              string
+	foreignDone                                               func()
+	foreignEnded                                              bool // The next key returns to the panels.
+	modsAt                                                    time.Time
 	previewKey, previewText                                   string
 	previewPending                                            bool
 	previewImage, previewPath, previewSent                    string
+	previewOffset                                             int // First line shown in the Quick view (scrolled with the arrows when it is the active panel).
 	lastMenu                                                  MenuState
 	Panels                                                    [2]Panel
 	Active                                                    int
@@ -389,6 +403,12 @@ func (a *App) Close() {
 	}
 	a.closed = true
 	a.stopSyntax()
+	a.stopForeign()
+	for i := range a.Panels {
+		if a.Panels[i].Kube != nil {
+			a.Panels[i].Kube.close()
+		}
+	}
 	if a.terminalHistory != nil {
 		h := a.terminalHistory
 		a.historyCleanup = make(chan struct{})
@@ -579,9 +599,20 @@ func (a *App) Handle(raw string) {
 	case "historyRead":
 		a.readTerminalHistory(m)
 		return
+	case "modifiers":
+		if mods := modifiersOf(m); mods != a.mods {
+			a.mods = mods
+			a.dirty = true
+		}
+		a.modsAt = time.Now()
+		return
 	case "inputBinary":
-		if a.Term != nil {
-			if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
+		if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
+			if a.Foreign != nil {
+				a.error(a.Foreign.Write(data))
+			} else if a.TermVisible && a.foreignReturn() {
+				return
+			} else if a.Term != nil {
 				a.error(a.Term.Write(string(data)))
 			}
 		}
@@ -601,9 +632,19 @@ func (a *App) Handle(raw string) {
 		if a.Term != nil {
 			a.error(a.Term.Resize(a.Cols, a.Rows-1))
 		}
+		if a.Foreign != nil {
+			a.error(a.Foreign.Resize(a.Cols, a.Rows-1))
+		}
 	case "quit":
 		a.RequestQuit()
 	case "input":
+		if a.Foreign != nil {
+			a.error(a.Foreign.Write([]byte(m.Text)))
+			return
+		}
+		if a.TermVisible && a.foreignReturn() {
+			return
+		}
 		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
 			a.retryShell()
 		}
@@ -638,6 +679,11 @@ func (a *App) Handle(raw string) {
 	case "click":
 		a.click(m)
 	case "key":
+		// A modifier report can be lost (focus changes); a key without the
+		// held modifier after a quiet spell resets the key bar row.
+		if a.mods != 0 && modifiersOf(m)&a.mods != a.mods && time.Since(a.modsAt) > 2*time.Second {
+			a.mods = modifiersOf(m)
+		}
 		a.key(m)
 	case "paste":
 		if a.FastFind != nil && a.Form == nil && a.Dialog == nil && a.Doc == nil && a.Menu == nil {
@@ -654,7 +700,7 @@ func (a *App) Handle(raw string) {
 				a.dirty = true
 				return
 			}
-			a.Doc.Insert(m.Text)
+			a.Doc.Insert(yamlText(a.Doc, m.Text))
 			a.Doc.modified()
 			return
 		}
@@ -725,6 +771,7 @@ func (a *App) key(m Message) {
 	if (m.Meta || m.Ctrl) && !m.Alt && !m.Shift && strings.EqualFold(m.Key, "o") && a.Dialog == nil && a.Form == nil {
 		a.Menu = nil
 		a.FastFind = nil
+		a.foreignEnded = false
 		if !a.TermVisible {
 			a.showTerminal()
 		} else {
@@ -828,6 +875,9 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && a.selectionKey(m) {
 		return
 	}
+	if p := &a.Panels[a.Active]; a.Menu == nil && p.kind() != backendLocal && p.backend().Key(a, p, m) {
+		return
+	}
 	if a.Menu == nil && a.panelBookmarkKey(m) {
 		return
 	}
@@ -839,6 +889,10 @@ func (a *App) key(m Message) {
 	if a.Menu == nil && m.Key == "Enter" && m.Shift && !m.Meta && !m.Ctrl && !m.Alt {
 		a.FastFind = nil
 		a.openSystemSelected()
+		return
+	}
+	if a.Foreign != nil && m.Meta && !m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == ".") {
+		a.stopForeign()
 		return
 	}
 	if a.Menu == nil && m.Meta && m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == "." || m.Key == ">") {
@@ -856,6 +910,9 @@ func (a *App) key(m Message) {
 	}
 	if (m.Key == "F3" || m.Key == "F4") && m.Shift && (m.Meta || m.Ctrl) {
 		a.openConfigured(m.Key == "F4", false, true)
+		return
+	}
+	if a.Menu == nil && a.Form == nil && a.Dialog == nil && a.Panels[a.Active].View == "Quick view" && a.quickViewKey(m) {
 		return
 	}
 	if a.Menu == nil && a.farPanelKey(m) {
@@ -1056,9 +1113,6 @@ func expand(s, base string) string {
 }
 func (a *App) function(n int) {
 	p := &a.Panels[a.Active]
-	if (n == 4 || n == 6 || n == 7 || n == 8) && a.archiveReadOnly() {
-		return
-	}
 	switch n {
 	case 1:
 		d := newDocument("FarshMac — Help", help)
@@ -1068,6 +1122,9 @@ func (a *App) function(n int) {
 	case 2:
 		a.userMenu()
 	case 3, 4:
+		if n == 4 && !p.can(capEdit) && p.backend().Open(a, p, true) {
+			return
+		}
 		a.openConfigured(n == 4, false, false)
 	case 5, 6:
 		a.transferDialog(n == 6)
@@ -1075,8 +1132,7 @@ func (a *App) function(n int) {
 		if !a.requireFilePanel() {
 			return
 		}
-		if p.Remote != nil {
-			a.remoteMkdir()
+		if p.backend().Mkdir(a, p) {
 			return
 		}
 		base, index := p.Path, a.Active
@@ -1115,6 +1171,19 @@ func (a *App) function(n int) {
 	}
 }
 func (a *App) execute() {
+	if a.Foreign != nil {
+		a.Status = "A command is running in the container; ⌘O to see it, ⌘. to stop it"
+		a.TermVisible = true
+		return
+	}
+	if p := &a.Panels[a.Active]; p.can(capExecute) {
+		if command := a.Command; strings.TrimSpace(command) != "" && p.backend().Execute(a, p, command) {
+			a.history = appendUnique(a.history, command, a.Settings.HistoryLimit)
+			a.historyAt = len(a.history)
+			a.Command = ""
+			return
+		}
+	}
 	if a.Term == nil {
 		if a.retryShell() || !a.shellRestartAt.IsZero() {
 			a.Status = "Shell unavailable; retrying…"
@@ -1153,7 +1222,7 @@ func (a *App) showTerminal() {
 			return
 		}
 	}
-	if a.Panels[a.Active].Remote == nil {
+	if a.Panels[a.Active].can(capShellSync) {
 		a.pendingShellCwd = a.Panels[a.Active].filesystemPath()
 		a.syncShellCwd()
 	}
@@ -1185,7 +1254,7 @@ func (a *App) returnFromTerminal() {
 		a.syncCwd()
 		return
 	}
-	if a.Panels[a.Active].Remote == nil && a.pendingShellCwd == "" {
+	if a.Panels[a.Active].can(capShellSync) && a.pendingShellCwd == "" {
 		a.shellPanelReturn = &shellPanelReturn{a.Active, a.Panels[a.Active].Path}
 	}
 }
@@ -1195,7 +1264,7 @@ func (a *App) finishPanelReturn() {
 		return
 	}
 	a.shellPanelReturn = nil
-	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].Remote == nil && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
+	if !a.TermVisible && a.Active == r.index && a.Panels[r.index].Path == r.path && a.Panels[r.index].can(capShellSync) && a.ShellCwd != "" && !a.shellAtArchive(r.index) {
 		a.error(a.Panels[r.index].Load(a.ShellCwd))
 	}
 }
@@ -1222,7 +1291,7 @@ func (a *App) shellAtArchive(i int) bool {
 	return shell == folder
 }
 func (a *App) syncCwd() {
-	if a.Panels[a.Active].Remote != nil || a.shellAtArchive(a.Active) {
+	if !a.Panels[a.Active].can(capShellSync) || a.shellAtArchive(a.Active) {
 		return
 	}
 	if a.ShellCwd != "" && a.ShellReady && a.pendingShellCwd == "" {
@@ -1296,6 +1365,7 @@ func (a *App) Poll() Update {
 	a.pollTerminalHistory()
 	a.pollTask()
 	a.pollSyntax()
+	a.pollManifestCheck()
 	for {
 		select {
 		case fn := <-a.jobs:
@@ -1310,6 +1380,9 @@ jobsDone:
 			a.dirty = true
 			a.noteInvalidRemoteNames(i)
 		}
+		if a.Panels[i].load != nil && !a.TermVisible {
+			a.dirty = true // Animate the reading indicator.
+		}
 		if s := a.Panels[i].loadStatus; s != "" {
 			a.Panels[i].loadStatus = ""
 			a.Status = s
@@ -1320,6 +1393,10 @@ jobsDone:
 	}
 	a.updateInfoPanels()
 	a.updatePreview()
+	a.pollKubeWatches()
+	if a.terminalCanDrain() {
+		a.pollForeign()
+	}
 	if a.Term != nil && a.terminalCanDrain() {
 		for i := 0; i < 8 && len(a.pending) < 256*1024; i++ {
 			select {
@@ -1457,6 +1534,14 @@ Cmd+0..9            Go to bookmark (keeps remembered cursor positions and marks)
                     to the window: a document bookmark opens that file at the
                     saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
+Kubernetes panel:   New Kubernetes cluster… (kubeconfig + context). Folders:
+                    namespaces > resource types > objects > owned objects > pod
+                    > containers > files. F3/F4 manifest (F4 saves with Update),
+                    F5 export manifests, F7 new namespace, F8 delete (Shift+F8
+                    keeps children), Shift+F3 logs, Alt+F3 follow logs, Shift+F4
+                    describe, Cmd+R refresh, F9 > Kubernetes > Open shell.
+                    In a container: files as on a server; a typed command runs
+                    in the container (Cmd+. stops it)
 FTP / FTPS / SFTP    Remote panel; terminal stays local
 F5 Parallel transfers: 1-8 workers, Esc cancels
 

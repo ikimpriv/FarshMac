@@ -435,11 +435,9 @@ func (a *App) runUserCommand(command string) {
 	}
 	panel := &a.Panels[a.Active]
 	p := panel.Current()
-	if panel.Archive != nil {
-		if _, inside := panel.Archive.Relative(p); inside {
-			a.Status = "Use F5 to copy this archive item out before running commands on it"
-			return
-		}
+	if panel.virtual(p) {
+		a.Status = "Use F5 to copy this archive item out before running commands on it"
+		return
 	}
 	a.Command = strings.ReplaceAll(command, "{}", terminal.Quote(p))
 	a.execute()
@@ -578,7 +576,11 @@ func (a *App) updatePreview() {
 		return
 	}
 	source := &a.Panels[1-index]
-	if source.Remote != nil {
+	if source.Kube != nil {
+		a.updateKubePreview(source)
+		return
+	}
+	if !source.can(capQuickView) {
 		a.previewImage = ""
 		a.previewText = "Remote file: use F3 to download and view"
 		return
@@ -589,12 +591,10 @@ func (a *App) updatePreview() {
 		a.previewText = "No file selected"
 		return
 	}
-	if source.Archive != nil {
-		if _, inside := source.Archive.Relative(path); inside {
-			a.previewKey, a.previewImage = "", ""
-			a.previewText = "Archive member: press F3 to extract and view"
-			return
-		}
+	if source.virtual(path) {
+		a.previewKey, a.previewImage = "", ""
+		a.previewText = "Archive member: press F3 to extract and view"
+		return
 	}
 	key := path
 	if len(source.Entries) > 0 {
@@ -616,6 +616,7 @@ func (a *App) updatePreview() {
 	}
 	a.previewKey = key
 	a.previewPath = path
+	a.previewOffset = 0
 	a.previewPending = true
 	o := fsops.NewOperation("Quick view")
 	o.IgnoreDSStore = a.Settings.IgnoreDSStore
@@ -714,4 +715,36 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// quickViewKey scrolls the Quick view when it is the active panel: arrows,
+// pages, Home and End move through the preview text.
+func (a *App) quickViewKey(m Message) bool {
+	if m.Meta || m.Ctrl || m.Alt || m.Shift {
+		return false
+	}
+	lines := strings.Count(a.previewText, "\n") + 1
+	_, w := a.panelRect(a.Active)
+	_ = w
+	page := max(1, a.Rows-9)
+	offset := a.previewOffset
+	switch m.Key {
+	case "ArrowUp":
+		offset--
+	case "ArrowDown":
+		offset++
+	case "PageUp":
+		offset -= page
+	case "PageDown":
+		offset += page
+	case "Home":
+		offset = 0
+	case "End":
+		offset = lines - page
+	default:
+		return false
+	}
+	a.previewOffset = max(0, min(offset, max(0, lines-page)))
+	a.dirty = true
+	return true
 }

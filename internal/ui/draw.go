@@ -34,21 +34,18 @@ func (a *App) Draw() *Grid {
 	}
 	g.Text(0, g.H-3, fitStatus(status, g.W), Gray, Black, g.W)
 	promptPath := a.Panels[a.Active].Path
-	if a.Panels[a.Active].Remote != nil {
+	if !a.Panels[a.Active].can(capShellSync) {
 		promptPath = "local:" + a.Panels[a.Active].filesystemPath()
+	}
+	if custom := a.Panels[a.Active].backend().CommandPrompt(&a.Panels[a.Active]); custom != "" {
+		promptPath = custom
 	}
 	prompt := promptPath + ">" + a.Command
 	g.Text(0, g.H-2, tail(prompt, g.W-1), Gray, Black, g.W-1)
 	cursor := min(len([]rune(prompt)), g.W-1)
 	g.Set(cursor, g.H-2, "▌", Gray, Black)
-	labels := []string{"Help", "UserMenu", "View", "Edit", "Copy", "RenMov", "MkFold", "Trash", "Menu", ""}
-	if a.Panels[a.Active].Remote != nil {
-		labels[7] = "Delete"
-	}
-	if a.Panels[a.Active].Archive != nil {
-		// Archives are read-only: F5 extracts, F4/F6/F7/F8 only explain that.
-		labels[3], labels[4], labels[5], labels[6], labels[7] = "", "Extract", "", "", ""
-	}
+	active := &a.Panels[a.Active]
+	labels := active.backend().KeyBar(active, a.mods)
 	if a.Settings.ShowKeys {
 		for i, label := range labels {
 			x := i * g.W / 10

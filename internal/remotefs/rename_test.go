@@ -34,7 +34,7 @@ func TestSFTPReplaceWithoutPosixRenameExplains(t *testing.T) {
 	o := fsops.NewOperation("Copy")
 	defer o.Cancel()
 	o.Collision = func(fsops.Collision) fsops.Resolution { return fsops.Resolution{Action: fsops.Replace} }
-	err = remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Remote: &c}, []remotefs.Pair{{Source: local, Destination: "/file"}}, remotefs.CopyOptions{Workers: 1}, o)
+	err = remotefs.Copy(remotefs.Endpoint{}, remotefs.RemoteEndpoint(&c), []remotefs.Pair{{Source: local, Destination: "/file"}}, remotefs.CopyOptions{Workers: 1}, o)
 	if err == nil || !strings.Contains(err.Error(), "cannot replace an existing file atomically (no posix-rename); delete /file first or choose Rename") {
 		t.Fatal(err)
 	}

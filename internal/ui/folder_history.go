@@ -17,13 +17,8 @@ import (
 const archiveHistoryPrefix = "[Archive] "
 
 func (p *Panel) historyEntry(abs string) string {
-	if p.Remote != nil {
-		return p.Remote.Label() + abs
-	}
-	if p.Archive != nil {
-		if _, inside := p.Archive.Relative(abs); inside {
-			return archiveHistoryPrefix + abs
-		}
+	if entry := p.backend().HistoryEntry(p, abs); entry != abs {
+		return entry
 	}
 	return abs
 }

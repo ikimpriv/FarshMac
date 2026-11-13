@@ -43,19 +43,15 @@ func (a *App) openDocumentAsync(path string, edit bool, opened func(*Document)) 
 }
 
 func (a *App) saveDocumentThen(d *Document, path string, overwrite bool, done func()) {
-	if d.Remote != nil && path == d.Path {
-		a.saveRemoteDocument(d, done, false)
+	if d.Source != nil && path == d.Path {
+		a.saveSourceDocument(d, done, false)
 		return
 	}
 	if !a.Async {
 		if err := a.saveDocument(d, path, overwrite); err != nil {
 			a.saveFailed(d, path, overwrite, done, err)
 		} else {
-			if d.Remote != nil {
-				d.Remote = nil
-				d.RemoteInfo = nil
-				d.RemotePath = ""
-			}
+			d.Source, d.SourceInfo = nil, nil
 			if done != nil {
 				done()
 			}
@@ -63,11 +59,7 @@ func (a *App) saveDocumentThen(d *Document, path string, overwrite bool, done fu
 		return
 	}
 	copy := cloneDocument(d)
-	if copy.Remote != nil {
-		copy.Remote = nil
-		copy.RemoteInfo = nil
-		copy.RemotePath = ""
-	}
+	copy.Source, copy.SourceInfo = nil, nil
 	a.backgroundTask("Saving file", func(o *fsops.Operation) (func(), func(), error) {
 		worker := &App{Operation: o}
 		err := worker.saveDocument(copy, path, overwrite)
