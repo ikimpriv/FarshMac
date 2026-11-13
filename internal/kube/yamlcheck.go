@@ -248,6 +248,10 @@ func CompleteManifest(doc []byte, line, column int, s *Schema) (string, []Comple
 		if parent == nil {
 			return "", nil
 		}
+		if parent.Type == "array" && parent.Items != nil {
+			parent = parent.Items // "- key: value": the key belongs to the item.
+		}
+		key = strings.TrimLeft(strings.TrimPrefix(strings.TrimLeft(key, " "), "-"), " ")
 		field := parent.Properties[strings.TrimSpace(key)]
 		if field == nil && parent.Additional != nil {
 			field = parent.Additional
@@ -290,7 +294,7 @@ func CompleteManifest(doc []byte, line, column int, s *Schema) (string, []Comple
 	var mapping *Schema
 	var present map[string]bool
 	if item {
-		parent, _ := mappingContext(lines, line-1, indent, s)
+		parent, _ := mappingContext(lines, line-1, indentOf(text), s)
 		if parent == nil || parent.Type != "array" || parent.Items == nil {
 			return "", nil
 		}
@@ -387,7 +391,9 @@ func ContextAt(doc []byte, line, column int, s *Schema) *FieldContext {
 	}
 	var parent *Schema
 	if item {
-		arr, _ := mappingContext(lines, line-1, indent, s)
+		// The list is found from the dash, not from the key after it:
+		// earlier "- " lines of the same list must not count as parents.
+		arr, _ := mappingContext(lines, line-1, indentOf(text), s)
 		if arr == nil || arr.Type != "array" || arr.Items == nil {
 			return nil
 		}
@@ -627,15 +633,23 @@ func mappingContext(lines []string, row, indent int, root *Schema) (*Schema, map
 // around row (the contiguous block with indentation >= indent).
 func presentKeys(lines []string, row, indent int) map[string]bool {
 	present := map[string]bool{}
-	scan := func(i int) bool {
+	// A "- " line two columns to the left starts a sequence item: scanning
+	// up it is our own item's first key (counted, then stop); scanning down
+	// it begins the next item (stop before it).
+	scan := func(i int, up bool) bool {
 		t := strings.TrimRight(lines[i], " \t")
 		if strings.TrimSpace(t) == "" {
 			return true
 		}
 		ind := indentOf(t)
 		body := strings.TrimLeft(t, " ")
-		if strings.HasPrefix(body, "- ") {
-			if ind == indent-2 || ind == indent {
+		itemStart := false
+		if strings.HasPrefix(body, "- ") || body == "-" {
+			if ind == indent-2 {
+				if !up {
+					return false
+				}
+				itemStart = true
 				body = strings.TrimLeft(body[1:], " ")
 				ind = len(t) - len(body)
 			} else if ind < indent {
@@ -650,11 +664,11 @@ func presentKeys(lines []string, row, indent int) map[string]bool {
 				present[key] = true
 			}
 		}
-		return true
+		return !itemStart
 	}
-	for i := row - 1; i >= 0 && scan(i); i-- {
+	for i := row - 1; i >= 0 && scan(i, true); i-- {
 	}
-	for i := row + 1; i < len(lines) && scan(i); i++ {
+	for i := row + 1; i < len(lines) && scan(i, false); i++ {
 	}
 	return present
 }

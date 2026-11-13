@@ -257,3 +257,31 @@ func TestContextAt(t *testing.T) {
 		t.Fatal("unresolvable")
 	}
 }
+
+func TestContextInsideSequenceItems(t *testing.T) {
+	f := kubetest.New(t)
+	c := testClient(t, f)
+	s, err := c.SchemaFor(context.Background(), schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := "apiVersion: example.com/v1\nkind: Widget\nspec:\n  size: 1\n  items:\n    - \n    - name: a\n      \n    - name: b\n      weight: 1\n"
+	// The key of an item line and the value after it resolve to the item's field,
+	// even when earlier "- " lines precede it.
+	if fc := ContextAt([]byte(doc), 7, 6, s); fc == nil || fc.Name != "name" || fc.InValue {
+		t.Fatalf("item key context %+v", fc)
+	}
+	if fc := ContextAt([]byte(doc), 7, 12, s); fc == nil || fc.Name != "name" || !fc.InValue {
+		t.Fatalf("item value context %+v", fc)
+	}
+	// A blank line inside an item lists the item's fields and completes only the missing ones.
+	if fc := ContextAt([]byte(doc), 8, 6, s); fc == nil || len(fc.Children) != 2 {
+		t.Fatalf("blank line in item %+v", fc)
+	}
+	if _, items := CompleteManifest([]byte(doc), 8, 6, s); len(items) != 1 || items[0].Label != "weight" {
+		t.Fatalf("completion inside item %+v", items)
+	}
+	if fc := ContextAt([]byte(doc), 10, 6, s); fc == nil || fc.Name != "weight" || fc.Type != "number" {
+		t.Fatalf("second key of an item %+v", fc)
+	}
+}
