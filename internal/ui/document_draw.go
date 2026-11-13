@@ -180,6 +180,9 @@ func (a *App) drawDoc(g *Grid) {
 		if d.Anchor >= 0 {
 			q = d.Pos(d.Anchor)
 		}
+		if d.Edit {
+			a.drawManifestHint(g, d, top, height, pos)
+		}
 		for i, row := range rows {
 			yy := top + i
 			col := 0

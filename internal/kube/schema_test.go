@@ -146,7 +146,7 @@ func TestCompleteManifest(t *testing.T) {
 	doc := "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: w1\nspec:\n  size: 3\n  re\n  items:\n    - name: a\n      \n  mode: \n"
 	// Keys under spec with a prefix: replicas; size is already present.
 	prefix, items := CompleteManifest([]byte(doc), 7, 4, s)
-	if prefix != "re" || labels(items) != "replicas" || items[0].Insert != "plicas: " || !strings.Contains(items[0].Detail, "int or string") {
+	if prefix != "re" || labels(items) != "replicas" || items[0].Insert != "plicas: " || !strings.Contains(items[0].Detail, "int or string") || items[0].Type != "int or string" {
 		t.Fatalf("prefix completion: %q %+v", prefix, items)
 	}
 	// Without a prefix: every spec key not yet present, sorted; objects insert "key:".
@@ -155,8 +155,30 @@ func TestCompleteManifest(t *testing.T) {
 		t.Fatalf("spec keys: %q %s", prefix, labels(items))
 	}
 	for _, c := range items {
-		if (c.Label == "items" || c.Label == "options") && c.Insert != c.Label+":" || c.Label == "mode" && c.Insert != "mode: " {
-			t.Fatalf("insert text %+v", c)
+		switch c.Label {
+		case "items":
+			if c.Insert != "items:\n    - " || c.Type != "[]object" {
+				t.Fatalf("array insert %+v", c)
+			}
+		case "options":
+			if c.Insert != "options:\n    " || c.Type != "object" {
+				t.Fatalf("object insert %+v", c)
+			}
+		case "mode":
+			if c.Insert != "mode: " || c.Type != "string (enum: fast, slow)" {
+				t.Fatalf("scalar insert %+v", c)
+			}
+		}
+	}
+	// Required fields come first and are marked; indentation follows the key.
+	_, items = CompleteManifest([]byte("spec:\n  items:\n    - "), 3, 6, s)
+	if labels(items) != "name *,weight" || !items[0].Required || items[0].Insert != "name: " {
+		t.Fatalf("required first: %+v", items)
+	}
+	_, items = CompleteManifest([]byte("apiVersion: v1\nkind: Widget\n"), 3, 0, s)
+	for _, c := range items {
+		if c.Label == "spec" && c.Insert != "spec:\n  " || c.Label == "metadata" && c.Insert != "metadata:\n  " {
+			t.Fatalf("root object insert %+v", c)
 		}
 	}
 	// Value completion: enum and booleans.
@@ -170,7 +192,7 @@ func TestCompleteManifest(t *testing.T) {
 	}
 	// A key under "- " in an array of objects, and a continuation line of the item.
 	prefix, items = CompleteManifest([]byte("spec:\n  items:\n    - n"), 3, 7, s)
-	if prefix != "n" || labels(items) != "name" {
+	if prefix != "n" || labels(items) != "name *" {
 		t.Fatalf("item key: %q %s", prefix, labels(items))
 	}
 	prefix, items = CompleteManifest([]byte(doc), 10, 6, s)
@@ -197,5 +219,41 @@ func TestCompleteManifest(t *testing.T) {
 	}
 	if _, items = CompleteManifest([]byte(doc), 99, 0, s); len(items) != 0 {
 		t.Fatal("line out of range")
+	}
+}
+
+func TestContextAt(t *testing.T) {
+	_, s := widgetSchema(t)
+	doc := "apiVersion: example.com/v1\nkind: Widget\nspec:\n  size: 3\n  mode: fast\n  items:\n    - name: a\n      weight: 1\n  \n"
+	c := ContextAt([]byte(doc), 4, 3, s)
+	if c == nil || c.Path != "spec.size" || c.Name != "size" || c.Type != "integer" || !c.Required || c.InValue || c.Description != "Size in units." {
+		t.Fatalf("scalar key: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 5, 9, s)
+	if c == nil || c.Name != "mode" || !c.InValue || strings.Join(c.Enum, ",") != "fast,slow" || c.Type != "string (enum: fast, slow)" {
+		t.Fatalf("value position: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 6, 4, s)
+	if c == nil || c.Path != "spec.items" || c.Type != "[]object" || strings.Join(c.Children, ",") != "name *,weight" {
+		t.Fatalf("array key: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 8, 8, s)
+	if c == nil || c.Path != "spec.items.weight" || c.Name != "weight" || c.Type != "number" || c.Required {
+		t.Fatalf("inside an item: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 7, 8, s)
+	if c == nil || c.Name != "name" || !c.Required || c.Path != "spec.items.name" {
+		t.Fatalf("item first key: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 9, 2, s)
+	if c == nil || c.Name != "" || c.Path != "spec" || c.Type != "object" || !strings.Contains(strings.Join(c.Children, ","), "size *") {
+		t.Fatalf("blank line in spec: %+v", c)
+	}
+	c = ContextAt([]byte(doc), 3, 0, s)
+	if c == nil || c.Path != "spec" || c.Name != "spec" || c.Children[0] != "size *" || c.Description != "Desired state of the widget." {
+		t.Fatalf("root key: %+v", c)
+	}
+	if ContextAt([]byte("bogus:\n  x: 1\n"), 2, 2, s) != nil || ContextAt([]byte(doc), 0, 0, s) != nil {
+		t.Fatal("unresolvable")
 	}
 }

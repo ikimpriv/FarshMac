@@ -208,9 +208,23 @@ func (c *checker) checkEnum(n *yaml.Node, s *Schema, path string) {
 
 // Completion is one suggestion of CompleteManifest.
 type Completion struct {
-	Insert string // Text to insert after the typed prefix, e.g. "replicas: ".
-	Label  string
-	Detail string // Type and short description.
+	Insert   string // Text to insert after the typed prefix; structural for objects and arrays.
+	Label    string // The name, with " *" when the field is required.
+	Detail   string // Type and short description.
+	Type     string // Rendered type: integer, object, []object, string (enum: a, b).
+	Required bool
+}
+
+// FieldContext describes the field the cursor line belongs to (ContextAt).
+type FieldContext struct {
+	Path        string // e.g. spec.replicas
+	Name        string // Key of the cursor line ("" on a blank or bare "- " line).
+	Type        string // Rendered type.
+	Required    bool   // Required in its parent.
+	Enum        []string
+	Description string   // First sentence.
+	Children    []string // Object types: property names, required first and marked with " *".
+	InValue     bool     // The cursor is after "key: ", typing a value.
 }
 
 // CompleteManifest suggests keys of the mapping at the cursor or values of
@@ -253,7 +267,7 @@ func CompleteManifest(doc []byte, line, column int, s *Schema) (string, []Comple
 		var items []Completion
 		for _, v := range candidates {
 			if strings.HasPrefix(v, prefix) {
-				items = append(items, Completion{Insert: v[len(prefix):], Label: v, Detail: detail(field)})
+				items = append(items, Completion{Insert: v[len(prefix):], Label: v, Detail: detail(field), Type: typeName(field)})
 			}
 		}
 		return prefix, items
@@ -304,29 +318,191 @@ func CompleteManifest(doc []byte, line, column int, s *Schema) (string, []Comple
 			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
+	required := map[string]bool{}
+	for _, r := range mapping.Required {
+		required[r] = true
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if required[names[i]] != required[names[j]] {
+			return required[names[i]]
+		}
+		return names[i] < names[j]
+	})
+	childIndent := strings.Repeat(" ", indent+2)
 	var items []Completion
 	for _, name := range names {
 		field := mapping.Properties[name]
 		insert := name[len(prefix):] + ": "
-		if field.Type == "object" || field.Type == "array" {
-			insert = name[len(prefix):] + ":"
+		switch field.Type {
+		case "object":
+			insert = name[len(prefix):] + ":\n" + childIndent
+		case "array":
+			insert = name[len(prefix):] + ":\n" + childIndent + "- "
 		}
-		items = append(items, Completion{Insert: insert, Label: name, Detail: detail(field)})
+		label := name
+		if required[name] {
+			label += " *"
+		}
+		items = append(items, Completion{Insert: insert, Label: label, Detail: detail(field), Type: typeName(field), Required: required[name]})
 	}
 	return prefix, items
 }
 
-func detail(s *Schema) string {
+// ContextAt resolves the field the cursor line belongs to: the key on that
+// line under its parent chain, the array's item schema on a "- " line, or
+// the parent mapping itself (Name "") on a line without a key. nil when
+// nothing resolves.
+func ContextAt(doc []byte, line, column int, s *Schema) *FieldContext {
+	if s == nil {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(string(doc), "\r\n", "\n"), "\n")
+	if line < 1 || line > len(lines) {
+		return nil
+	}
+	current := lines[line-1]
+	text := strings.TrimRight(current, " \t")
+	indent := indentOf(text)
+	if strings.TrimSpace(current) == "" {
+		indent = indentOf(strings.TrimRight(current, "\t\r")) // A blank line keeps its indentation.
+	}
+	body := strings.TrimLeft(text, " ")
+	item := false
+	if strings.HasPrefix(body, "- ") || body == "-" {
+		item = true
+		body = strings.TrimLeft(strings.TrimPrefix(body, "-"), " ")
+		indent = len(text) - len(body)
+		if body == "" {
+			indent = indentOf(text) + 2
+		}
+	}
+	key, _, hasKey := splitKeyValue(body)
+	runes := []rune(current)
+	column = max(0, min(column, len(runes)))
+	inValue := false
+	if hasKey {
+		if i := strings.Index(current, key+":"); i >= 0 {
+			inValue = column > len([]rune(current[:i+len(key)+1]))
+		}
+	}
+	var parent *Schema
+	if item {
+		arr, _ := mappingContext(lines, line-1, indent, s)
+		if arr == nil || arr.Type != "array" || arr.Items == nil {
+			return nil
+		}
+		parent = arr.Items
+	} else {
+		parent, _ = mappingContext(lines, line-1, indent, s)
+		if parent == nil {
+			return nil
+		}
+		if parent.Type == "array" && parent.Items != nil {
+			parent = parent.Items
+		}
+	}
+	path := pathAt(lines, line-1, indent, item)
+	if !hasKey {
+		if parent.Type != "object" && len(parent.Properties) == 0 {
+			return nil
+		}
+		return &FieldContext{Path: path, Type: typeName(parent), Enum: parent.Enum, Description: parent.Summary(), Children: childNames(parent)}
+	}
+	field := parent.Properties[key]
+	if field == nil && parent.Additional != nil {
+		field = parent.Additional
+	}
+	if field == nil {
+		return nil
+	}
+	required := false
+	for _, r := range parent.Required {
+		required = required || r == key
+	}
+	ctx := &FieldContext{Path: joinPath(path, key), Name: key, Type: typeName(field), Required: required, Enum: field.Enum, Description: field.Summary(), InValue: inValue}
+	if field.Type == "object" || len(field.Properties) > 0 {
+		ctx.Children = childNames(field)
+	} else if field.Type == "array" && field.Items != nil && (field.Items.Type == "object" || len(field.Items.Properties) > 0) {
+		ctx.Children = childNames(field.Items)
+	}
+	return ctx
+}
+
+// pathAt rebuilds the dotted path of the mapping a line belongs to from the
+// indentation chain above it ("spec.items" for a line inside an item).
+func pathAt(lines []string, row, indent int, item bool) string {
+	var parts []string
+	want := indent
+	for i := row - 1; i >= 0 && want > 0; i-- {
+		t := strings.TrimRight(lines[i], " \t")
+		if strings.TrimSpace(t) == "" || strings.HasPrefix(strings.TrimSpace(t), "#") {
+			continue
+		}
+		ind := indentOf(t)
+		if ind >= want {
+			continue
+		}
+		body := strings.TrimLeft(t, " ")
+		if strings.HasPrefix(body, "- ") || body == "-" {
+			body = strings.TrimLeft(strings.TrimPrefix(body, "-"), " ")
+		}
+		if key, _, ok := splitKeyValue(body); ok && strings.TrimSpace(strings.TrimPrefix(body, key+":")) == "" {
+			parts = append(parts, key)
+		}
+		want = ind
+	}
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return strings.Join(parts, ".")
+}
+
+func childNames(s *Schema) []string {
+	required := map[string]bool{}
+	for _, r := range s.Required {
+		required[r] = true
+	}
+	var names []string
+	for name := range s.Properties {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if required[names[i]] != required[names[j]] {
+			return required[names[i]]
+		}
+		return names[i] < names[j]
+	})
+	for i, name := range names {
+		if required[name] {
+			names[i] = name + " *"
+		}
+	}
+	return names
+}
+
+// typeName renders a schema's type for completion lists and status lines.
+func typeName(s *Schema) string {
 	t := s.Type
 	switch {
 	case s.IntOrString:
 		t = "int or string"
 	case t == "":
 		t = "any"
-	case t == "array" && s.Items != nil && s.Items.Type != "":
-		t = "[]" + s.Items.Type
+	case t == "array" && s.Items != nil:
+		if s.Items.Type != "" {
+			t = "[]" + s.Items.Type
+		} else {
+			t = "[]any"
+		}
 	}
+	if len(s.Enum) > 0 {
+		t += " (enum: " + strings.Join(s.Enum, ", ") + ")"
+	}
+	return t
+}
+
+func detail(s *Schema) string {
+	t := typeName(s)
 	if d := s.Summary(); d != "" {
 		return t + " · " + d
 	}

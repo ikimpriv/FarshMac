@@ -439,4 +439,35 @@ func TestKubeManifestSchemaCheckAndCompletion(t *testing.T) {
 	if !strings.HasSuffix(d.Text, "mode: slow") {
 		t.Fatal("enum inserted", d.Text[len(d.Text)-20:])
 	}
+	// The hint after the cursor line says what the field expects.
+	if hint := d.manifestHint(); !strings.Contains(hint, "fast | slow") {
+		t.Fatal("value hint", hint)
+	}
+	y := 1 + d.Pos(d.Cursor).Row - d.Offset
+	if line := gridLine(a.Draw(), y); !strings.Contains(line, "◂ fast | slow") {
+		t.Fatal("hint drawn", line)
+	}
+	// Choosing an array field inserts the first item marker on a new line.
+	d.Insert("\n  it")
+	d.modified()
+	a.key(Message{Key: " ", Ctrl: true})
+	if !strings.HasSuffix(d.Text, "  items:\n    - ") {
+		t.Fatalf("array insert %q", d.Text[len(d.Text)-20:])
+	}
+	if hint := d.manifestHint(); !strings.Contains(hint, "name *") {
+		t.Fatal("item hint lists required child fields", hint)
+	}
+	// Under the item, the required child is offered (listed with its marker
+	// when there are several candidates, inserted directly when it is alone).
+	d.Insert("\n      ")
+	d.modified()
+	a.key(Message{Key: " ", Ctrl: true})
+	if a.Form != nil {
+		if !strings.Contains(strings.Join(a.Form.Choice, "\n"), "name *") {
+			t.Fatal("required marker in the list", a.Form.Choice)
+		}
+		a.key(Message{Key: "Escape"})
+	} else if !strings.HasSuffix(d.Text, "name: ") {
+		t.Fatalf("item field completion %q", d.Text[len(d.Text)-30:])
+	}
 }
