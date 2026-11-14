@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Kubernetes panel
+## 0.22.0 — Kubernetes panels and remote workflows
 
 - Add Kubernetes panels: Commands → Network connections → New Kubernetes cluster… connects through client-go (kubeconfig + context, exec auth plugins via the login shell PATH); profiles live in `kubernetes.json`.
 - Show the cluster as folders: namespaces, resource types with objects and their `kubectl get` columns, owned objects with ReplicaSets and ControllerRevisions collapsed, Service pods by selector, pod containers and container file systems.
@@ -16,6 +16,13 @@
 - Highlight manifests as YAML; the editor strips status, managedFields, uid, resourceVersion, creationTimestamp and generation and keeps ownerReferences.
 - Watch listed namespaces (Table watch, like `kubectl get -w`) and update the panel in place; show childless objects as files, kind/status/age columns, a visible reading indicator, and return to the panels with a key after a container command.
 - Panel modes are now strategies behind one `panelBackend` interface with capabilities; the key bar shows Far's Shift/Ctrl/Alt rows while a modifier is held.
+
+- Copy and move Kubernetes resources, including CRs, between namespace/cluster panels through a resource abstraction. Local copy/rename creates a new object; moves delete the original only after creation, with UID/resourceVersion preconditions and orphan propagation.
+- F5/F6 target the other panel, including cross-filesystem moves; Shift+F5/F6 accept a new name in the current folder or namespace. Same-container copies keep file payloads inside the pod; moves use its filesystem rename.
+- Cmd+= matches local, remote and Kubernetes locations without replacing Quick view; Alt+F1/F2 restores a visible filesystem panel when choosing a volume.
+- Cancel discovery, describe, manifest and schema requests promptly. Invalidate cluster caches after connection failures; watcher-confirmed deletions update both panels, including the last object of a type.
+- Keep container filesystem reads off the UI thread and out of watcher redraws, fixing stalls when the same pod is open in both panels.
+- Suppress generic protocol metadata warnings for same-remote-filesystem copies and editor saves back to their source, while retaining actual metadata errors. Fix a race between saving connection profiles and background folder reads.
 
 ## 0.21.0 — File safety, links, and window bookmarks
 
