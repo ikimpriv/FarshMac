@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.0 — Kubernetes panels and remote workflows
+## 0.22.1 — Kubernetes panels and remote workflows
 
 - Add Kubernetes panels: Commands → Network connections → New Kubernetes cluster… connects through client-go (kubeconfig + context, exec auth plugins via the login shell PATH); profiles live in `kubernetes.json`.
 - Show the cluster as folders: namespaces, resource types with objects and their `kubectl get` columns, owned objects with ReplicaSets and ControllerRevisions collapsed, Service pods by selector, pod containers and container file systems.

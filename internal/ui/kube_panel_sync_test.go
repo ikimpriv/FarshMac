@@ -26,6 +26,7 @@ func TestMatchKubePanelAndWatchDeleteLastObject(t *testing.T) {
 		a.Panels[i].kubeWatchRevision = k.changed.Load()
 	}
 	before := k.deleted.Load()
+	waitKubeWatch(t, f, "/apis/example.com/v1/namespaces/shop/widgets")
 	f.Emit("/apis/example.com/v1/namespaces/shop/widgets", "DELETED", kubetest.Obj("Widget", "shop", "w1", "widget-1", nil, nil, nil))
 	deadline := time.Now().Add(3 * time.Second)
 	for k.deleted.Load() == before && time.Now().Before(deadline) {
@@ -115,5 +116,18 @@ func TestMatchOtherPanelPreservesQuickView(t *testing.T) {
 	a.key(Message{Key: "=", Meta: true})
 	if a.Panels[1].Path != before {
 		t.Fatal("quick view used as a filesystem location")
+	}
+}
+
+// FakeAPI delivers events only to established streams; unlike a real API
+// server it does not replay events from an earlier resourceVersion.
+func waitKubeWatch(t *testing.T, f *kubetest.FakeAPI, collection string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for f.Watchers(collection) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if f.Watchers(collection) == 0 {
+		t.Fatalf("watch did not subscribe: %s", collection)
 	}
 }

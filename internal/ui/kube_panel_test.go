@@ -337,6 +337,7 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	if !p.Kube.watching("shop") || !p.Kube.watching("") {
 		t.Fatal("watches must start after listing", p.Kube.watches)
 	}
+	waitKubeWatch(t, f, "/apis/apps/v1/namespaces/shop/deployments")
 	f.Emit("/apis/apps/v1/namespaces/shop/deployments", "ADDED", kubetest.Obj("Deployment", "shop", "late", "dep-late", nil, nil, map[string]string{"READY": "0/1"}))
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(strings.Join(entryNames(p), ","), "late") {
@@ -365,6 +366,7 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	if !p.Kube.watching("shop") || len(p.Entries) < 2 || p.load != nil {
 		t.Fatal("watch did not resume after expiry", p.Kube.watching("shop"), len(p.Entries), p.load != nil)
 	}
+	waitKubeWatch(t, f, "/apis/apps/v1/namespaces/shop/deployments")
 	f.Emit("/apis/apps/v1/namespaces/shop/deployments", "DELETED", kubetest.Obj("Deployment", "shop", "late", "dep-late", nil, nil, nil))
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && strings.Contains(strings.Join(entryNames(p), ","), "late") {
@@ -377,6 +379,7 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	// Namespaces are watched too.
 	a.error(p.Load("/"))
 	waitNetwork(t, a)
+	waitKubeWatch(t, f, "/api/v1/namespaces")
 	f.Emit("/api/v1/namespaces", "ADDED", kubetest.Obj("Namespace", "", "watched", "ns-watched", nil, nil, map[string]string{"STATUS": "Active"}))
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(strings.Join(entryNames(p), ","), "watched") {
