@@ -71,6 +71,7 @@ func (a *App) openArchiveAt(index int, path, target, cursor string) {
 			p.cancelPanelLoad()
 			p.cancelTree()
 			p.Remote = nil
+			p.rememberFileView()
 			p.Archive = catalog
 			// Archive directories use file views, never a native filesystem tree.
 			if p.View == "Tree panel" || p.View == "Info panel" || p.View == "Quick view" {
@@ -179,11 +180,20 @@ func (a *App) viewArchiveMember() {
 func (a *App) matchOtherPanel() {
 	src := &a.Panels[a.Active]
 	dst := &a.Panels[1-a.Active]
+	if src.View == "Quick view" || dst.View == "Quick view" {
+		return
+	}
 	dst.cancelPanelLoad()
 	dst.cancelTree()
 	previous := *dst
 	dst.Remote, dst.RemoteLocalPath = src.Remote, src.RemoteLocalPath
 	dst.Archive = src.Archive
+	dst.rememberFileView()
+	dst.Kube = src.Kube
+	dst.kubeWatchRevision = 0
+	if dst.Kube != nil || dst.Remote != nil {
+		dst.Async = true
+	}
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
 		dst.View = "Full"
 	}
@@ -201,6 +211,9 @@ func (a *App) matchOtherPanel() {
 				}
 			}
 		}
+	}
+	if previous.Kube != nil && previous.Kube != src.Kube {
+		previous.Kube.close()
 	}
 	dst.Hidden = false
 	a.previewKey = ""

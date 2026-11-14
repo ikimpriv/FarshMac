@@ -85,6 +85,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | F3 / F4 | View / edit; F3 on an image or PDF opens a graphical view (black background, picture centred, Esc closes); F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
+| Shift+F5 / Shift+F6 | Enter a new name to copy / rename the current item in the same folder or namespace (local, FTP/SFTP, container files, Kubernetes resources) |
 | Alt+F6 | Create a symbolic link (relative by default) or hard link; naming an existing folder creates the link inside it |
 | F8 | Move to Trash |
 | Shift+F8 / Shift+Delete | Delete permanently (always asks) |
@@ -102,7 +103,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | ⌘⌥0…9 / ⌘0…9 | Save / go to a bookmark, the same keys as in the viewer/editor. A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
 | Cmd+Shift+H | Shell command history (terminal mode): Enter to run, F4 to edit |
-| Cmd++ / Cmd+− | Font size larger / smaller (10–24); in terminal mode Cmd+= also zooms in and Cmd+0 resets, in panels Cmd+= opens the same folder in the other panel |
+| Cmd++ / Cmd+− | Font size larger / smaller (10–24); in terminal mode Cmd+= also zooms in and Cmd+0 resets, in panels Cmd+= opens the same local/remote folder or Kubernetes location in the other panel, unless either panel is Quick view |
 | Ctrl+Cmd+F | Full screen |
 | Cmd+N / Cmd+W | New window (inherits folders and histories) / close window |
 | Cmd+Q | Quit; F10 closes only the viewer/editor and does nothing in panels |
@@ -142,6 +143,12 @@ The cluster is shown as folders: `/` lists namespaces, a namespace lists resourc
 | Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
 | Namespace, type folder, object | F5 from a local panel applies the selected YAML/JSON files (folders recursively, as exported) with server-side apply into that namespace, which replaces the namespace named in the manifests; F5 from another cluster panel applies the selected objects' cleaned manifests there; a Force toggle takes fields over from other field managers |
 | Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls`/`cat` found in the container (GNU, BusyBox and shell-only images: without ls/stat/find the listing shows names and types only, without cat files are read-only); a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
+
+Shift+F5 copies the current resource under a new name in the same namespace; Shift+F6 renames it by creating a new object and deleting the original. F6 between Kubernetes resource panels moves selected resources to the destination namespace or cluster. These operations use the same resource abstraction for built-in kinds and CRs. Existing names are not overwritten by rename/move. A move deletes the source only after the destination is created, with UID/resourceVersion preconditions; if deletion fails, both objects remain and an error is shown. Moves are not atomic, and owned resources remain orphaned rather than being deleted or silently reparented. Namespace rename/move is not supported.
+
+F5/F6 use the other panel as their destination, including local volumes, FTP/SFTP and container filesystems. Cross-filesystem moves copy before deleting the source; a failed or skipped copy retains its source. Shift+F5/F6 accept a name only and cannot change the destination folder or namespace.
+
+When both filesystem panels point to the same pod/container, file contents are copied inside the container and moves use its `mv`; no file payload is downloaded to the Mac. The same applies to Shift+F5/F6. Collision handling, staged publication, metadata options, progress and cancellation still apply. Archive panels remain read-only.
 
 After a namespace is listed its resource types are watched, so the panel updates itself when objects appear, change or disappear (Cmd+R forces a full re-list). Ctrl+Q opens a Quick view that shows `kubectl describe` of the entry under the cursor (headers and keys highlighted) or the start of a file inside a container; Tab into the Quick view and scroll it with the arrows, PageUp/PageDown, Home and End. Objects that own nothing are shown as files (Enter shows the manifest); owners and pods are folders. The columns show kind, status and age (Detailed: creation time). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. The terminal stays a local shell except while a container command or followed log runs in it.
 

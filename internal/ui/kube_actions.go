@@ -110,6 +110,13 @@ func (s *manifestSource) Store(o *fsops.Operation, staged string, _ os.FileInfo,
 // object in a type folder, the pod of a containers listing; nil elsewhere.
 func (p *Panel) manifestSource(virtual string) documentSource {
 	k := p.Kube
+	// Entries remain visible after disconnect; F3 can retry without trusting
+	// the invalidated namespace snapshot.
+	if virtual == p.Current() {
+		if obj := p.kubeCurrent(); obj != nil {
+			return &manifestSource{k: k, ref: obj.Ref()}
+		}
+	}
 	segs := kubeSegments(virtual)
 	level := p.kubeLevel()
 	switch {

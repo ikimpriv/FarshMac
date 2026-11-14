@@ -43,14 +43,24 @@ var discoveryMu sync.Mutex
 // without subresources and metrics. The answer is cached per client.
 func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 	discoveryMu.Lock()
-	defer discoveryMu.Unlock()
-	if c.resources != nil {
-		return c.resources.list, nil
+	epoch := c.ConnectionEpoch()
+	if c.resources != nil && c.resourcesEpoch == epoch {
+		list := c.resources.list
+		discoveryMu.Unlock()
+		return list, nil
 	}
+	discoveryMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	lists, err := c.disc.ServerPreferredNamespacedResources()
+	disc, err := discovery.NewDiscoveryClientForConfig(contextualConfig(c.config, ctx))
+	if err != nil {
+		return nil, err
+	}
+	lists, err := disc.ServerPreferredNamespacedResources()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, err
 	}
@@ -78,6 +88,9 @@ func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 			all = append(all, Resource{GVR: schema.GroupVersionResource{Group: group, Version: version, Resource: r.Name}, Kind: r.Kind, Singular: r.SingularName, Namespaced: true, Verbs: append([]string(nil), r.Verbs...)})
 		}
 	}
+	discoveryMu.Lock()
+	defer discoveryMu.Unlock()
+	c.resourcesEpoch = epoch
 	c.resources = buildResourceCache(all)
 	return c.resources.list, nil
 }

@@ -827,3 +827,20 @@ func lsPerms(s string) os.FileMode {
 	}
 	return mode
 }
+
+// CopyFile stages content entirely in the container; no file bytes pass through
+// the exec stream. A separate rename publishes the staged file after checks.
+func (f *ContainerFS) CopyFile(from, to, previous string) error {
+	script := "cat -- " + shQuote(from) + " > " + shQuote(to)
+	if previous != "" {
+		script = "cat -- " + shQuote(previous) + " " + shQuote(from) + " > " + shQuote(to)
+	}
+	_, err := f.run("copy", from, script, nil)
+	return err
+}
+
+// Canonical resolves directory aliases for recursive-transfer safety checks.
+func (f *ContainerFS) Canonical(p string) (string, error) {
+	out, err := f.run("resolve directory", p, "cd -P -- "+shQuote(p)+" && pwd -P", nil)
+	return strings.TrimSuffix(string(out), "\n"), err
+}

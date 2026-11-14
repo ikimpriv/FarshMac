@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -79,6 +80,10 @@ func localManifests(paths []string) ([]manifestFile, error) {
 // kubeApplyDialog handles F5 with a Kubernetes namespace as the destination:
 // confirms, then applies every manifest of the selection there.
 func (a *App) kubeApplyDialog(source, target *Panel) bool {
+	return a.kubeApplyDialogTo(source, target, false)
+}
+
+func (a *App) kubeApplyDialogTo(source, target *Panel, move bool) bool {
 	ns, ok := kubeApplyTarget(target)
 	if !ok {
 		a.Status = "Choose a namespace (or a folder inside one) in the cluster panel to apply manifests"
@@ -124,6 +129,8 @@ func (a *App) kubeApplyDialog(source, target *Panel) bool {
 		force := fields[1].Checked
 		a.workProgress(label, func(o *fsops.Operation) error {
 			applied := 0
+			originalFiles := map[string][32]byte{}
+			skippedBefore := o.Snapshot().Skipped
 			apply := func(name string, obj *unstructured.Unstructured) error {
 				return o.Attempt("apply", name, "", func() error {
 					if obj.GetName() == "" {
@@ -144,6 +151,9 @@ func (a *App) kubeApplyDialog(source, target *Panel) bool {
 				data, err := os.ReadFile(f.Path)
 				if err != nil {
 					return err
+				}
+				if move {
+					originalFiles[f.Path] = sha256.Sum256(data)
 				}
 				docs, err := kube.Decode(data)
 				if err != nil {
@@ -166,24 +176,42 @@ func (a *App) kubeApplyDialog(source, target *Panel) bool {
 				}
 				name := path.Join(it.obj.Namespace, it.file)
 				o.Add(name, 0)
-				live, err := sourceClient.Get(o.Context(), it.obj.Ref())
-				if err != nil {
-					return fmt.Errorf("%s: %w", name, err)
-				}
-				clean, err := kube.ExportYAMLMode(live, kube.ExportClean)
-				if err != nil {
+				err := o.Attempt("copy resource", name, target, func() error {
+					err := kube.TransferResource(o.Context(), sourceClient, k.client, it.obj.Ref(), kube.ResourceTransferOptions{Namespace: target, Replace: true, Force: force})
+					if err == nil {
+						applied++
+					}
+					return err
+				})
+				if err := fsops.IgnoreSkipped(err); err != nil {
 					return err
 				}
-				docs, err := kube.Decode(clean)
-				if err != nil || len(docs) != 1 {
-					return fmt.Errorf("%s: cannot re-read the exported manifest", name)
-				}
-				if err := fsops.IgnoreSkipped(apply(name, docs[0])); err != nil {
-					return err
-				}
+
 				o.Complete(name)
 			}
 			k.noteChanged(target)
+			if move && applied > 0 && o.Snapshot().Skipped == skippedBefore {
+				for filename, original := range originalFiles {
+					if err := o.Check(); err != nil {
+						return err
+					}
+					current, err := os.ReadFile(filename)
+					if err != nil {
+						return err
+					}
+					if sha256.Sum256(current) != original {
+						return fmt.Errorf("manifests applied; changed source retained: %s", filename)
+					}
+				}
+				for filename := range originalFiles {
+					if err := o.Check(); err != nil {
+						return err
+					}
+					if err := os.Remove(filename); err != nil {
+						return fmt.Errorf("manifests applied; source retained: %w", err)
+					}
+				}
+			}
 			if applied == 0 {
 				return fmt.Errorf("nothing applied")
 			}
@@ -191,5 +219,9 @@ func (a *App) kubeApplyDialog(source, target *Panel) bool {
 		})
 	})
 	a.Form.Primary = "Apply"
+	if move {
+		a.Form.Primary = "Move"
+		a.Form.Message = "Apply manifests to the destination, then remove unchanged source files. Other files and folders remain."
+	}
 	return true
 }

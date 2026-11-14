@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -32,7 +31,7 @@ type Schema struct {
 var ErrNoSchema = errors.New("no schema published for this kind")
 
 type openAPICache struct {
-	mu        sync.Mutex
+	lock      chan struct{}
 	index     map[string]string // "apis/apps/v1" -> server relative URL
 	documents map[string]map[string]json.RawMessage
 	schemas   map[schema.GroupVersionKind]*Schema
@@ -42,13 +41,22 @@ type openAPICache struct {
 // for the client's lifetime.
 func (c *Client) SchemaFor(ctx context.Context, gvk schema.GroupVersionKind) (*Schema, error) {
 	c.openapiMu.Lock()
-	if c.openapi == nil {
-		c.openapi = &openAPICache{documents: map[string]map[string]json.RawMessage{}, schemas: map[schema.GroupVersionKind]*Schema{}}
+	epoch := c.ConnectionEpoch()
+	if c.openapi == nil || c.openapiEpoch != epoch {
+		c.openapiEpoch = epoch
+		c.openapi = &openAPICache{lock: make(chan struct{}, 1), documents: map[string]map[string]json.RawMessage{}, schemas: map[schema.GroupVersionKind]*Schema{}}
 	}
 	cache := c.openapi
 	c.openapiMu.Unlock()
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	select {
+	case cache.lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-cache.lock }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s, ok := cache.schemas[gvk]; ok {
 		if s == nil {
 			return nil, ErrNoSchema

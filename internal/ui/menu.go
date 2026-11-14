@@ -61,7 +61,7 @@ func (a *App) menuSections() []menuSection {
 			{"Find file…", "⌥F7", func() { a.findFiles(false) }}, {"Command history", "⌥F8", func() { a.historyMenu("Commands") }},
 			{"Find folder…", "", func() { a.findFiles(true) }}, {"Folder tree", "⌥F10", a.treeMenu},
 			{"File view/edit history", "⌥F11", func() { a.historyMenu("Files") }}, {"Folder history", "⌥F12", func() { a.historyMenu("Folders") }},
-			{"Same folder in other panel", "⌘=", a.matchOtherPanel},
+			{"Same location in other panel", "⌘=", a.matchOtherPanel},
 			{"Swap panels", "⌘U", func() { a.Panels[0], a.Panels[1] = a.Panels[1], a.Panels[0]; a.previewKey = "" }},
 			{"Panels on/off / terminal", "⌘O", a.showTerminal},
 			{"Compare folders", "", a.compareFolders}, {"User menu", "F2", a.userMenu}, {"Edit user menu…", "", a.editUserMenu},

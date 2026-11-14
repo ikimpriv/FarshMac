@@ -123,9 +123,13 @@ func (c *Client) Apply(ctx context.Context, obj *unstructured.Unstructured, ns s
 // A cluster-scoped kind is applied without a namespace.
 func (c *Client) ApplyWith(ctx context.Context, obj *unstructured.Unstructured, ns string, force bool) (*unstructured.Unstructured, error) {
 	gvk := obj.GroupVersionKind()
-	mapping, err := c.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	mapper, err := c.contextualMapper(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("unknown kind %s", gvk)
+		return nil, err
+	}
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return nil, fmt.Errorf("unknown kind %s: %w", gvk, err)
 	}
 	obj = obj.DeepCopy()
 	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
@@ -148,10 +152,16 @@ func (c *Client) ApplyWith(ctx context.Context, obj *unstructured.Unstructured, 
 // Update replaces the object; the manifest must carry the resourceVersion it
 // was read with, so a concurrent change comes back as errors.IsConflict.
 func (c *Client) Update(ctx context.Context, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	gvr, ok := c.ResourceFor(obj)
-	if !ok {
-		return nil, fmt.Errorf("unknown kind %s", obj.GroupVersionKind())
+	mapper, err := c.contextualMapper(ctx)
+	if err != nil {
+		return nil, err
 	}
+	gvk := obj.GroupVersionKind()
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return nil, err
+	}
+	gvr := mapping.Resource
 	return c.dyn.Resource(gvr).Namespace(obj.GetNamespace()).Update(ctx, obj, metav1.UpdateOptions{FieldManager: "farshmac"})
 }
 

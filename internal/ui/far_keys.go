@@ -30,6 +30,7 @@ func (a *App) toggleOtherView(view string) {
 	}
 	p.cancelTree()
 	p.cancelPanelLoad()
+	p.rememberFileView()
 	if p.View == view {
 		old := p.viewReturns[view]
 		p.View = old.View
@@ -72,7 +73,7 @@ func (a *App) currentTransfer(move bool) {
 	p := &a.Panels[a.Active]
 	marked, restore := p.Marked, p.RestoreMarked
 	p.Marked = map[string]bool{}
-	a.transferDialog(move)
+	a.transferDialogTo(move, true)
 	p.Marked, p.RestoreMarked = marked, restore
 }
 func (a *App) farPanelKey(m Message) bool {

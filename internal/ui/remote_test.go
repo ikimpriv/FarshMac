@@ -451,3 +451,76 @@ func TestSFTPWriteFailuresStayVisible(t *testing.T) {
 	a.key(Message{Key: "Escape"})
 	waitNetwork(t, a)
 }
+
+func TestShiftTransferUsesActiveRemotePanel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := testnet.SFTP(t)
+	seedRemote(t, c)
+	a, err := New(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Settings.CopyPermissions = false
+	a.Settings.CopyAttributes = false
+	a.connectRemote(0, c)
+	waitNetwork(t, a)
+	a.error(a.Panels[0].Load("/folder"))
+	waitNetwork(t, a)
+	selectEntry(t, &a.Panels[0], "file.txt")
+	a.key(Message{Key: "F5", Shift: true})
+	if a.Form == nil || a.Form.Fields[0].Value != "file.txt" {
+		t.Fatal("copy targets other panel", a.Form, a.Status)
+	}
+	a.Form.Fields[0].Value = "copy.txt"
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	selectEntry(t, &a.Panels[0], "copy.txt")
+	a.key(Message{Key: "F6", Shift: true})
+	if a.Dialog == nil {
+		t.Fatal(a.Status)
+	}
+	a.Dialog.Input = "renamed.txt"
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	selectEntry(t, &a.Panels[0], "renamed.txt")
+	if _, err := os.Stat(filepath.Join(a.Panels[1].Path, "copy.txt")); !os.IsNotExist(err) {
+		t.Fatal("remote local copy touched local panel", err)
+	}
+}
+
+func TestF6TargetsOtherRemotePanel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := testnet.SFTP(t)
+	left, right := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(left, "move.txt"), []byte("move me"), 0600)
+	a, err := New(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.connectRemote(1, c)
+	waitNetwork(t, a)
+	a.Active = 0
+	selectEntry(t, &a.Panels[0], "move.txt")
+	a.key(Message{Key: "F6"})
+	if a.Form == nil || a.Form.Fields[0].Value != "/move.txt" {
+		t.Fatal("F6 destination", a.Form, a.Status)
+	}
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	if _, err = os.Stat(filepath.Join(left, "move.txt")); !os.IsNotExist(err) {
+		t.Fatal("source not moved", err, a.Status)
+	}
+	selectEntry(t, &a.Panels[1], "move.txt")
+	a.Active = 1
+	a.key(Message{Key: "F6"})
+	if a.Form == nil || a.Form.Fields[0].Value != filepath.Join(left, "move.txt") {
+		t.Fatal("reverse destination", a.Form, a.Status)
+	}
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	if _, err = os.Stat(filepath.Join(left, "move.txt")); err != nil {
+		t.Fatal(err, a.Status)
+	}
+}

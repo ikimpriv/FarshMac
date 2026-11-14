@@ -25,6 +25,9 @@ type Entry struct {
 	Dir  bool
 }
 type Panel struct {
+	lastFileView           string
+	kubeWatchRevision      uint64
+	kubeWatchUpdated       time.Time
 	sizeArchive            *fsops.ArchiveIndex
 	sizeArchiveGeneration  uint64
 	folderSizes            map[string]folderSizeResult
@@ -100,7 +103,12 @@ func (p *Panel) Load(path string) error {
 		return err
 	}
 	if p.Kube != nil {
-		if p.Async && !p.Kube.cachedFor(abs) {
+		if p.Async {
+			if p.Kube.cachedFor(abs) {
+				if err := p.loadKubeMode(abs, true); err == nil {
+					return nil
+				}
+			}
 			return p.loadPanel(abs)
 		}
 		return p.loadKube(abs)
@@ -1503,7 +1511,7 @@ Ctrl+P / Ctrl+B    Toggle inactive panel / key bar
 Ctrl+F3..F11       Sort (name, ext, modified, size, unsorted, created, accessed, description, owner)
 Ctrl+F12           Sort menu; Shift+F12 selected first; Shift+F11 sort groups
 Left/Right menu    Brief, Medium, Full, Wide, Detailed, Info, Tree, Quick view
-Shift+F5/F6        Copy/move only the current item
+Shift+F5/F6        Copy / rename current item in the same panel
 Shift+F1/F2/F3     Archive create/extract/commands
 Shift+F9           Save setup
 Alt+F6             Link (symbolic, relative by default / hard); an existing
@@ -1574,7 +1582,7 @@ Cmd+Space          Complete filename in command line
 ⌘U              Swap panels
 ⌘F1 / ⌘F2     Hide/show left / right panel
 Alt+F1 / Alt+F2    Choose left / right volume
-⌘Shift+\ or ⌘=  Open active folder in the other panel
+⌘Shift+\ or ⌘=  Open active location in the other panel (except Quick view)
 ⌘+ / ⌘−         Font size larger / smaller (10–24; ⌘= and ⌘0 default in terminal)
 ⌃⌘F             Full screen
 Enter on archive  Browse archive; .. returns to parent

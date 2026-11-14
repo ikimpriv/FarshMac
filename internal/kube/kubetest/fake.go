@@ -395,6 +395,32 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		status(w, 403, "Forbidden", "forbidden: User cannot list resource")
 		return
 	}
+	// Generic resource creation, including CRs in an initially empty namespace.
+	if r.Method == http.MethodPost && strings.Contains(path, "/namespaces/") {
+		var obj map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&obj); err != nil {
+			status(w, 400, "BadRequest", err.Error())
+			return
+		}
+		metadata, ok := obj["metadata"].(map[string]any)
+		if !ok {
+			status(w, 400, "BadRequest", "no metadata")
+			return
+		}
+		for _, existing := range f.objects[path] {
+			if existing["metadata"].(map[string]any)["name"] == metadata["name"] {
+				status(w, 409, "AlreadyExists", "resource exists")
+				return
+			}
+		}
+		f.rv++
+		metadata["resourceVersion"] = fmt.Sprint(f.rv)
+		metadata["uid"] = fmt.Sprintf("created-%d", f.rv)
+		f.objects[path] = append(f.objects[path], obj)
+		f.push(path, "ADDED", obj)
+		writeJSON(w, obj)
+		return
+	}
 	// Collection?
 	if items, ok := f.objects[path]; ok && r.Method == http.MethodGet {
 		if r.URL.Query().Get("watch") == "true" {
@@ -516,6 +542,15 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		var opts map[string]any
 		json.NewDecoder(r.Body).Decode(&opts)
+		if pre, ok := opts["preconditions"].(map[string]any); ok && index >= 0 {
+			metadata := items[index]["metadata"].(map[string]any)
+			for _, key := range []string{"uid", "resourceVersion"} {
+				if want, ok := pre[key]; ok && want != metadata[key] {
+					status(w, 409, "Conflict", "resource changed before delete")
+					return
+				}
+			}
+		}
 		policy, _ := opts["propagationPolicy"].(string)
 		f.deletes = append(f.deletes, path+"?"+policy)
 		if index >= 0 {

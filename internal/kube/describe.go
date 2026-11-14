@@ -14,13 +14,19 @@ func (c *Client) Describe(ctx context.Context, ref Ref) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	mapping, err := c.mapping(ref.GVR)
+	cfg := contextualConfig(c.config, ctx)
+	mapper, err := c.contextualMapper(ctx)
 	if err != nil {
 		return "", err
 	}
-	describer, ok := describe.DescriberFor(mapping.GroupVersionKind.GroupKind(), c.config)
+	resolver := &Client{mapper: mapper}
+	mapping, err := resolver.mapping(ref.GVR)
+	if err != nil {
+		return "", err
+	}
+	describer, ok := describe.DescriberFor(mapping.GroupVersionKind.GroupKind(), cfg)
 	if !ok {
-		if describer, ok = describe.GenericDescriberFor(mapping, c.config); !ok {
+		if describer, ok = describe.GenericDescriberFor(mapping, cfg); !ok {
 			return "", fmt.Errorf("no describer for %s", mapping.GroupVersionKind.Kind)
 		}
 	}

@@ -296,7 +296,8 @@ func (a *App) syncRemoteProfiles() error {
 			}
 			continue
 		}
-		p.Remote.Directory = p.Path
+		// Workers and the other panel may still hold the previous config.
+		p.Remote = &updated
 	}
 	return first
 }

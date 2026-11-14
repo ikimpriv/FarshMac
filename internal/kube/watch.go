@@ -69,6 +69,9 @@ func (c *Client) watchLoop(ctx context.Context, r Resource, ns, rv string, event
 				return err
 			}
 		}
+		if err != nil && c.connectionEpoch != nil {
+			c.connectionEpoch.Add(1)
+		}
 		// A closed stream (server timeout) or a network error: reconnect.
 		select {
 		case <-time.After(backoff):

@@ -26,6 +26,7 @@ type kubePanel struct {
 	ttl     time.Duration
 	hidden  map[string]bool
 
+	epoch        uint64
 	mu           sync.Mutex
 	namespaces   []*kube.Object
 	namespacesAt time.Time
@@ -38,13 +39,14 @@ type kubePanel struct {
 	watches      map[string]*kubeNamespaceWatch // Namespace ("" = the list of namespaces) -> its watches.
 	unwatched    map[string]string              // "ns/folder" -> why its watch ended (kept as listed).
 	reloading    map[string]bool                // Namespaces being reloaded in the background.
-	changed      atomic.Bool                    // Watches changed a snapshot; the panel re-lists.
-	reloadedAt   time.Time
+	deleted      atomic.Uint64
+	changed      atomic.Uint64 // Watches changed a snapshot; the panel re-lists.
 }
 
 // cachedFor reports whether the level at path can be listed from memory
 // alone, so the panel can be refreshed in place without a reading indicator.
 func (k *kubePanel) cachedFor(p string) bool {
+	k.syncConnection()
 	segs := kubeSegments(p)
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -62,8 +64,9 @@ func (k *kubePanel) cachedFor(p string) bool {
 	// pod from the server unless it is cached; deeper is a container.
 	for i := 1; i+1 < len(segs); i += 2 {
 		if segs[i] == "pods" {
-			_, ok := k.pods[segs[0]+"/"+segs[i+1]]
-			return ok && i+2 == len(segs)
+			summary, ok := k.pods[segs[0]+"/"+segs[i+1]]
+			_, direct := summary.SingleContainer()
+			return ok && !direct && i+2 == len(segs)
 		}
 	}
 	return true
@@ -79,6 +82,7 @@ func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.
 	if s.KubeSnapshotTTL > 0 {
 		k.ttl = time.Duration(s.KubeSnapshotTTL) * time.Second
 	}
+	k.epoch = client.ConnectionEpoch()
 	if namespaces != nil {
 		k.namespaces, k.namespacesAt = namespaces, time.Now()
 	}
@@ -104,10 +108,27 @@ func (k *kubePanel) noteChanged(ns string) {
 	k.invalidate(ns)
 }
 
+// syncConnection drops snapshots made before an observed connection failure.
+func (k *kubePanel) syncConnection() {
+	if k.client == nil {
+		return
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if epoch := k.client.ConnectionEpoch(); epoch != k.epoch {
+		k.epoch = epoch
+		k.invalidateLocked("")
+		k.changed.Add(1)
+	}
+}
+
 // invalidate forgets cached listings: one namespace, or everything when ns is "".
 func (k *kubePanel) invalidate(ns string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.invalidateLocked(ns)
+}
+func (k *kubePanel) invalidateLocked(ns string) {
 	if ns == "" {
 		for name, w := range k.watches {
 			w.cancel()
@@ -116,6 +137,9 @@ func (k *kubePanel) invalidate(ns string) {
 		k.namespaces, k.namespacesAt = nil, time.Time{}
 		k.snapshots = map[string]*kube.Snapshot{}
 		k.pods = map[string]kube.PodSummary{}
+		k.probes = map[string]kube.Probe{}
+		k.last, k.lastPath = kubePath{}, ""
+		k.unwatched = map[string]string{}
 		return
 	}
 	if w, ok := k.watches[ns]; ok {
@@ -135,32 +159,45 @@ func (k *kubePanel) invalidate(ns string) {
 	}
 }
 func (k *kubePanel) cachedPod(ns, name string) (kube.PodSummary, bool) {
+	k.syncConnection()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	s, ok := k.pods[ns+"/"+name]
 	return s, ok
 }
 func (k *kubePanel) namespaceList(ctx context.Context) ([]*kube.Object, error) {
+	k.syncConnection()
 	k.mu.Lock()
 	cached, at := k.namespaces, k.namespacesAt
 	_, watched := k.watches[""]
 	k.mu.Unlock()
+	if ctx == nil {
+		if cached == nil {
+			return nil, fmt.Errorf("namespace cache expired")
+		}
+		return cached, nil
+	}
 	if cached != nil && (watched || time.Since(at) < k.ttl) {
 		return cached, nil
 	}
+	epoch := k.client.ConnectionEpoch()
 	list, rv, err := k.client.NamespacesRV(ctx)
+	k.syncConnection()
 	if err != nil {
 		return nil, err
 	}
 	k.mu.Lock()
-	k.namespaces, k.namespacesAt = list, time.Now()
+	if epoch == k.epoch && ctx.Err() == nil {
+		k.namespaces, k.namespacesAt = list, time.Now()
+	}
 	k.mu.Unlock()
-	if rv != "" {
+	if rv != "" && epoch == k.client.ConnectionEpoch() && ctx.Err() == nil {
 		k.startWatches("", nil, rv)
 	}
 	return list, nil
 }
 func (k *kubePanel) snapshot(ctx context.Context, ns string) (*kube.Snapshot, error) {
+	k.syncConnection()
 	k.mu.Lock()
 	cached := k.snapshots[ns]
 	_, watched := k.watches[ns]
@@ -168,22 +205,30 @@ func (k *kubePanel) snapshot(ctx context.Context, ns string) (*kube.Snapshot, er
 	if cached != nil && (watched || time.Since(cached.Taken) < k.ttl) {
 		return cached, nil
 	}
+	epoch := k.client.ConnectionEpoch()
 	snap, err := k.client.LoadSnapshot(ctx, ns, k.hidden)
+	k.syncConnection()
 	if err != nil {
 		return nil, err
 	}
 	k.mu.Lock()
-	k.snapshots[ns] = snap
+	if epoch == k.epoch && ctx.Err() == nil {
+		k.snapshots[ns] = snap
+	}
 	k.mu.Unlock()
-	k.startWatches(ns, snap, "")
+	if epoch == k.client.ConnectionEpoch() && ctx.Err() == nil {
+		k.startWatches(ns, snap, "")
+	}
 	return snap, nil
 }
 func (k *kubePanel) cachedSnapshot(ns string) *kube.Snapshot {
+	k.syncConnection()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.snapshots[ns]
 }
 func (k *kubePanel) podSummary(ctx context.Context, ns, name string) (kube.PodSummary, error) {
+	k.syncConnection()
 	key := ns + "/" + name
 	k.mu.Lock()
 	cached, ok := k.pods[key]
@@ -191,13 +236,20 @@ func (k *kubePanel) podSummary(ctx context.Context, ns, name string) (kube.PodSu
 	if ok {
 		return cached, nil
 	}
+	if ctx == nil {
+		return kube.PodSummary{}, fmt.Errorf("pod cache expired")
+	}
+	epoch := k.client.ConnectionEpoch()
 	pod, err := k.client.Pod(ctx, ns, name)
+	k.syncConnection()
 	if err != nil {
 		return kube.PodSummary{}, err
 	}
 	summary := kube.PodSummaryOf(pod)
 	k.mu.Lock()
-	k.pods[key] = summary
+	if epoch == k.epoch && ctx.Err() == nil {
+		k.pods[key] = summary
+	}
 	k.mu.Unlock()
 	return summary, nil
 }
@@ -291,6 +343,9 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 			objects, known = snap.ByFolder[folder]
 		} else {
 			objects, known = snap.Children(parent)[folder]
+		}
+		if !known {
+			_, known = snap.Resources[folder] // A watched type remains navigable when its last object is deleted.
 		}
 		if !known {
 			return r, fmt.Errorf("no such folder: %s", path.Join(segs[:i+1]...))
@@ -411,7 +466,11 @@ func (e *kubeEntry) panelColumns(view string) string {
 }
 
 // loadKube lists one level of the cluster into the panel.
-func (p *Panel) loadKube(abs string) error {
+func (p *Panel) loadKube(abs string) error { return p.loadKubeMode(abs, false) }
+
+// cachedOnly makes UI redraws strictly network-free, even if a worker
+// invalidates the cache between the eligibility check and this call.
+func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 	k := p.Kube
 	o := p.readOperation
 	if o == nil {
@@ -419,9 +478,15 @@ func (p *Panel) loadKube(abs string) error {
 		defer o.Cancel()
 	}
 	ctx := o.Context()
+	if cachedOnly {
+		ctx = nil
+	}
 	r, err := k.resolve(ctx, abs)
 	if err != nil {
 		return err
+	}
+	if r.Unknown || cachedOnly && r.Level == kubeContainerFS {
+		return fmt.Errorf("listing requires a background read")
 	}
 	var files []Entry
 	info := k.label()
@@ -591,7 +656,7 @@ func (kubeBackend) Caps(p *Panel) panelCaps {
 	case kubeNamespace, kubeObject:
 		return capCopyIn
 	case kubeTypeFolder:
-		return capEdit | capDelete | capQuickView | capCopyIn
+		return capEdit | capDelete | capQuickView | capCopyIn | capRename
 	case kubeContainers:
 		return capQuickView
 	case kubeContainerFS:
@@ -635,6 +700,7 @@ func (kubeBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	case kubeTypeFolder:
 		plain[2], plain[3], plain[4], plain[7] = "Manif", "Edit", "Copy", "Delete"
 		shift[3], shift[7] = "Descr", "Orphan"
+		plain[5], shift[4], shift[5] = "Move", "Copy", "Rename"
 		if obj := p.kubeCurrent(); obj != nil && level.Snapshot != nil && level.Snapshot.HasPods(obj) {
 			shift[2], alt[2] = "Logs", "Follow"
 		}
@@ -755,7 +821,10 @@ func (kubeBackend) MenuSection(a *App, p *Panel) *menuSection {
 		{"Follow logs in terminal", "⌥F3", func() { a.kubeLogs(p, true) }},
 		{"Describe", "⇧F4", func() { a.kubeDescribe(p) }},
 		{"Open shell in container", "", func() { a.kubeShell(p) }},
-		{"Export manifests…", "F5", func() { a.kubeExport(p) }},
+		{"Copy / export…", "F5", func() { a.transferDialog(false) }},
+		{"Move resources…", "F6", func() { a.transferDialog(true) }},
+		{"Local copy…", "⇧F5", func() { a.currentTransfer(false) }},
+		{"Local rename…", "⇧F6", func() { a.currentTransfer(true) }},
 		{"Refresh snapshot", "⌘R", func() { a.rereadPanel(a.Active) }},
 		{"Switch context…", "", func() { a.kubeConnectionForm(a.Active, p.Kube.profile) }},
 		{"Disconnect", "", func() { a.disconnectRemote(a.Active) }},

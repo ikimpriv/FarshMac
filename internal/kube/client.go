@@ -2,8 +2,11 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/version"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -23,20 +26,23 @@ import (
 // stop when it is cancelled. Values that come from the server are data:
 // they are never interpreted as commands.
 type Client struct {
-	Profile Profile
+	Profile         Profile
+	connectionEpoch *atomic.Uint64
 
-	config       *rest.Config
-	raw          *rest.RESTClient // Unversioned client for Table LISTs by absolute path.
-	core         kubernetes.Interface
-	stream       kubernetes.Interface // Without a request timeout, for logs and exec.
-	streamConfig *rest.Config
-	dyn          dynamic.Interface
-	disc         discovery.CachedDiscoveryInterface
-	mapper       meta.RESTMapper
-	version      string
-	resources    *resourceCache
-	openapiMu    sync.Mutex
-	openapi      *openAPICache // OpenAPI v3 documents and resolved schemas (SchemaFor).
+	config         *rest.Config
+	raw            *rest.RESTClient // Unversioned client for Table LISTs by absolute path.
+	core           kubernetes.Interface
+	stream         kubernetes.Interface // Without a request timeout, for logs and exec.
+	streamConfig   *rest.Config
+	dyn            dynamic.Interface
+	disc           discovery.CachedDiscoveryInterface
+	mapper         meta.RESTMapper
+	version        string
+	resourcesEpoch uint64
+	openapiEpoch   uint64
+	resources      *resourceCache
+	openapiMu      sync.Mutex
+	openapi        *openAPICache // OpenAPI v3 documents and resolved schemas (SchemaFor).
 }
 
 // Connect opens the profile's context and verifies it by asking the server
@@ -63,6 +69,8 @@ func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, e
 		cfg.Timeout = 30 * time.Second
 	}
 	cfg.UserAgent = "FarshMac"
+	epoch := &atomic.Uint64{}
+	observeConnection(cfg, epoch)
 	core, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -88,8 +96,12 @@ func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, e
 		return nil, err
 	}
 	disc := memory.NewMemCacheClient(core.Discovery())
-	c := &Client{Profile: p, config: cfg, streamConfig: streamCfg, raw: raw, core: core, stream: stream, dyn: dyn, disc: disc, mapper: restmapper.NewDeferredDiscoveryRESTMapper(disc)}
-	version, err := core.Discovery().ServerVersion()
+	c := &Client{connectionEpoch: epoch, Profile: p, config: cfg, streamConfig: streamCfg, raw: raw, core: core, stream: stream, dyn: dyn, disc: disc, mapper: restmapper.NewDeferredDiscoveryRESTMapper(disc)}
+	data, err := raw.Get().AbsPath("/version").Do(ctx).Raw()
+	var version version.Info
+	if err == nil {
+		err = json.Unmarshal(data, &version)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach %s: %w", cfg.Host, err)
 	}

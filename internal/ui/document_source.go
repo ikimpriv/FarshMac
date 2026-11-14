@@ -110,7 +110,7 @@ func (s *remoteSource) Store(o *fsops.Operation, staged string, expected os.File
 		return nil, errRemoteChanged
 	}
 	mode := current.Mode().Perm()
-	options := remotefs.CopyOptions{Workers: 1, Metadata: fsops.MetadataOptions{Permissions: true}, PermissionsMode: &mode, ExpectedDestination: current, Conflict: func(string, string) int { return 0 }}
+	options := remotefs.CopyOptions{AcceptProtocolMetadata: true, Workers: 1, Metadata: fsops.MetadataOptions{Permissions: true}, PermissionsMode: &mode, ExpectedDestination: current, Conflict: func(string, string) int { return 0 }}
 	if err = remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Opener: s.Opener}, []remotefs.Pair{{Source: staged, Destination: s.Path}}, options, o); err != nil {
 		return nil, err
 	}

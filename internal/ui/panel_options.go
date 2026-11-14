@@ -355,6 +355,12 @@ func writeConfigFile(path string, data []byte, ops ...*fsops.Operation) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+func (p *Panel) rememberFileView() {
+	if p.Kube == nil && p.Remote == nil && p.Archive == nil && p.View != "Quick view" && p.View != "Info panel" && p.View != "Tree panel" {
+		p.lastFileView = p.View
+	}
+}
+
 func (a *App) setView(index int, view string) {
 	// Quick view only previews the other panel, so it works for remote
 	// panels like Ctrl+Q; Tree and Info panel need a local folder.
@@ -367,6 +373,7 @@ func (a *App) setView(index int, view string) {
 		a.Status = "Choose a file view for remote panels"
 		return
 	}
+	p.rememberFileView()
 	p.View = view
 	p.Hidden = false
 	if !p.served() || view != "Quick view" {
@@ -407,6 +414,19 @@ func (a *App) openVolume(index int, path string) {
 	p.cancelPanelLoad()
 	p.cancelTree()
 	previous := *p
-	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
+	p.rememberFileView()
+	p.Remote, p.RemoteLocalPath, p.Archive, p.Kube = nil, "", nil, nil
+	p.View = p.lastFileView
+	if p.View == "" {
+		p.View = "Full"
+	}
+	p.viewReturns = nil
+	if previous.Kube != nil && previous.Kube != a.Panels[1-index].Kube {
+		previous.Kube.stopWatches()
+	}
+	a.previewKey, a.previewImage = "", ""
+	if a.previewOperation != nil {
+		a.previewOperation.Cancel()
+	}
 	a.error(p.loadSource(path, previous, ""))
 }

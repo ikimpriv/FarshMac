@@ -11,28 +11,33 @@ import (
 	"strings"
 )
 
-func (a *App) transferDialog(move bool) {
+func (a *App) transferDialog(move bool) { a.transferDialogTo(move, false) }
+
+func (a *App) transferDialogTo(move, local bool) {
 	if !a.requireFilePanel() {
 		return
 	}
 	p := &a.Panels[a.Active]
 	other := &a.Panels[1-a.Active]
-	if move && p.backend().Move(a, p) {
+	if local {
+		other = p
+	}
+	if p.Kube != nil && p.kubeLevel().Level != kubeContainerFS && other.Kube != nil && other.kubeLevel().Level != kubeContainerFS {
+		a.kubeResourceTransferDialog(p, other, move, local)
 		return
 	}
-	if !move && other.Kube != nil && other.kubeLevel().Level != kubeContainerFS {
-		a.kubeApplyDialog(p, other)
+	if move && p.endpoint().Opener != nil && p.endpoint().Same(other.endpoint()) {
+		a.remoteMoveBetweenTo(*p, *other, local)
+		return
+	}
+	if move && (p.kind() == backendArchive || p.Kube != nil && p.kubeLevel().Level != kubeContainerFS) && p.backend().Move(a, p) {
+		return
+	}
+	if other.Kube != nil && other.kubeLevel().Level != kubeContainerFS {
+		a.kubeApplyDialogTo(p, other, move)
 		return
 	}
 	if !move && p.backend().Copy(a, p) {
-		return
-	}
-	if move && other.kind() != backendLocal {
-		if other.kind() == backendRemote {
-			a.remoteMoveDialog()
-		} else {
-			a.Status = "Moving into this panel is not supported. Use F5 Copy, then Delete."
-		}
 		return
 	}
 	if !other.can(capCopyIn) {
@@ -45,7 +50,7 @@ func (a *App) transferDialog(move bool) {
 		return
 	}
 	p.RestoreMarked = cloneMarks(p.Marked)
-	base := p.filesystemPath()
+	base := other.Path
 	dest := other.Path
 	sourceEndpoint := p.endpoint()
 	targetEndpoint := other.endpoint()
@@ -72,6 +77,13 @@ func (a *App) transferDialog(move bool) {
 		return mode
 	}
 	start := func(s string, metadata fsops.MetadataOptions, symlinks fsops.SymlinkMode) {
+		if local {
+			if !validLocalTransferName(s) {
+				a.error(fmt.Errorf("enter a new name without a path"))
+				return
+			}
+			s = filepath.Join(p.Path, s)
+		}
 		if targetEndpoint.Opener != nil && remoteTilde(s) {
 			a.Status = remoteTildeStatus
 			return
@@ -176,23 +188,36 @@ func (a *App) transferDialog(move bool) {
 				if transferIntoDirectory(s, dst, dest, len(paths), isDir) {
 					target = filepath.Join(dst, filepath.Base(src))
 				}
-				if err := fsops.Transfer(src, target, move, conflict, o); err != nil {
+				var err error
+				if sourceEndpoint.Opener != nil || targetEndpoint.Opener != nil {
+					err = remotefs.MoveBetween(sourceEndpoint, targetEndpoint, src, target, o)
+				} else {
+					err = fsops.Transfer(src, target, true, conflict, o)
+				}
+				if err != nil {
 					return err
 				}
 			}
 			return nil
 		})
 	}
+	displayDest := dest
+	if local {
+		displayDest = filepath.Base(paths[0])
+	}
 	if move {
-		a.form(label, []Field{{Label: fmt.Sprintf("Move %d item(s) to", len(paths)), Value: dest}, symlinkField}, func(fields []Field) {
+		a.form(label, []Field{{Label: fmt.Sprintf("Move %d item(s) to", len(paths)), Value: displayDest}, symlinkField}, func(fields []Field) {
 			start(fields[0].Value, fsops.MetadataOptions{}, symlinks(fields))
 		})
+		if local {
+			a.Form.Fields[0].Label = "New name (1 item)"
+		}
 		a.Form.Primary = "Move"
 		a.Form.Selected = a.Settings.SelectDialogInput
 		return
 	}
 	fields := []Field{
-		{Label: fmt.Sprintf("Copy %d item(s) to", len(paths)), Value: dest},
+		{Label: fmt.Sprintf("Copy %d item(s) to", len(paths)), Value: displayDest},
 		{Label: "Preserve permissions (mode, owner, group, ACL)", Toggle: true, Checked: a.Settings.CopyPermissions},
 		{Label: "Preserve attributes (xattrs, flags, timestamps)", Toggle: true, Checked: a.Settings.CopyAttributes},
 		{Label: "Parallel transfers (1–8)", Value: strconv.Itoa(max(1, min(8, a.Settings.CopyWorkers)))},
@@ -210,6 +235,9 @@ func (a *App) transferDialog(move bool) {
 		a.Settings.CopyPermissions, a.Settings.CopyAttributes = fields[1].Checked, fields[2].Checked
 		start(fields[0].Value, fsops.MetadataOptions{Permissions: fields[1].Checked, Attributes: fields[2].Checked}, symlinks(fields))
 	})
+	if local {
+		a.Form.Fields[0].Label = "New name (1 item)"
+	}
 	a.Form.Primary = "Copy"
 	a.Form.Selected = a.Settings.SelectDialogInput
 }
@@ -365,4 +393,8 @@ func caseRename(src, dst string) bool {
 // A different existing directory or a trailing slash explicitly selects a container.
 func transferIntoDirectory(input, destination, suggested string, count int, isDir bool) bool {
 	return isDir && (count > 1 || destination != suggested || strings.HasSuffix(input, "/"))
+}
+
+func validLocalTransferName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
 }

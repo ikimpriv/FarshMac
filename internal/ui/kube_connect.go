@@ -94,9 +94,10 @@ func (a *App) connectKube(index int, profile kube.Profile) {
 			if local == "" {
 				local, _ = os.UserHomeDir()
 			}
-			if p.Kube != nil {
+			if p.Kube != nil && p.Kube != a.Panels[1-index].Kube {
 				p.Kube.close()
 			}
+			p.rememberFileView()
 			p.Remote, p.Archive = nil, nil
 			p.Kube = newKubePanel(profile, client, nil, a.Settings)
 			_ = namespaces

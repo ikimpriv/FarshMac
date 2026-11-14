@@ -27,6 +27,17 @@ type Opener interface {
 // Endpoint is one side of a transfer; a nil Opener is the local file system.
 type Endpoint struct{ Opener Opener }
 
+// PathMapper translates another view of the same filesystem into this view.
+type PathMapper interface {
+	PathFrom(Opener, string) (string, error)
+}
+
+// InternalCopier stages regular-file contents on the server. The caller owns
+// collision decisions, metadata, verification and atomic publication.
+type InternalCopier interface {
+	CopyWithin(context.Context, string, Opener, string, string) error
+}
+
 // RemoteEndpoint wraps a server configuration; nil stays local.
 func RemoteEndpoint(c *Config) Endpoint {
 	if c == nil {
@@ -52,11 +63,14 @@ func (e Endpoint) Same(other Endpoint) bool {
 
 type Pair struct{ Source, Destination string }
 type CopyOptions struct {
-	PermissionsMode     *os.FileMode
-	ExpectedDestination os.FileInfo
-	Workers             int
-	Metadata            fsops.MetadataOptions
-	Conflict            fsops.Conflict
+	// AcceptProtocolMetadata suppresses generic protocol-limit notices, not
+	// failed chmod/chtimes requests. Used when saving back to the source FS.
+	AcceptProtocolMetadata bool
+	PermissionsMode        *os.FileMode
+	ExpectedDestination    os.FileInfo
+	Workers                int
+	Metadata               fsops.MetadataOptions
+	Conflict               fsops.Conflict
 }
 type job struct {
 	Pair
@@ -66,6 +80,9 @@ type job struct {
 // Copy transfers files through a bounded queue. Remote workers have independent
 // sessions (FTP control connections must never be shared concurrently).
 func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.Operation) error {
+	if source.Opener != nil && source.Same(target) {
+		options.AcceptProtocolMetadata = true
+	}
 	metadata := options.Metadata
 	o.CopyMetadata = &metadata
 	if source.Opener == nil && target.Opener == nil {
@@ -263,6 +280,12 @@ func Copy(source, target Endpoint, pairs []Pair, options CopyOptions, o *fsops.O
 		}
 		if source.Same(target) {
 			a, b := path.Clean(pair.Source), path.Clean(pair.Destination)
+			if mapper, ok := source.Opener.(PathMapper); ok {
+				b, err = mapper.PathFrom(target.Opener, b)
+				if err != nil {
+					break
+				}
+			}
 			if a == b || strings.HasPrefix(b, a+"/") {
 				err = fmt.Errorf("destination is inside source")
 				if info, e := scan.Lstat(pair.Source); a == b && e == nil && !info.IsDir() {
@@ -369,6 +392,28 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 			return err
 		}
 		created = true
+	} else if copier, ok := source.Opener.(InternalCopier); ok && source.Same(target) && j.Info.Mode().IsRegular() {
+		previous := ""
+		if appendMode {
+			previous = j.Destination
+		}
+		created = true // Also clean up a partially written staging file on failure.
+		o.Begin(j.Source, j.Info.Size())
+		if err = copier.CopyWithin(o.Context(), j.Source, target.Opener, tmp, previous); err != nil {
+			return err
+		}
+		staged, e := d.Lstat(tmp)
+		expected := j.Info.Size()
+		if appendMode {
+			expected += before.Size()
+		}
+		if e != nil {
+			return e
+		}
+		if staged.Size() != expected {
+			return fmt.Errorf("source size changed during server-side copy")
+		}
+		o.Advance(j.Info.Size())
 	} else {
 		if !j.Info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported remote special file: %s", j.Source)
@@ -528,18 +573,20 @@ func portableMetadata(d FS, src, dst string, info os.FileInfo, options CopyOptio
 			limits = append(limits, fmt.Errorf("remote transfer cannot preserve xattrs, flags and creation time"))
 		}
 	}
-	if o.MetadataLimitation != nil {
-		notice := MetadataNotice
-		for _, limit := range limits {
-			if errors.Is(limit, ErrNoPermissions) {
-				notice += "\nFTP cannot set permissions."
+	if !options.AcceptProtocolMetadata {
+		if o.MetadataLimitation != nil {
+			notice := MetadataNotice
+			for _, limit := range limits {
+				if errors.Is(limit, ErrNoPermissions) {
+					notice += "\nFTP cannot set permissions."
+				}
 			}
+			if err := o.MetadataLimitation(notice); err != nil {
+				return err
+			}
+		} else {
+			problems = append(problems, limits...)
 		}
-		if err := o.MetadataLimitation(notice); err != nil {
-			return err
-		}
-	} else {
-		problems = append(problems, limits...)
 	}
 	if err := errors.Join(problems...); err != nil {
 		if o.MetadataFailure != nil {

@@ -74,6 +74,10 @@ func (k *kubePanel) startWatches(ns string, snap *kube.Snapshot, rootRV string) 
 func (k *kubePanel) watchFolder(ctx context.Context, ns string, r kube.Resource, rv string) {
 	events, result := k.client.WatchFolder(ctx, r, ns, rv)
 	for ev := range events {
+		k.syncConnection()
+		if ctx.Err() != nil {
+			continue
+		}
 		k.mu.Lock()
 		if snap := k.snapshots[ns]; snap != nil {
 			k.snapshots[ns] = snap.Apply(ev)
@@ -82,7 +86,7 @@ func (k *kubePanel) watchFolder(ctx context.Context, ns string, r kube.Resource,
 			delete(k.pods, ns+"/"+ev.Object.Name)
 		}
 		k.mu.Unlock()
-		k.changed.Store(true)
+		k.watchChanged(ev.Type)
 	}
 	if err := result(); err != nil && ctx.Err() == nil {
 		if errors.Is(err, kube.ErrWatchExpired) {
@@ -121,21 +125,27 @@ func (k *kubePanel) reloadNamespace(ns string) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		epoch := k.client.ConnectionEpoch()
 		snap, err := k.client.LoadSnapshot(ctx, ns, k.hidden)
-		if err != nil {
+		k.syncConnection()
+		if err != nil || epoch != k.client.ConnectionEpoch() {
 			return // The TTL path reloads it on the next listing.
 		}
 		k.mu.Lock()
 		k.snapshots[ns] = snap
 		k.mu.Unlock()
 		k.startWatches(ns, snap, "")
-		k.changed.Store(true)
+		k.changed.Add(1)
 	}()
 }
 
 func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
 	events, result := k.client.WatchFolder(ctx, kube.NamespacesResource, "", rv)
 	for ev := range events {
+		k.syncConnection()
+		if ctx.Err() != nil {
+			continue
+		}
 		if ev.Object == nil {
 			continue
 		}
@@ -152,7 +162,7 @@ func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
 		sortKubeObjects(list)
 		k.namespaces, k.namespacesAt = list, time.Now()
 		k.mu.Unlock()
-		k.changed.Store(true)
+		k.watchChanged(ev.Type)
 	}
 	if err := result(); err != nil && ctx.Err() == nil {
 		k.mu.Lock()
@@ -165,8 +175,10 @@ func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
+				epoch := k.client.ConnectionEpoch()
 				list, rv, err := k.client.NamespacesRV(ctx)
-				if err != nil {
+				k.syncConnection()
+				if err != nil || epoch != k.client.ConnectionEpoch() {
 					return
 				}
 				k.mu.Lock()
@@ -175,7 +187,7 @@ func (k *kubePanel) watchNamespaces(ctx context.Context, rv string) {
 				if rv != "" {
 					k.startWatches("", nil, rv)
 				}
-				k.changed.Store(true)
+				k.changed.Add(1)
 			}()
 		}
 	}
@@ -190,30 +202,42 @@ func (k *kubePanel) stopWatches() {
 	}
 }
 
-// takeChanged reports, once, that watches changed something since the last call.
-func (k *kubePanel) takeChanged() bool { return k.changed.Swap(false) }
+func (k *kubePanel) watchChanged(kind kube.EventType) {
+	revision := k.changed.Add(1)
+	if kind != kube.Deleted {
+		return
+	}
+	// Independent watch goroutines can publish out of order.
+	for old := k.deleted.Load(); old < revision; old = k.deleted.Load() {
+		if k.deleted.CompareAndSwap(old, revision) {
+			return
+		}
+	}
+}
 
-// pollKubeWatches re-lists Kubernetes panels whose snapshots changed: from
-// the cache, synchronously, so the entries are replaced in place without a
-// reading indicator; at most a few times per second and never over a
-// listing in progress. Levels that need the server (container listings)
-// are left alone until the user re-enters them.
+// Watch revisions are acknowledged per panel: sharing a connection must not
+// let one panel consume another panel's update. Never read container files here.
 func (a *App) pollKubeWatches() {
 	for i := range a.Panels {
 		p := &a.Panels[i]
 		k := p.Kube
-		if k == nil || p.load != nil || !k.takeChanged() {
+		if k == nil || p.load != nil {
 			continue
 		}
-		if time.Since(k.reloadedAt) < 250*time.Millisecond {
-			k.changed.Store(true) // Try again on a later poll.
+		k.syncConnection()
+		revision := k.changed.Load()
+		if revision == p.kubeWatchRevision {
 			continue
 		}
-		k.reloadedAt = time.Now()
+		if k.deleted.Load() <= p.kubeWatchRevision && time.Since(p.kubeWatchUpdated) < 250*time.Millisecond {
+			continue
+		}
+		p.kubeWatchRevision = revision
+		p.kubeWatchUpdated = time.Now()
 		if !k.cachedFor(p.Path) {
 			continue
 		}
-		if err := p.loadKube(p.Path); err == nil {
+		if err := p.loadKubeMode(p.Path, true); err == nil {
 			a.dirty = true
 		}
 	}

@@ -239,8 +239,13 @@ func TestSaveSetupWritesRemoteDirectoryToConnections(t *testing.T) {
 	seedRemote(t, c)
 	a.connectRemote(0, c)
 	waitNetwork(t, a)
+	previous := a.Panels[0].Remote
+	oldDirectory := previous.Directory
 	loadPanel(t, &a.Panels[0], "/folder")
 	a.saveSetup()
+	if previous.Directory != oldDirectory {
+		t.Fatal("profile save mutated the config used by a background reader")
+	}
 	b := &App{Settings: defaultSettings()}
 	b.loadConnectionProfiles()
 	if len(b.Settings.RemoteConnections) != 1 || b.Settings.RemoteConnections[0].Directory != "/folder" {

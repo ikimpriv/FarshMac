@@ -298,6 +298,11 @@ func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 			if local == "" {
 				local, _ = os.UserHomeDir()
 			}
+			p.rememberFileView()
+			if p.Kube != nil && p.Kube != a.Panels[1-index].Kube {
+				p.Kube.close()
+			}
+			p.Kube = nil
 			p.Remote = &c
 			p.RemoteLocalPath = local
 			p.Archive = nil
@@ -412,7 +417,7 @@ func (a *App) disconnectRemote(index int) {
 	home, _ := os.UserHomeDir()
 	local := accessibleFolder(p.RemoteLocalPath, home)
 	previous := *p
-	if p.Kube != nil {
+	if p.Kube != nil && p.Kube != a.Panels[1-index].Kube {
 		p.Kube.close()
 	}
 	p.Remote, p.Kube = nil, nil
@@ -497,7 +502,12 @@ func (a *App) remoteUnsupported() bool {
 }
 
 func (a *App) remoteMoveDialog() {
-	source, target := a.Panels[a.Active], a.Panels[1-a.Active]
+	a.remoteMoveBetween(a.Panels[a.Active], a.Panels[1-a.Active])
+}
+
+func (a *App) remoteMoveBetween(source, target Panel) { a.remoteMoveBetweenTo(source, target, false) }
+
+func (a *App) remoteMoveBetweenTo(source, target Panel, local bool) {
 	endpoint := source.endpoint()
 	if endpoint.Opener == nil || !endpoint.Same(target.endpoint()) {
 		a.Status = "Remote move is available within the same server. Between servers use F5 Copy, then Delete."
@@ -511,12 +521,33 @@ func (a *App) remoteMoveDialog() {
 	if len(paths) == 1 {
 		dest = filepath.Join(dest, filepath.Base(paths[0]))
 	}
-	a.prompt("Remote move / rename", "Destination on the same server", dest, func(value string) {
+	display, prompt := dest, "Destination on the same server"
+	if local {
+		display, prompt = filepath.Base(paths[0]), "New name"
+	}
+	a.prompt("Remote move / rename", prompt, display, func(value string) {
+		if local && !validLocalTransferName(value) {
+			a.error(fmt.Errorf("enter a new name without a path"))
+			return
+		}
 		if remoteTilde(value) {
 			a.Status = remoteTildeStatus
 			return
 		}
 		dst := expand(value, target.Path)
+		if mapper, ok := endpoint.Opener.(remotefs.PathMapper); ok {
+			var err error
+			dst, err = mapper.PathFrom(target.endpoint().Opener, dst)
+			if err != nil {
+				a.error(err)
+				return
+			}
+			dest, err = mapper.PathFrom(target.endpoint().Opener, dest)
+			if err != nil {
+				a.error(err)
+				return
+			}
+		}
 		ask := a.Settings.ConfirmOverwrite
 		a.workProgress("Renaming remote files", func(o *fsops.Operation) error {
 			o.Streaming()
