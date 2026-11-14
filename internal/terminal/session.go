@@ -326,6 +326,10 @@ func (s *Session) Resize(cols, rows int) error {
 // shellKillGrace is how long Close waits after SIGHUP before SIGKILL.
 const shellKillGrace = 2 * time.Second
 
+// Exited is closed once the shell process has ended (after Close, at the
+// latest when the SIGKILL grace period has passed).
+func (s *Session) Exited() <-chan struct{} { return s.exited }
+
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.done)

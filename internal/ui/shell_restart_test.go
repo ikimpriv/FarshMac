@@ -30,7 +30,7 @@ func TestParentShellRestartAndNestedExit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer a.Close()
+			defer closeAndWait(a)
 			a.Settings.Shell = shell
 			a.Settings.ShellCustomPrompt = false
 			a.TermVisible = true
@@ -74,7 +74,7 @@ func TestShellRestartDeletedDirectoryAndShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.ShellCustomPrompt = false
 	a.ShellCwd = removed
 	if err = os.Remove(removed); err != nil {

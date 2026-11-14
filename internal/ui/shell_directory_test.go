@@ -23,7 +23,7 @@ func TestPanelDirectorySyncWaitsForShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	if err = a.StartTerminal(); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestShellCDReturnsToActivePanelBeforePromptEvent(t *testing.T) {
 	t.Setenv("HOME", root)
 	t.Setenv("ZDOTDIR", root)
 	a, _ := New(root, root)
-	defer a.Close()
+	defer closeAndWait(a)
 	if err := a.StartTerminal(); err != nil {
 		t.Fatal(err)
 	}

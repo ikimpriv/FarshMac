@@ -47,7 +47,7 @@ func TestQuitWithOpenFormCancelsFormFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.ShellCustomPrompt = false
 	if err = a.StartTerminal(); err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestSessionSaveFailureReportedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	g := NewWindowGroup(a)
 	g.StartShell = false
 	g.sessionPath = filepath.Join(blocker, "session.json")
