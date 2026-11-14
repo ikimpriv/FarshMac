@@ -10,15 +10,7 @@ import (
 	"farshmac/internal/fsops"
 )
 
-func (p *Panel) filesystemPath() string {
-	if p.Remote != nil {
-		return p.RemoteLocalPath
-	}
-	if p.Archive != nil {
-		return filepath.Dir(p.Archive.Path)
-	}
-	return p.Path
-}
+func (p *Panel) filesystemPath() string { return p.backend().FilesystemPath(p) }
 func (p *Panel) loadArchiveDirectory(path string) error {
 	rel, ok := p.Archive.Relative(path)
 	if !ok {
@@ -79,6 +71,7 @@ func (a *App) openArchiveAt(index int, path, target, cursor string) {
 			p.cancelPanelLoad()
 			p.cancelTree()
 			p.Remote = nil
+			p.rememberFileView()
 			p.Archive = catalog
 			// Archive directories use file views, never a native filesystem tree.
 			if p.View == "Tree panel" || p.View == "Info panel" || p.View == "Quick view" {
@@ -187,11 +180,20 @@ func (a *App) viewArchiveMember() {
 func (a *App) matchOtherPanel() {
 	src := &a.Panels[a.Active]
 	dst := &a.Panels[1-a.Active]
+	if src.View == "Quick view" || dst.View == "Quick view" {
+		return
+	}
 	dst.cancelPanelLoad()
 	dst.cancelTree()
 	previous := *dst
 	dst.Remote, dst.RemoteLocalPath = src.Remote, src.RemoteLocalPath
 	dst.Archive = src.Archive
+	dst.rememberFileView()
+	dst.Kube = src.Kube
+	dst.kubeWatchRevision = 0
+	if dst.Kube != nil || dst.Remote != nil {
+		dst.Async = true
+	}
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
 		dst.View = "Full"
 	}
@@ -209,6 +211,9 @@ func (a *App) matchOtherPanel() {
 				}
 			}
 		}
+	}
+	if previous.Kube != nil && previous.Kube != src.Kube {
+		previous.Kube.close()
 	}
 	dst.Hidden = false
 	a.previewKey = ""
@@ -228,6 +233,9 @@ func (a *App) togglePanel(index int) {
 func (a *App) rereadPanel(index int) {
 	p := &a.Panels[index]
 	a.infoKeys = [2]string{}
+	if p.Kube != nil {
+		p.Kube.invalidate("")
+	}
 	if p.Archive != nil {
 		a.openArchive(index, p.Archive.Path)
 	} else {

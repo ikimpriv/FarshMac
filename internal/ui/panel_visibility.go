@@ -19,8 +19,8 @@ func (a *App) copyPanelNames(full, resolve bool) {
 	var names []string
 	for _, path := range p.Selected() {
 		switch {
-		case full && resolve && p.Remote != nil:
-			path = p.Remote.Label() + path
+		case full && resolve && p.served():
+			path = p.label() + path
 		case full && resolve:
 			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil {

@@ -30,7 +30,7 @@ func archiveShellApp(t *testing.T) (*App, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { closeAndWait(a) })
 	a.Settings.Shell = "bash"
 	a.Settings.ShellCustomPrompt = false
 	selectEntry(t, &a.Panels[0], "test.zip")
@@ -90,7 +90,7 @@ func TestCompletionUsesFilesystemPathForRemoteAndArchivePanels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Panels[0].Remote = &remotefs.Config{Protocol: "sftp", Host: "test", Port: 22}
 	a.Panels[0].Path = "/home/user/remote-only"
 	a.Panels[0].RemoteLocalPath = local

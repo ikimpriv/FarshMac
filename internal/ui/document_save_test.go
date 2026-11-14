@@ -760,7 +760,7 @@ func TestRemoteSaveChangedOffersOverwrite(t *testing.T) {
 	a.key(Message{Key: "F4"})
 	waitNetwork(t, a)
 	d := a.Doc
-	if d == nil || d.Remote == nil {
+	if d == nil || d.Source == nil {
 		t.Fatal("remote editor", a.Status)
 	}
 	writeRemote(t, c, "/folder/file.txt", "server side change")
@@ -774,12 +774,12 @@ func TestRemoteSaveChangedOffersOverwrite(t *testing.T) {
 		t.Fatal("remote overwrite", got, a.Status)
 	}
 	// Unknown attributes after an interrupted upload must not block saving.
-	d.RemoteInfo = nil
+	d.SourceInfo = nil
 	d.Insert("again ")
 	d.modified()
 	a.save()
 	waitNetwork(t, a)
-	if a.Form != nil || d.Dirty || d.RemoteInfo == nil {
+	if a.Form != nil || d.Dirty || d.SourceInfo == nil {
 		t.Fatal("save with unknown remote attributes", a.Status)
 	}
 }
@@ -829,7 +829,7 @@ func TestRemoteSymlinkToFileOpensInViewer(t *testing.T) {
 	selectEntry(t, p, "current")
 	a.key(Message{Key: "F3"})
 	waitNetwork(t, a)
-	if a.Doc == nil || a.Doc.Text != "remote data" || a.Doc.RemotePath != "/folder/file.txt" {
+	if a.Doc == nil || a.Doc.Text != "remote data" || a.Doc.Source.(*remoteSource).Path != "/folder/file.txt" {
 		t.Fatal("remote link to file", a.Doc, a.Status)
 	}
 	a.finishCloseDocument()
@@ -877,7 +877,7 @@ func TestAdjacentFileOnRemotePanelDownloads(t *testing.T) {
 			break
 		}
 	}
-	if a.Doc == first || a.Doc == nil || a.Doc.Remote == nil || len(a.Documents) != 0 {
+	if a.Doc == first || a.Doc == nil || a.Doc.Source == nil || len(a.Documents) != 0 {
 		t.Fatal("adjacent remote file", a.Doc, a.Status)
 	}
 	if _, err := os.Stat(temp); !os.IsNotExist(err) {

@@ -131,7 +131,7 @@ func TestRemoteCopyOntoItselfMessage(t *testing.T) {
 	w.Close()
 	o := fsops.NewOperation("Copy")
 	defer o.Cancel()
-	end := remotefs.Endpoint{Remote: &c}
+	end := remotefs.RemoteEndpoint(&c)
 	err = remotefs.Copy(end, end, []remotefs.Pair{{Source: "/file", Destination: "/file"}}, remotefs.CopyOptions{Workers: 1}, o)
 	if err == nil || !strings.Contains(err.Error(), "cannot copy a file onto itself: /file") {
 		t.Fatal(err)

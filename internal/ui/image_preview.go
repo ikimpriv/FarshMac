@@ -25,7 +25,7 @@ func (a *App) imagePreview() *ImagePreview {
 	}
 	for i, p := range a.Panels {
 		source := &a.Panels[1-i]
-		if p.View != "Quick view" || p.Hidden || source.Remote != nil || source.Archive != nil || source.Current() != a.previewPath {
+		if p.View != "Quick view" || p.Hidden || !source.can(capQuickView) || source.virtual(source.Current()) || source.Current() != a.previewPath {
 			continue
 		}
 		x, w := a.panelRect(i)

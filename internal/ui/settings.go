@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"farshmac/internal/kube"
 	"farshmac/internal/remotefs"
 	"farshmac/internal/terminal"
 	"farshmac/internal/textfile"
@@ -52,6 +53,11 @@ type Settings struct {
 	SortGroups       string
 	MaskGroups       map[string]string
 	DescriptionFile  string
+	// Kubernetes panels (docs/KUBERNETES_PANEL_SPEC.md).
+	KubeProfiles    []kube.Profile `json:",omitempty"`
+	KubeHiddenTypes string         // Comma-separated type folders never listed.
+	KubeSnapshotTTL int            // Seconds a namespace snapshot stays fresh (0 = 30).
+	KubeLogsTail    int            // Lines Shift+F3 shows (0 = 1000).
 }
 type UserCommand struct{ Name, Command string }
 type Association struct{ Mask, Command, Viewer, Editor string }
@@ -76,6 +82,7 @@ func setupPath() string {
 }
 func (a *App) LoadSetup() {
 	defer a.loadConnectionProfiles()
+	defer a.loadKubeProfiles()
 	s, ok := a.readSetupFile()
 	if !ok {
 		return
@@ -138,7 +145,7 @@ func (a *App) configurePanel(i int) {
 func (a *App) setupSnapshot() savedSetup {
 	a.normalizeSettings()
 	for _, p := range a.Panels {
-		if p.Remote != nil {
+		if p.served() {
 			continue
 		}
 		// History entries carry their source (see historyEntry); remote

@@ -70,7 +70,7 @@ func TestFTPAndSFTPCopyRoundTrip(t *testing.T) {
 				c = testnet.SFTP(t)
 			}
 			source := fixture(t)
-			remote := remotefs.Endpoint{Remote: &c}
+			remote := remotefs.RemoteEndpoint(&c)
 			copyTree(t, remotefs.Endpoint{}, remote, filepath.Join(source, "folder"), "/uploaded")
 			if ftp != nil && ftp.Peak.Load() < 3 {
 				t.Fatalf("transfers not parallel: peak %d", ftp.Peak.Load())
@@ -112,8 +112,8 @@ func TestServerToServerCopy(t *testing.T) {
 	a := testnet.SFTP(t)
 	b := testnet.FTP(t)
 	source := fixture(t)
-	copyTree(t, remotefs.Endpoint{}, remotefs.Endpoint{Remote: &a}, filepath.Join(source, "folder"), "/source")
-	copyTree(t, remotefs.Endpoint{Remote: &a}, remotefs.Endpoint{Remote: &b.Config}, "/source", "/target")
+	copyTree(t, remotefs.Endpoint{}, remotefs.RemoteEndpoint(&a), filepath.Join(source, "folder"), "/source")
+	copyTree(t, remotefs.RemoteEndpoint(&a), remotefs.RemoteEndpoint(&b.Config), "/source", "/target")
 	got, err := os.ReadFile(filepath.Join(b.Root, "target", "file-04.txt"))
 	if err != nil || len(got) != 65536 || got[0] != 4 {
 		t.Fatal("server-to-server", err)
@@ -218,7 +218,7 @@ func TestSameServerCopyAndRecursiveRejection(t *testing.T) {
 			} else {
 				c = testnet.SFTP(t)
 			}
-			endpoint := remotefs.Endpoint{Remote: &c}
+			endpoint := remotefs.RemoteEndpoint(&c)
 			copyTree(t, remotefs.Endpoint{}, endpoint, filepath.Join(fixture(t), "folder"), "/source")
 			copyTree(t, endpoint, endpoint, "/source", "/copy")
 			o := fsops.NewOperation("Copy")
@@ -244,7 +244,7 @@ func TestCancelTransferKeepsOriginalDestination(t *testing.T) {
 	defer o.Cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- remotefs.Copy(remotefs.Endpoint{Remote: &server.Config}, remotefs.Endpoint{}, []remotefs.Pair{{Source: "/source", Destination: dst}}, remotefs.CopyOptions{Workers: 1, Conflict: func(string, string) int { return 0 }}, o)
+		done <- remotefs.Copy(remotefs.RemoteEndpoint(&server.Config), remotefs.Endpoint{}, []remotefs.Pair{{Source: "/source", Destination: dst}}, remotefs.CopyOptions{Workers: 1, Conflict: func(string, string) int { return 0 }}, o)
 	}()
 	deadline := time.After(3 * time.Second)
 	for server.Active.Load() == 0 {
@@ -312,7 +312,7 @@ func TestRemoteSaveRefusesChangedDestination(t *testing.T) {
 	}
 	o := fsops.NewOperation("Save")
 	defer o.Cancel()
-	err = remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Remote: &c}, []remotefs.Pair{{Source: source, Destination: "/file"}}, remotefs.CopyOptions{Workers: 1, ExpectedDestination: old, Conflict: func(string, string) int { return 0 }}, o)
+	err = remotefs.Copy(remotefs.Endpoint{}, remotefs.RemoteEndpoint(&c), []remotefs.Pair{{Source: source, Destination: "/file"}}, remotefs.CopyOptions{Workers: 1, ExpectedDestination: old, Conflict: func(string, string) int { return 0 }}, o)
 	if err == nil || !strings.Contains(err.Error(), "changed") {
 		t.Fatal("changed remote file overwritten", err)
 	}
@@ -372,7 +372,7 @@ func TestRemoteCopyCollisionDecisions(t *testing.T) {
 					}
 					o := fsops.NewOperation("Copy")
 					defer o.Cancel()
-					err := remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Remote: &c}, []remotefs.Pair{{Source: local, Destination: dst}}, remotefs.CopyOptions{Workers: 3, Conflict: func(string, string) int { return choice }}, o)
+					err := remotefs.Copy(remotefs.Endpoint{}, remotefs.RemoteEndpoint(&c), []remotefs.Pair{{Source: local, Destination: dst}}, remotefs.CopyOptions{Workers: 3, Conflict: func(string, string) int { return choice }}, o)
 					if choice == 2 {
 						if !errors.Is(err, fsops.ErrCancelled) {
 							t.Fatal(err)
@@ -420,7 +420,7 @@ func TestRemoteAppendAndMoveMerge(t *testing.T) {
 			} else {
 				c = testnet.SFTP(t)
 			}
-			remote := remotefs.Endpoint{Remote: &c}
+			remote := remotefs.RemoteEndpoint(&c)
 			f, e := c.Dial(context.Background())
 			if e != nil {
 				t.Fatal(e)

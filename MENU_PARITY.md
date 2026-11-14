@@ -89,6 +89,19 @@ window apply live to all windows.
 Commands → Network connections lists saved profiles. Several profiles per server
 are allowed; a profile is identified by server plus folder. F8/Delete deletes the
 selected profile after confirmation. Internationalized (IDN) host names work.
+**New Kubernetes cluster…** connects to a cluster from a kubeconfig file and a
+context; cluster profiles are kept in `kubernetes.json`, identified by kubeconfig
+plus context, and deleted with F8 like server profiles. **Disconnect active panel**
+returns either kind of panel to its local folder.
+
+## Kubernetes
+
+A Kubernetes panel adds a **Kubernetes** section to F9 (between Options and Right):
+Logs… (⇧F3), Follow logs in terminal (⌥F3), Describe (⇧F4), Open shell in
+container, Export manifests… (F5), Refresh snapshot (⌘R), Switch context…,
+Disconnect. The key bar changes with the level (namespaces, type folder, object,
+containers, container files) and with the held modifiers. See
+[docs/KUBERNETES_PANEL_SPEC.md](docs/KUBERNETES_PANEL_SPEC.md).
 
 - SFTP host keys are checked against `~/.ssh/known_hosts`. An unknown key offers
   **Trust once**, **Trust and save** (appends to `~/.ssh/known_hosts`) and Cancel.

@@ -1,80 +1,80 @@
-# Kubernetes-панель: требования, gap analysis, спецификация реализации
+# Kubernetes panel: requirements, gap analysis, implementation specification
 
-Статус: проект, реализация не начата. Документ фиксирует решения, чтобы реализацию можно было вести по фазам без повторного обсуждения.
+Status: phases 0–2 are implemented on the `kubernetes-panel` branch (2026-11-13); phase 3 (apply when copying into a cluster, scale/restart/port-forward, restoring from the session, Info panel, Quick view, `du`) has not been started. Differences between the implementation and the text below: `Panel` keeps the `Remote`/`Archive` fields and gains `Kube`, and `panelBackend` is computed from them (`panel_backend.go`); `remotefs.Endpoint{Opener}` is implemented; `documentSource` is implemented for server and container files (`remoteSource`) and for manifests (`manifestSource`); instead of `terminal.Stream`, `App` has `Foreign foreignStream` (`foreign.go`) for exec and follow-logs; a type folder whose name exists in several groups is called `plural.group`; Shift+F4 inside a container filesystem remains "new file"; objects without child objects are shown as files (Enter = manifest), not as empty folders; the panel columns are Kind / Status / Age (Detailed: creation time); after a namespace is listed, its types are observed through a Table watch (`kube.WatchFolder`, `Snapshot.Apply`), the snapshot is updated in memory and the panel re-reads itself, the TTL remains a fallback; after a command finishes in a container, the terminal waits for a key and returns to the panels; Quick view (Ctrl+Q) next to a Kubernetes panel shows the describe of the current object with highlighting (moved forward from phase 3); apply when copying into a namespace (phase 3, item 1) is implemented in `kube_apply.go`: the target namespace is always substituted, without Override/Skip questions, a kind mismatch with the type folder is not checked, on an apply error — Retry/Skip/Cancel through `Operation.Attempt`, there is a Force checkbox. Tests: `internal/kube` (fake API in `internal/kube/kubetest`, local `sh` in `internal/kube/localexec`), `internal/ui/kube_*_test.go`.
 
-Принятые направления (ревизия 3):
-- Backend — **client-go**, без `kubectl`.
-- Режимы панели переводятся на **strategy pattern** (интерфейс `panelBackend`) с enum `backendKind` для дешёвых проверок. Это отдельная подготовительная фаза без изменения поведения.
-- Key bar **реагирует на удержание Shift/Ctrl/Alt/Cmd**, как в Far Manager, для всех режимов панели.
-- Назначение — **dev tool для быстрого доступа к объектам**, не универсальный инструмент обслуживания кластера. Cluster-scoped объекты (Node, PV, ClusterRole, CRD) в панели не показываются.
-- Дерево: `namespace > <тип ресурса> > объект > <тип дочернего ресурса> > объект > … > pod > container`. Промежуточные владельцы (ReplicaSet, ControllerRevision) **схлопываются** по жёстко заданным правилам, чтобы дерево было неглубоким.
-- Describe — через `k8s.io/kubectl/pkg/describe`.
+Adopted directions (revision 3):
+- Backend — **client-go**, no `kubectl`.
+- Panel modes are moved to a **strategy pattern** (the `panelBackend` interface) with a `backendKind` enum for cheap checks. This is a separate preparatory phase with no behavior change.
+- The key bar **reacts to holding Shift/Ctrl/Alt/Cmd**, as in Far Manager, for all panel modes.
+- The purpose is a **dev tool for quick access to objects**, not a universal cluster maintenance tool. Cluster-scoped objects (Node, PV, ClusterRole, CRD) are not shown in the panel.
+- Tree: `namespace > <resource type> > object > <child resource type> > object > … > pod > container`. Intermediate owners (ReplicaSet, ControllerRevision) are **collapsed** by hard-coded rules so that the tree stays shallow.
+- Describe — through `k8s.io/kubectl/pkg/describe`.
 
-## 1. Требования (как сформулированы)
+## 1. Requirements (as formulated)
 
-1. В **Commands → Network connections** появляется пункт **New Kubernetes cluster…**: указывается путь к kubeconfig и выбирается контекст. Профиль сохраняется и показывается в списке подключений.
-2. Kubernetes показывается в панели как файловая система:
-   - корень — namespaces;
-   - внутри namespace — папки по типу ресурса (`deployments`, `services`, `configmaps`, CRD-типы, …);
-   - внутри папки типа — объекты этого типа;
-   - внутри объекта — папки дочерних типов с объектами, которыми он владеет, причём неудобные промежуточные уровни (ReplicaSet) пропускаются: `deployments > app > pods > app-7c9d-x > container`.
-3. При перемещении по уровням меняется нижняя панель клавиш (key bar) и доступные действия.
-4. F5 на объекте копирует его манифест. F5 манифеста (локальный файл) в namespace создаёт объект.
-5. Вход в Pod показывает список контейнеров (если их несколько). Вход в контейнер (или в одноконтейнерный Pod) показывает файловую систему контейнера.
-6. Команда меню «Логи» для Pod или контейнера.
-7. Копирование файлов из контейнера и в контейнер.
-8. Внутри контейнера команда из командной строки выполняется в Pod (если есть права).
+1. **Commands → Network connections** gets a **New Kubernetes cluster…** item: a kubeconfig path is given and a context is selected. The profile is saved and shown in the connection list.
+2. Kubernetes is shown in the panel as a file system:
+   - the root is namespaces;
+   - inside a namespace — folders by resource type (`deployments`, `services`, `configmaps`, CRD types, …);
+   - inside a type folder — objects of that type;
+   - inside an object — folders of child types with the objects it owns, where inconvenient intermediate levels (ReplicaSet) are skipped: `deployments > app > pods > app-7c9d-x > container`.
+3. As you move between levels, the bottom key bar and the available actions change.
+4. F5 on an object copies its manifest. F5 of a manifest (a local file) into a namespace creates the object.
+5. Entering a Pod shows the list of containers (if there are several). Entering a container (or a single-container Pod) shows the container's file system.
+6. A "Logs" menu command for a Pod or container.
+7. Copying files from a container and into a container.
+8. Inside a container, a command from the command line is executed in the Pod (if permitted).
 
-## 2. Проверка идеи на целостность
+## 2. Checking the idea for consistency
 
-| # | Проблема | Решение |
+| # | Problem | Solution |
 |---|----------|---------|
-| C1 | Объект может иметь несколько владельцев, владельца в другом namespace или cluster-scoped владельца (Node). | Папка типа на уровне namespace показывает **все** объекты типа, независимо от владения (как `kubectl get <type>`). Внутри объекта показываются только дочерние объекты по правилам 5.2. Один Pod виден и в `ns/pods/`, и в `ns/deployments/app/pods/`: это представление, а не хранилище. |
-| C2 | Имена записей в папке должны быть уникальны и не содержать `/`. | В папке типа все объекты одного GVR, имена уникальны по определению, поэтому запись = имя объекта без суффикса. Папка типа называется по множественному имени ресурса (`deployments`); если одно имя ресурса есть в нескольких группах, папка называется `deployments.<group>`. Разбор имён назад не требуется: снимок хранит карту «путь → объект». |
-| C3 | Одноконтейнерный Pod: при входе сразу видна ФС, но тогда негде показать действия уровня Pod. | Правило «сразу ФС» применяется только когда в Pod ровно один обычный контейнер и нет init/ephemeral-контейнеров. Иначе показывается список контейнеров с пометками ` (init)`, ` (ephemeral)`. Логи и манифест доступны на записи Pod в родительской папке. Виртуальный путь однозначен: после сегмента Pod либо всегда контейнер, либо всегда путь ФС (решает снимок). |
-| C4 | F5 имеет три смысла: манифест объекта, файлы контейнера, применение манифеста. | Смысл определяется **уровнем источника** и **уровнем назначения** (таблица в 5.3). Запись-контейнер копировать нельзя. Локальный файл в список контейнеров копировать нельзя. |
-| C5 | Pod не в состоянии Running не имеет доступной ФС. | Вход показывает ошибку в панели, остальные действия (манифест, логи, describe, удаление) работают. |
-| C6 | В контейнере может не быть `sh`/`tar` (distroless). | При первом входе выполняется probe (`/bin/sh`, `/bin/bash`, наличие `tar`, вариант `find`/`stat`/`ls`). Результат кэшируется по (pod uid, container). Без shell: ФС и команды недоступны с явной ошибкой. Без `tar`: деревья недоступны, одиночные файлы через `cat`. Ephemeral debug-контейнер — фаза 3. |
-| C7 | F6 (переименование) не имеет смысла для объектов Kubernetes. | На уровне объектов F6 отключён. В ФС контейнера F6 = `mv` внутри того же контейнера. |
-| C8 | F8 на namespace уничтожает всё содержимое. | Удаление namespace требует ввода его имени. Удаление объектов показывает kind/name и каскад. Shift+F8 на объекте = `PropagationPolicy: Orphan`. |
-| C9 | Синхронизация папки панели и терминала (Cmd+O) не применима. | Kubernetes-панель ведёт себя как Remote: локальный shell остаётся в последней локальной папке. |
-| C10 | Команда «в Pod» и терминал. | С client-go интерактивный exec — это поток SPDY/WebSocket с TTY. Терминальная область получает абстракцию `terminal.Stream`: пока выполняется команда в контейнере, вывод идёт в xterm, ввод и resize — в поток exec; локальный shell простаивает. Это даёт и «Open shell in container» как настоящий интерактивный shell. Постоянного shell между отдельными командами нет: cwd берётся из панели, окружение не сохраняется. |
-| C11 | Редактирование манифеста (F4) и конкурентные изменения. | Сохранение = `Update` с `resourceVersion` из загруженного объекта. `errors.IsConflict` показывается как ошибка, буфер и флаг изменений сохраняются (согласуется с TODO.md про ошибки сохранения). |
-| C12 | Копирование манифестов Secret на диск записывает секреты в открытом виде (base64). | Если выделение содержит Secret, дополнительное подтверждение. |
-| C13 | Exec-плагины аутентификации (`gke-gcloud-auth-plugin`, `aws`, `kubelogin`) запускаются client-go по PATH процесса, а PATH GUI-приложения, запущенного из Finder, минимален. | При первом обращении к Kubernetes один раз запрашивается PATH login-shell (`$SHELL -lc 'printf %s "$PATH"'`, таймаут 5 с) и применяется к процессу через `os.Setenv`. В профиле есть необязательное поле «Extra PATH». Ошибка плагина показывается с его stderr. |
-| C14 | Cluster-scoped объекты (Node, PV, ClusterRole, CRD) не входят в «корень = namespaces». | Не показываются. Инструмент ориентирован на объекты приложения, а не на обслуживание кластера. Node нужен разработчику редко; для Pod имя ноды показывается в Info panel и в Describe. |
-| C15 | Папка типа внутри объекта и имя контейнера внутри Pod — разные уровни, но оба идут после имени объекта. | Внутри Pod папки типов не показываются (у Pod нет интересных дочерних объектов), поэтому сегмент после Pod — всегда контейнер или путь ФС (C3). Внутри остальных объектов — только папки типов. |
-| C16 | Глубина дерева. Цепочка `Deployment → ReplicaSet → Pod` и `StatefulSet → ControllerRevision` делают дерево на уровень глубже без пользы. | Жёстко заданный список **прозрачных** типов, через которые владение проходит насквозь: `replicasets`, `controllerrevisions`. Они остаются доступными в `ns/replicasets/`, но внутри Deployment их нет. Список расширяем в коде, не в настройках (5.2). |
+| C1 | An object may have several owners, an owner in another namespace, or a cluster-scoped owner (Node). | The type folder at the namespace level shows **all** objects of the type regardless of ownership (like `kubectl get <type>`). Inside an object only child objects by the rules of 5.2 are shown. One Pod is visible both in `ns/pods/` and in `ns/deployments/app/pods/`: this is a view, not storage. |
+| C2 | Entry names in a folder must be unique and must not contain `/`. | In a type folder all objects belong to one GVR, names are unique by definition, so the entry = object name without a suffix. The type folder is named after the plural resource name (`deployments`); if one resource name exists in several groups, the folder is named `deployments.<group>`. Parsing names back is not required: the snapshot keeps a "path → object" map. |
+| C3 | Single-container Pod: on entering, the FS is shown immediately, but then there is nowhere to show Pod-level actions. | The "FS immediately" rule applies only when the Pod has exactly one regular container and no init/ephemeral containers. Otherwise a container list is shown with the marks ` (init)`, ` (ephemeral)`. Logs and the manifest are available on the Pod entry in the parent folder. The virtual path is unambiguous: after the Pod segment there is either always a container or always an FS path (the snapshot decides). |
+| C4 | F5 has three meanings: the object manifest, container files, applying a manifest. | The meaning is determined by the **source level** and the **destination level** (table in 5.3). A container entry cannot be copied. A local file cannot be copied into a container list. |
+| C5 | A Pod not in the Running state has no accessible FS. | Entering shows an error in the panel; the other actions (manifest, logs, describe, delete) work. |
+| C6 | A container may have no `sh`/`tar` (distroless). | On first entry a probe is run (`/bin/sh`, `/bin/bash`, presence of `tar`, the `find`/`stat`/`ls` variant). The result is cached by (pod uid, container). Without a shell: the FS and commands are unavailable with an explicit error. Without `tar`: trees are unavailable, single files go through `cat`. An ephemeral debug container is phase 3. |
+| C7 | F6 (rename) makes no sense for Kubernetes objects. | At the object level F6 is disabled. In the container FS F6 = `mv` within the same container. |
+| C8 | F8 on a namespace destroys all of its contents. | Deleting a namespace requires typing its name. Deleting objects shows kind/name and the cascade. Shift+F8 on an object = `PropagationPolicy: Orphan`. |
+| C9 | Syncing the panel folder with the terminal (Cmd+O) is not applicable. | The Kubernetes panel behaves like Remote: the local shell stays in the last local folder. |
+| C10 | A command "in the Pod" and the terminal. | With client-go an interactive exec is a SPDY/WebSocket stream with a TTY. The terminal area gets a `terminal.Stream` abstraction: while a command runs in the container, output goes to xterm, input and resize go to the exec stream; the local shell idles. This also gives "Open shell in container" as a real interactive shell. There is no persistent shell between separate commands: the cwd is taken from the panel, the environment is not preserved. |
+| C11 | Editing a manifest (F4) and concurrent changes. | Saving = `Update` with the `resourceVersion` of the loaded object. `errors.IsConflict` is shown as an error; the buffer and the modified flag are kept (consistent with TODO.md about save errors). |
+| C12 | Copying Secret manifests to disk writes secrets in the clear (base64). | If the selection contains a Secret, an additional confirmation. |
+| C13 | Exec authentication plugins (`gke-gcloud-auth-plugin`, `aws`, `kubelogin`) are launched by client-go via the process PATH, and the PATH of a GUI application launched from Finder is minimal. | On the first access to Kubernetes the login-shell PATH is requested once (`$SHELL -lc 'printf %s "$PATH"'`, 5 s timeout) and applied to the process via `os.Setenv`. The profile has an optional "Extra PATH" field. A plugin error is shown together with its stderr. |
+| C14 | Cluster-scoped objects (Node, PV, ClusterRole, CRD) do not fit into "root = namespaces". | Not shown. The tool is oriented toward application objects, not cluster maintenance. A developer rarely needs Node; for a Pod the node name is shown in the Info panel and in Describe. |
+| C15 | A type folder inside an object and a container name inside a Pod are different levels, but both follow the object name. | Inside a Pod no type folders are shown (a Pod has no interesting child objects), so the segment after the Pod is always a container or an FS path (C3). Inside the other objects — only type folders. |
+| C16 | Tree depth. The chains `Deployment → ReplicaSet → Pod` and `StatefulSet → ControllerRevision` make the tree one level deeper with no benefit. | A hard-coded list of **transparent** types through which ownership passes straight through: `replicasets`, `controllerrevisions`. They remain available in `ns/replicasets/`, but they are absent inside a Deployment. The list is extensible in code, not in settings (5.2). |
 
-Вывод: идея целостна при соблюдении правил C2–C4. Основная работа — не UI Kubernetes, а подготовительный рефакторинг режимов панели (раздел 4) и key bar (раздел 6).
+Conclusion: the idea is consistent provided rules C2–C4 are followed. The main work is not the Kubernetes UI but the preparatory refactoring of panel modes (section 4) and the key bar (section 6).
 
-## 3. Gap analysis относительно текущего кода
+## 3. Gap analysis against the current code
 
-| # | Что есть | Чего не хватает | Решение |
+| # | What exists | What is missing | Solution |
 |---|----------|-----------------|---------|
-| G1 | Зависимостей Kubernetes нет; `go.mod` содержит 7 прямых модулей. | Клиент API, exec/stream, YAML. | **client-go** (`k8s.io/client-go`, `k8s.io/apimachinery`, `k8s.io/api`) одной согласованной версии `v0.3x` под текущие кластеры, пин точной версии. YAML — `sigs.k8s.io/yaml` и `k8s.io/apimachinery/pkg/util/yaml` (идут транзитивно). Цена: `go.sum` вырастает примерно на 150 модулей, бинарник примерно на 25–35 МБ, первая сборка дольше; `THIRD_PARTY_NOTICES.txt` дополняется Apache-2.0 (Kubernetes, gogo/protobuf, gnostic, …) и BSD/MIT остальных. Это осознанная плата за отсутствие внешнего бинарника. |
-| G2 | `Panel` имеет два режима через поля `Remote *remotefs.Config` и `Archive *fsops.ArchiveIndex`; 37 мест в `internal/ui` проверяют `Remote != nil`/`== nil`, ещё ряд мест — `Archive != nil`. | Третий режим без размножения условий. | Strategy pattern: интерфейс `panelBackend` с четырьмя реализациями (local, archive, remote, kube) и enum `backendKind`. Подробно в разделе 4. Сначала рефакторинг существующих режимов без изменения поведения, затем Kubernetes. |
-| G3 | `remotefs.FS` — интерфейс удалённой ФС; `remotefs.Copy`/`Move`/`RemoveTree` работают через него с прогрессом, коллизиями и отменой. `Endpoint{Remote *Config}`. | Открытие FS контейнера. | `kube.ContainerFS` реализует `remotefs.FS` поверх `remotecommand` exec. `Endpoint` обобщается до `{Opener}` (4.4). |
-| G4 | Листинг — `[]Entry{Name, Info os.FileInfo, Dir}`; отрисовка берёт размер и дату из `Info`, спец-колонки через `Info.Sys()`. | Статус объекта и возраст. | `kube.ObjectInfo` реализует `os.FileInfo`; `Sys()` возвращает `*kube.Object`. Колонка статуса берётся из серверного Table-представления (5.2), что даёт те же колонки, что у `kubectl get`, включая CRD с `additionalPrinterColumns`. |
-| G5 | Key bar статичен (`draw.go:39`), меняет только F8 для Remote; не реагирует на удержание модификаторов. Renderer не сообщает об удержании. | Контекстные подписи по режиму, уровню и модификаторам. | Раздел 6. |
-| G6 | `menuSections()` динамична. | Раздел «Kubernetes» в F9. | Раздел берётся из `panelBackend.MenuSection()`. |
-| G7 | Профили — `[]remotefs.Config` в `connections.json`; старые версии не переживут записи другого типа. | Хранение профилей кластеров. | Отдельный файл `kubernetes.json` (`[]kube.Profile`), поле `Settings.KubeProfiles`. Секретов нет. |
-| G8 | Форма `a.form` без выпадающих списков. | Выбор контекста. | Два шага: форма (kubeconfig, name) → `a.choose` со списком контекстов из `clientcmd.LoadFromFile`. Текущий контекст предвыбран. |
-| G9 | `Document` статичен. | Логи с follow. | Статичные логи (tail N) — в viewer. Follow — через `terminal.Stream` в терминальной области (как exec, C10): `GetLogs(...).Stream(ctx)` с `Follow: true`, Ctrl+C отменяет контекст. |
-| G10 | `execute()` всегда отправляет команду локальному shell. | Выполнение в контейнере. | Ветка через `panelBackend.Execute(a, cmd) bool`: kube-backend на уровне ФС контейнера запускает `terminal.Stream` exec (C10). В историю попадает введённый текст. Приглашение `pod:<ns>/<pod>/<ctr>:<dir>>`. |
-| G11 | Сессия сохраняет только локальный путь; Remote-панели не восстанавливаются. | Восстановление Kubernetes-панели. | MVP как Remote. Восстановление по профилю — фаза 3, секретов не требует. |
-| G12 | `openRemoteDocument`/`saveRemoteDocument` привязаны к `remotefs.Config.Dial`. | Просмотр/правка файлов контейнера и манифестов. | `documentSource` с `Fetch(ctx, o) (localPath, info)` и `Store(ctx, data)`; реализации remote, container, manifest. Выдаётся через `panelBackend.DocumentSource`. |
-| G13 | Терминальная область жёстко связана с `terminal.Session` (локальный PTY): `App.Term`, `a.pending`, `Handle("input")`. | Второй источник байтов и приёмник ввода. | `terminal.Stream` интерфейс `{Write([]byte) error; Resize(cols, rows) error; Events() <-chan Event; Close()}`; `Session` реализует его; `kube.ExecStream` реализует поверх `remotecommand.StreamWithContext` с `TerminalSizeQueue`. `App.Foreign terminal.Stream` при активном удалённом потоке перехватывает ввод и resize, по завершении возвращает управление локальному shell. |
-| G14 | Отмена через `fsops.Operation.Context()`. | — | Все вызовы client-go принимают `o.Context()`. |
-| G15 | Тесты используют loopback-серверы (`internal/testnet`). | Тестовый API-сервер. | `httptest.Server` с ручным роутером для discovery, LIST (Table и JSON), GET/UPDATE/DELETE/PATCH, logs; exec — тестовый SPDY/WebSocket-сервер поверх `k8s.io/apimachinery/pkg/util/httpstream` либо инжекция `Executor` интерфейса с локальным `sh`. Реальный кластер — только opt-in `FARSHMAC_KUBE_CHECK` (по аналогии с `FARSHMAC_SFTP_CHECK`). |
+| G1 | There are no Kubernetes dependencies; `go.mod` contains 7 direct modules. | API client, exec/stream, YAML. | **client-go** (`k8s.io/client-go`, `k8s.io/apimachinery`, `k8s.io/api`) at one consistent `v0.3x` version matching current clusters, pinned to an exact version. YAML — `sigs.k8s.io/yaml` and `k8s.io/apimachinery/pkg/util/yaml` (come transitively). Cost: `go.sum` grows by roughly 150 modules, the binary by roughly 25–35 MB, the first build takes longer; `THIRD_PARTY_NOTICES.txt` is extended with Apache-2.0 (Kubernetes, gogo/protobuf, gnostic, …) and the BSD/MIT of the rest. This is a deliberate price for not having an external binary. |
+| G2 | `Panel` has two modes via the fields `Remote *remotefs.Config` and `Archive *fsops.ArchiveIndex`; 37 places in `internal/ui` check `Remote != nil`/`== nil`, and a number of other places check `Archive != nil`. | A third mode without multiplying conditions. | Strategy pattern: the `panelBackend` interface with four implementations (local, archive, remote, kube) and the `backendKind` enum. Details in section 4. First a refactoring of the existing modes with no behavior change, then Kubernetes. |
+| G3 | `remotefs.FS` is the remote FS interface; `remotefs.Copy`/`Move`/`RemoveTree` work through it with progress, collisions and cancellation. `Endpoint{Remote *Config}`. | Opening a container FS. | `kube.ContainerFS` implements `remotefs.FS` on top of `remotecommand` exec. `Endpoint` is generalized to `{Opener}` (4.4). |
+| G4 | The listing is `[]Entry{Name, Info os.FileInfo, Dir}`; drawing takes the size and date from `Info`, special columns through `Info.Sys()`. | Object status and age. | `kube.ObjectInfo` implements `os.FileInfo`; `Sys()` returns `*kube.Object`. The status column is taken from the server-side Table representation (5.2), which gives the same columns as `kubectl get`, including CRDs with `additionalPrinterColumns`. |
+| G5 | The key bar is static (`draw.go:39`); it only changes F8 for Remote; it does not react to held modifiers. The renderer does not report holding. | Context-sensitive labels by mode, level and modifiers. | Section 6. |
+| G6 | `menuSections()` is dynamic. | A "Kubernetes" section in F9. | The section is taken from `panelBackend.MenuSection()`. |
+| G7 | Profiles are `[]remotefs.Config` in `connections.json`; older versions will not survive records of another type. | Storing cluster profiles. | A separate file `kubernetes.json` (`[]kube.Profile`), the field `Settings.KubeProfiles`. No secrets. |
+| G8 | The `a.form` form has no drop-down lists. | Context selection. | Two steps: form (kubeconfig, name) → `a.choose` with the list of contexts from `clientcmd.LoadFromFile`. The current context is preselected. |
+| G9 | `Document` is static. | Logs with follow. | Static logs (tail N) — in the viewer. Follow — through `terminal.Stream` in the terminal area (like exec, C10): `GetLogs(...).Stream(ctx)` with `Follow: true`, Ctrl+C cancels the context. |
+| G10 | `execute()` always sends the command to the local shell. | Execution in a container. | A branch through `panelBackend.Execute(a, cmd) bool`: the kube backend at the container FS level starts a `terminal.Stream` exec (C10). The typed text goes into the history. The prompt is `pod:<ns>/<pod>/<ctr>:<dir>>`. |
+| G11 | The session saves only the local path; Remote panels are not restored. | Restoring a Kubernetes panel. | MVP as Remote. Restoring by profile is phase 3; it requires no secrets. |
+| G12 | `openRemoteDocument`/`saveRemoteDocument` are tied to `remotefs.Config.Dial`. | Viewing/editing container files and manifests. | `documentSource` with `Fetch(ctx, o) (localPath, info)` and `Store(ctx, data)`; implementations remote, container, manifest. Provided through `panelBackend.DocumentSource`. |
+| G13 | The terminal area is hard-wired to `terminal.Session` (local PTY): `App.Term`, `a.pending`, `Handle("input")`. | A second byte source and input sink. | The `terminal.Stream` interface `{Write([]byte) error; Resize(cols, rows) error; Events() <-chan Event; Close()}`; `Session` implements it; `kube.ExecStream` implements it on top of `remotecommand.StreamWithContext` with a `TerminalSizeQueue`. `App.Foreign terminal.Stream`, while a remote stream is active, intercepts input and resize and hands control back to the local shell when it finishes. |
+| G14 | Cancellation through `fsops.Operation.Context()`. | — | All client-go calls take `o.Context()`. |
+| G15 | Tests use loopback servers (`internal/testnet`). | A test API server. | An `httptest.Server` with a hand-written router for discovery, LIST (Table and JSON), GET/UPDATE/DELETE/PATCH, logs; exec — a test SPDY/WebSocket server on top of `k8s.io/apimachinery/pkg/util/httpstream`, or injection of an `Executor` interface with a local `sh`. A real cluster — only opt-in `FARSHMAC_KUBE_CHECK` (by analogy with `FARSHMAC_SFTP_CHECK`). |
 
-## 4. Рефакторинг режимов панели (фаза 0)
+## 4. Panel mode refactoring (phase 0)
 
-### 4.1 Цель
+### 4.1 Goal
 
-Убрать разрозненные проверки `Remote != nil` и `Archive != nil` и дать Kubernetes-режиму одно место подключения. Поведение local, archive и remote после фазы 0 не меняется; существующие тесты проходят без правок ожиданий.
+Remove the scattered `Remote != nil` and `Archive != nil` checks and give the Kubernetes mode a single attachment point. The behavior of local, archive and remote does not change after phase 0; existing tests pass without changing expectations.
 
-### 4.2 Интерфейс
+### 4.2 Interface
 
 ```go
 type backendKind uint8
@@ -87,234 +87,234 @@ const (
 
 type panelCaps uint32
 const (
-    capEdit panelCaps = 1 << iota   // F4 и сохранение
+    capEdit panelCaps = 1 << iota   // F4 and saving
     capMkdir                         // F7
     capDelete                        // F8
-    capTrash                         // F8 = Trash (иначе Delete)
+    capTrash                         // F8 = Trash (otherwise Delete)
     capRename                        // F6
-    capCopyIn                        // панель может быть назначением F5
-    capFolderSize                    // F3 на папке, Cmd+Option+F3
-    capQuickView                     // Ctrl+Q на текущем элементе
-    capArchiveEnter                  // Enter на архиве
-    capShellSync                     // Cmd+O синхронизирует cwd
-    capDescriptions                  // files.bbs и т.п.
-    capExecute                       // команда из строки выполняется backend-ом
+    capCopyIn                        // the panel can be an F5 destination
+    capFolderSize                    // F3 on a folder, Cmd+Option+F3
+    capQuickView                     // Ctrl+Q on the current item
+    capArchiveEnter                  // Enter on an archive
+    capShellSync                     // Cmd+O syncs the cwd
+    capDescriptions                  // files.bbs and the like
+    capExecute                       // a command line command is executed by the backend
 )
 
 type panelBackend interface {
     Kind() backendKind
-    Label() string                                   // префикс заголовка панели ("", "archive:", "sftp://…", "k8s:ctx")
+    Label() string                                   // panel title prefix ("", "archive:", "sftp://…", "k8s:ctx")
     Load(p *Panel, path string, o *fsops.Operation) ([]Entry, loadMeta, error)
-    FilesystemPath(p *Panel) string                  // локальная папка для терминала и относительных путей
-    Caps(p *Panel, path string) panelCaps            // может зависеть от уровня внутри backend-а
-    KeyBar(p *Panel, mods modifiers) [10]string      // раздел 6
-    Endpoint(p *Panel) remotefs.Endpoint             // для F5/F6 через remotefs.Copy / Move
+    FilesystemPath(p *Panel) string                  // local folder for the terminal and relative paths
+    Caps(p *Panel, path string) panelCaps            // may depend on the level inside the backend
+    KeyBar(p *Panel, mods modifiers) [10]string      // section 6
+    Endpoint(p *Panel) remotefs.Endpoint             // for F5/F6 through remotefs.Copy / Move
     DocumentSource(p *Panel, path string) documentSource
     Delete(a *App, paths []string, permanent bool)
     Mkdir(a *App)
-    Execute(a *App, cmd string) bool                 // true = обработано; false = локальный shell
-    MenuSection() *menuSection                       // nil, если раздела нет
-    SessionState(p *Panel) SessionPanel              // что сохранять в сессии
-    Close()                                          // отключение
+    Execute(a *App, cmd string) bool                 // true = handled; false = local shell
+    MenuSection() *menuSection                       // nil if there is no section
+    SessionState(p *Panel) SessionPanel              // what to save in the session
+    Close()                                          // disconnect
 }
 ```
 
-`loadMeta` переносит то, что сейчас `loadRemote`/`loadArchiveDirectory` пишут в поля панели напрямую: `InfoText`, `TotalBytes`, `ItemCount`, `Descriptions`.
+`loadMeta` carries what `loadRemote`/`loadArchiveDirectory` currently write directly into panel fields: `InfoText`, `TotalBytes`, `ItemCount`, `Descriptions`.
 
-### 4.3 Что переезжает
+### 4.3 What moves
 
-| Сейчас | Куда |
+| Now | Where to |
 |--------|------|
-| `Panel.Remote`, `Panel.RemoteLocalPath`, `Panel.Archive` | `Panel.backend panelBackend` (`localBackend{}` по умолчанию), `remoteBackend{config, localPath}`, `archiveBackend{index, localPath}` |
-| `Panel.Load` ветвление | `p.backend.Load(...)` плюс общий код `beginLoad/sortEntries/installEntries` |
+| `Panel.Remote`, `Panel.RemoteLocalPath`, `Panel.Archive` | `Panel.backend panelBackend` (`localBackend{}` by default), `remoteBackend{config, localPath}`, `archiveBackend{index, localPath}` |
+| `Panel.Load` branching | `p.backend.Load(...)` plus the shared code `beginLoad/sortEntries/installEntries` |
 | `filesystemPath()` | `p.backend.FilesystemPath(p)` |
-| `function(n)` ветки по Remote/Archive | `caps` и методы backend-а |
-| `transferDialog` условия | `Caps(...)&capCopyIn`, `Endpoint()` |
+| `function(n)` branches by Remote/Archive | `caps` and backend methods |
+| `transferDialog` conditions | `Caps(...)&capCopyIn`, `Endpoint()` |
 | `deleteSelected`, `remoteDelete`, `archiveReadOnly` | `Delete`, `capDelete`, `capTrash` |
-| `openConfigured` ветки | `DocumentSource` |
-| `draw.go` подписи F8 и префикс `local:` | `KeyBar`, `Label` |
-| `syncCwd`, `showTerminal`, `finishPanelReturn` проверки `Remote == nil` | `capShellSync` |
-| `image_preview.go`, `folder_size_cache.go`, `info_panel.go`, `panel_options.go`, `folder_shortcuts.go` | `capQuickView`, `capFolderSize`, `Kind()` там, где важен именно тип |
-| `session.go` сохранение | `SessionState` |
+| `openConfigured` branches | `DocumentSource` |
+| `draw.go` F8 labels and the `local:` prefix | `KeyBar`, `Label` |
+| `syncCwd`, `showTerminal`, `finishPanelReturn` checks of `Remote == nil` | `capShellSync` |
+| `image_preview.go`, `folder_size_cache.go`, `info_panel.go`, `panel_options.go`, `folder_shortcuts.go` | `capQuickView`, `capFolderSize`, `Kind()` where the exact type matters |
+| `session.go` saving | `SessionState` |
 
-Enum `Kind()` допускается использовать только там, где нужна именно идентичность типа (например, тесты и сообщения), а не поведение. Правило для ревью: новое условие вида `Kind() == backendX` в коде действий считается запахом; вместо него добавляется cap или метод.
+The `Kind()` enum may be used only where type identity itself is needed (for example, tests and messages), not behavior. Review rule: a new condition of the form `Kind() == backendX` in action code is considered a smell; a cap or a method is added instead.
 
 ### 4.4 `remotefs.Endpoint`
 
 ```go
 type Opener interface {
     Open(ctx context.Context) (FS, error)
-    Identity() string      // для Same(): один и тот же сервер/контейнер
+    Identity() string      // for Same(): the same server/container
 }
-type Endpoint struct{ Opener Opener } // nil = локальная ФС
+type Endpoint struct{ Opener Opener } // nil = local FS
 ```
 
-`*Config` реализует `Opener`. Kube-контейнер реализует его в пакете `kube`, импортируя `remotefs` (не наоборот).
+`*Config` implements `Opener`. The kube container implements it in the `kube` package, importing `remotefs` (not the other way around).
 
-### 4.5 Проверка фазы 0
+### 4.5 Phase 0 verification
 
-- `grep -n "Remote != nil\|Remote == nil\|Archive != nil" internal/ui/*.go` вне `*_test.go` и файлов backend-ов даёт ноль.
-- `./scripts/check.sh --race` зелёный, `remote_test.go`, `archive_panel_test.go`, `transfer_collision_test.go`, `far_behavior_test.go` не меняют ожиданий.
-- Ручная проверка: SFTP-панель, архивная панель, копирование в обе стороны, сессия.
+- `grep -n "Remote != nil\|Remote == nil\|Archive != nil" internal/ui/*.go` outside `*_test.go` and the backend files yields zero.
+- `./scripts/check.sh --race` is green; `remote_test.go`, `archive_panel_test.go`, `transfer_collision_test.go`, `far_behavior_test.go` do not change their expectations.
+- Manual check: SFTP panel, archive panel, copying in both directions, session.
 
-## 5. Kubernetes-режим
+## 5. Kubernetes mode
 
-### 5.1 Пакет `internal/kube`
+### 5.1 The `internal/kube` package
 
 ```
 internal/kube/
   profile.go      Profile{Name, Kubeconfig, Context, ExtraPath}; Label() = "k8s:"+Context
-  client.go       Client{rest *rest.Config; dyn dynamic.Interface; core kubernetes.Interface (CoreV1 для logs/exec);
+  client.go       Client{rest *rest.Config; dyn dynamic.Interface; core kubernetes.Interface (CoreV1 for logs/exec);
                          disc discovery.CachedDiscoveryInterface; mapper meta.RESTMapper}
-                  Connect(ctx, Profile) — clientcmd.NewNonInteractiveDeferredLoadingClientConfig с
-                  ConfigOverrides{CurrentContext}; импорт _ "k8s.io/client-go/plugin/pkg/client/auth" для auth providers;
-                  QPS/Burst подняты (kubectl-подобно: 50/300); Timeout из настроек
-  contexts.go     Contexts(kubeconfig) ([]string, current string, error) через clientcmd.LoadFromFile
-  discovery.go    Resources(ctx) ([]Resource, error) — ServerPreferredNamespacedResources, кэш на сессию;
-                  фильтр по глаголам list/get; Resource{GVR, Kind, Singular, Namespaced, Verbs}
+                  Connect(ctx, Profile) — clientcmd.NewNonInteractiveDeferredLoadingClientConfig with
+                  ConfigOverrides{CurrentContext}; import _ "k8s.io/client-go/plugin/pkg/client/auth" for auth providers;
+                  QPS/Burst raised (kubectl-like: 50/300); Timeout from settings
+  contexts.go     Contexts(kubeconfig) ([]string, current string, error) through clientcmd.LoadFromFile
+  discovery.go    Resources(ctx) ([]Resource, error) — ServerPreferredNamespacedResources, cached per session;
+                  filter by the list/get verbs; Resource{GVR, Kind, Singular, Namespaced, Verbs}
   snapshot.go     Snapshot{Namespace, Objects map[types.UID]*Object, ByType map[GVR][]*Object, children map[UID][]*Object,
                            Taken time.Time, Skipped []SkippedResource}
   tree.go         transparent = {replicasets.apps, controllerrevisions.apps}; selectorChildren = {services → pods};
-                  Children(obj) map[GVR][]*Object по правилам 5.2; TypeFolders(ns) с приоритетным порядком
-                  LoadSnapshot(ctx, c, ns, set ResourceSet) — параллельные LIST (семафор 8) в формате Table
+                  Children(obj) map[GVR][]*Object by the rules of 5.2; TypeFolders(ns) with priority order
+                  LoadSnapshot(ctx, c, ns, set ResourceSet) — parallel LISTs (semaphore 8) in Table format
                   (Accept: application/json;as=Table;v=v1;g=meta.k8s.io, includeObject=Metadata):
-                  строки содержат printer-колонки и PartialObjectMetadata с ownerReferences и labels; forbidden → Skipped;
-                  services дополнительно LIST полными объектами ради spec.selector
+                  rows contain printer columns and PartialObjectMetadata with ownerReferences and labels; forbidden → Skipped;
+                  services are additionally LISTed as full objects for the sake of spec.selector
   object.go       Object{GVR, Kind, Name, Namespace, UID, Created, Owners []UID, Labels, Columns []string, Status string}
-                  ShortStatus() выбирает колонку STATUS/READY/TYPE по kind, иначе первую не-NAME/AGE колонку
-  pod.go          PodSummary(ctx, ns, name) — контейнеры (regular/init/ephemeral), состояния, phase
+                  ShortStatus() picks the STATUS/READY/TYPE column by kind, otherwise the first non-NAME/AGE column
+  pod.go          PodSummary(ctx, ns, name) — containers (regular/init/ephemeral), states, phase
   manifest.go     Get(ctx, ref) (*unstructured.Unstructured, error); ExportYAML(obj, clean bool) ([]byte, error)
                   (clean: managedFields, status, uid, resourceVersion, creationTimestamp, generation,
-                  ownerReferences при копировании в другой namespace/кластер);
-                  Decode(data) ([]*unstructured.Unstructured, error) — YAMLOrJSONDecoder, многодокументный;
+                  ownerReferences when copying into another namespace/cluster);
+                  Decode(data) ([]*unstructured.Unstructured, error) — YAMLOrJSONDecoder, multi-document;
                   Apply(ctx, obj, ns) — server-side apply, FieldManager "farshmac", Force=false;
-                  Update(ctx, obj) — с resourceVersion; Delete(ctx, refs, propagation)
-  describe.go     Describe(ctx, ref) (string, error) — k8s.io/kubectl/pkg/describe (модуль k8s.io/kubectl, решение принято)
+                  Update(ctx, obj) — with resourceVersion; Delete(ctx, refs, propagation)
+  describe.go     Describe(ctx, ref) (string, error) — k8s.io/kubectl/pkg/describe (the k8s.io/kubectl module, decision made)
   logs.go         Logs(ctx, ref, opts) (io.ReadCloser, error) — corev1 GetLogs(...).Stream
-  exec.go         Executor interface { Stream(ctx, ExecOptions) error }; реализация remotecommand
-                  (NewWebSocketExecutor с FallbackExecutor на SPDY, как в kubectl)
+  exec.go         Executor interface { Stream(ctx, ExecOptions) error }; remotecommand implementation
+                  (NewWebSocketExecutor with FallbackExecutor to SPDY, as in kubectl)
   containerfs.go  ContainerRef{Profile, Namespace, Pod, Container}; ContainerFS implements remotefs.FS;
-                  probe (shell, tar, lister); ReadDir через `find -maxdepth 1 -printf` → `stat -c` → `ls -lan`;
-                  Open = `cat`, Create = `cat > path` через stdin; Remove = rm/rmdir; Rename = mv; Chmod/Chtimes
-  execstream.go   ExecStream implements terminal.Stream: TTY, stdin из xterm, resize через TerminalSizeQueue
+                  probe (shell, tar, lister); ReadDir through `find -maxdepth 1 -printf` → `stat -c` → `ls -lan`;
+                  Open = `cat`, Create = `cat > path` through stdin; Remove = rm/rmdir; Rename = mv; Chmod/Chtimes
+  execstream.go   ExecStream implements terminal.Stream: TTY, stdin from xterm, resize through TerminalSizeQueue
 ```
 
-Все методы принимают `context.Context`. Данные с сервера никогда не интерпретируются как команды.
+All methods take a `context.Context`. Data from the server is never interpreted as commands.
 
-### 5.2 Виртуальный путь и снимок
+### 5.2 Virtual path and snapshot
 
-`Panel.Path` — абсолютный путь:
+`Panel.Path` is an absolute path:
 
 ```
 /                                        namespaces
-/<ns>                                    папки типов ресурсов
-/<ns>/<type>                             объекты типа (все, как kubectl get)
-/<ns>/<type>/<name>                      папки дочерних типов (см. правила владения)
-/<ns>/<type>/<name>/<childtype>/<name>/… рекурсивно
-/<ns>/…/pods/<pod>/<container>           только если контейнеров > 1 (C3)
+/<ns>                                    resource type folders
+/<ns>/<type>                             objects of the type (all, like kubectl get)
+/<ns>/<type>/<name>                      child type folders (see the ownership rules)
+/<ns>/<type>/<name>/<childtype>/<name>/… recursively
+/<ns>/…/pods/<pod>/<container>           only if containers > 1 (C3)
 /<ns>/…/pods/<pod>[/<container>]/<abs path in container>
 ```
 
-Уровни (`kubeLevel`): `root`, `namespace`, `typeFolder`, `object`, `containers`, `containerFS`. Папка дочернего типа внутри объекта — тот же уровень `typeFolder`, но с родителем.
+Levels (`kubeLevel`): `root`, `namespace`, `typeFolder`, `object`, `containers`, `containerFS`. A child type folder inside an object is the same `typeFolder` level, but with a parent.
 
-**Правила владения (жёстко в коде, `internal/kube/tree.go`):**
+**Ownership rules (hard-coded, `internal/kube/tree.go`):**
 
-1. Дочерние объекты объекта X — это объекты снимка, у которых X в `ownerReferences`.
-2. Если дочерний объект имеет **прозрачный** тип (`replicasets`, `controllerrevisions`), он не показывается; вместо него показываются его дочерние объекты (рекурсивно). Так `deployments/app/pods/` содержит Pod всех ReplicaSet-ов, включая старые после rollout; старые Pod отличаются колонкой статуса.
-3. **Селекторные дети**: `services/<svc>/pods/` — Pod, чьи labels удовлетворяют `spec.selector` сервиса. Это не владение, помечается в InfoText панели как «matched by selector». Для этого Service загружаются с `spec` (один LIST полных объектов, они небольшие), Pod — только метаданные (labels есть в `PartialObjectMetadata`).
-4. Всё остальное, включая CRD, использует только правила 1–2. Пример: Argo `rollouts/app/pods/` получается автоматически через прозрачный ReplicaSet; `cronjobs/backup/jobs/<job>/pods/` — два уровня, оба полезны.
-5. Внутри Pod папок типов нет (C15): контейнеры или ФС.
-6. Объект без детей — пустая папка (вход показывает пустой список, не ошибку).
+1. The child objects of object X are the snapshot objects that have X in `ownerReferences`.
+2. If a child object has a **transparent** type (`replicasets`, `controllerrevisions`), it is not shown; its child objects are shown instead (recursively). Thus `deployments/app/pods/` contains the Pods of all ReplicaSets, including old ones after a rollout; old Pods differ by the status column.
+3. **Selector children**: `services/<svc>/pods/` — Pods whose labels satisfy the service's `spec.selector`. This is not ownership; it is marked in the panel's InfoText as "matched by selector". For this, Services are loaded with `spec` (one LIST of full objects, they are small), Pods — metadata only (labels are present in `PartialObjectMetadata`).
+4. Everything else, including CRDs, uses only rules 1–2. Example: Argo `rollouts/app/pods/` is obtained automatically through the transparent ReplicaSet; `cronjobs/backup/jobs/<job>/pods/` — two levels, both useful.
+5. Inside a Pod there are no type folders (C15): containers or FS.
+6. An object without children is an empty folder (entering shows an empty list, not an error).
 
-Расширение правил 2–3 — изменение кода с тестом, не настройка: это осознанно, чтобы дерево было одинаковым у всех.
+Extending rules 2–3 is a code change with a test, not a setting: this is deliberate, so that the tree is the same for everyone.
 
-**Папки типов на уровне namespace.** Показываются типы, у которых в снимке есть хотя бы один объект; настройка `KubeShowEmptyTypes` (выкл.) показывает все. Колонка «размер» папки типа = число объектов, дата пуста. Порядок «Unsorted» (Ctrl+F7) — приоритетный список: `deployments, statefulsets, daemonsets, cronjobs, jobs, pods, services, ingresses, configmaps, secrets, persistentvolumeclaims, serviceaccounts`, затем остальные по алфавиту; сортировка по имени — чистый алфавит.
+**Type folders at the namespace level.** Types that have at least one object in the snapshot are shown; the `KubeShowEmptyTypes` setting (off) shows all. The "size" column of a type folder = number of objects, the date is empty. The "Unsorted" order (Ctrl+F7) is a priority list: `deployments, statefulsets, daemonsets, cronjobs, jobs, pods, services, ingresses, configmaps, secrets, persistentvolumeclaims, serviceaccounts`, then the rest alphabetically; sorting by name is pure alphabetical.
 
-**Снимок.** Снимок namespace кэшируется в backend-е (`snapshots[ns]`), обновляется по Ctrl+R, при повторном входе в namespace и по TTL (`KubeSnapshotTTL`, 30 с). Загрузка — через асинхронный `loadPanel`, `Esc` отменяет контекст всех LIST. Набор ресурсов: все namespaced-ресурсы с глаголом `list`, кроме подресурсов и `*.metrics.k8s.io` (это не объекты). `events` — обычная папка типа: в структуре с папками по типам события никому не мешают, а разработчику бывают нужны. Настройка `KubeHiddenTypes` (по умолчанию пуста) позволяет скрыть шумные типы конкретного кластера. Типы с Forbidden молча пропускаются; их число показывается в InfoText («3 resource types skipped: forbidden»).
+**Snapshot.** The namespace snapshot is cached in the backend (`snapshots[ns]`), refreshed on Ctrl+R, on re-entering the namespace and by TTL (`KubeSnapshotTTL`, 30 s). Loading goes through the asynchronous `loadPanel`; `Esc` cancels the context of all LISTs. The resource set: all namespaced resources with the `list` verb, except subresources and `*.metrics.k8s.io` (these are not objects). `events` is an ordinary type folder: in a structure with folders by type, events get in nobody's way, and a developer sometimes needs them. The `KubeHiddenTypes` setting (empty by default) allows hiding noisy types of a specific cluster. Types with Forbidden are silently skipped; their number is shown in InfoText ("3 resource types skipped: forbidden").
 
-Записи:
+Entries:
 
-| Уровень | Имя | Dir | Дата | Поле размера |
+| Level | Name | Dir | Date | Size field |
 |---------|-----|-----|------|--------------|
-| root | имя namespace | да | creation | STATUS (Active/Terminating) |
-| namespace | имя типа (`deployments`) | да | — | число объектов |
-| typeFolder | имя объекта | да | creation | Table-колонка: Deployment `READY 2/3`, Pod `Running`, Job `Complete`, Service `ClusterIP`, CRD — первая printer-колонка после NAME |
-| object | имя дочернего типа (`pods`) | да | — | число объектов |
-| containers | имя [` (init)`/` (ephemeral)`] | да | start time | `running` / `waiting:CrashLoopBackOff` / `terminated:0` |
-| containerFS | как у Remote | по режиму | mtime | размер |
+| root | namespace name | yes | creation | STATUS (Active/Terminating) |
+| namespace | type name (`deployments`) | yes | — | number of objects |
+| typeFolder | object name | yes | creation | Table column: Deployment `READY 2/3`, Pod `Running`, Job `Complete`, Service `ClusterIP`, CRD — the first printer column after NAME |
+| object | child type name (`pods`) | yes | — | number of objects |
+| containers | name [` (init)`/` (ephemeral)`] | yes | start time | `running` / `waiting:CrashLoopBackOff` / `terminated:0` |
+| containerFS | as in Remote | by mode | mtime | size |
 
-Маски панели применяются к именам записей на любом уровне.
+Panel masks apply to entry names at any level.
 
-### 5.3 Действия по уровням
+### 5.3 Actions by level
 
-| Клавиша | root | namespace | typeFolder (объекты) | object (папки дочерних типов) | containers | containerFS |
+| Key | root | namespace | typeFolder (objects) | object (child type folders) | containers | containerFS |
 |---------|------|-----------|----------------------|-------------------------------|------------|-------------|
-| Enter / Ctrl+PgDn | войти | войти | войти (Pod по C3) | войти | войти в ФС | войти |
-| F3 | манифест namespace | — | манифест объекта (yaml, read-only) | — | манифест Pod | просмотр файла |
-| F4 | править манифест | — | править манифест (C11) | — | — | править файл |
-| F5 | экспорт namespace (все папки типов → yaml) | экспорт папки типа (все манифесты) | манифест объекта → local/k8s | экспорт дочерней папки типа | запрещено | файлы → local/container |
+| Enter / Ctrl+PgDn | enter | enter | enter (Pod per C3) | enter | enter the FS | enter |
+| F3 | namespace manifest | — | object manifest (yaml, read-only) | — | Pod manifest | view file |
+| F4 | edit manifest | — | edit manifest (C11) | — | — | edit file |
+| F5 | export namespace (all type folders → yaml) | export type folder (all manifests) | object manifest → local/k8s | export child type folder | forbidden | files → local/container |
 | F6 | — | — | — (C7) | — | — | `mv` |
-| F7 | новый namespace | — | — | — | — | `mkdir` |
-| F8 | удалить namespace (ввод имени) | — («select objects inside») | delete (подтверждение, каскад Background) | — | — | `rm -r` |
-| Shift+F8 | — | — | delete с Orphan | — | — | как F8 |
-| Shift+F3 | — | — | логи (Pod; для владельца Pod — выбор Pod из `pods/`) | — | логи контейнера | — |
+| F7 | new namespace | — | — | — | — | `mkdir` |
+| F8 | delete namespace (type the name) | — ("select objects inside") | delete (confirmation, Background cascade) | — | — | `rm -r` |
+| Shift+F8 | — | — | delete with Orphan | — | — | as F8 |
+| Shift+F3 | — | — | logs (Pod; for a Pod owner — choose a Pod from `pods/`) | — | container logs | — |
 | Shift+F4 | describe | — | describe | — | describe Pod | — |
-| Alt+F3 | — | — | follow-логи | — | follow-логи | — |
-| Ctrl+R | обновить | обновить снимок | обновить | обновить | обновить | обновить |
+| Alt+F3 | — | — | follow logs | — | follow logs | — |
+| Ctrl+R | refresh | refresh snapshot | refresh | refresh | refresh | refresh |
 
-Правило экспорта (F5 из Kube в local): папка = рекурсивный экспорт её содержимого как `yaml`-файлов (`namespace/` → `deployments/app.yaml`, `services/web.yaml`, …); **объект** экспортируется только как свой манифест `<name>.yaml`, без дочерних объектов, потому что дочерние объекты — производное состояние контроллеров. Имя файла `<name>.yaml` однозначно: выделение всегда внутри одной папки типа. Типы из `KubeHiddenTypes` и `events` в рекурсивный экспорт не входят.
+Export rule (F5 from Kube to local): a folder = recursive export of its contents as `yaml` files (`namespace/` → `deployments/app.yaml`, `services/web.yaml`, …); an **object** is exported only as its own manifest `<name>.yaml`, without child objects, because child objects are derived controller state. The file name `<name>.yaml` is unambiguous: the selection is always within one type folder. Types from `KubeHiddenTypes` and `events` are not included in the recursive export.
 
-Копирование в Kube-панель (назначение):
+Copying into a Kube panel (destination):
 
-| Назначение | Источник local-файлы | Источник объекты k8s | Источник файлы контейнера |
+| Destination | Source: local files | Source: k8s objects | Source: container files |
 |------------|----------------------|----------------------|---------------------------|
-| root | запрещено | запрещено | запрещено |
-| namespace | server-side apply в этот namespace; namespace в файле ≠ целевому → Override/Skip/Cancel; объект существует → Apply/Skip/Cancel (через `fsops.Operation.Collision`) | то же, чистый экспорт, `ownerReferences` снимаются с предупреждением | запрещено |
-| typeFolder | как namespace; kind манифеста ≠ типу папки → «Apply anyway / Skip» | как namespace | запрещено |
-| object / дочерняя typeFolder | как typeFolder (namespace берётся из пути) | как namespace | запрещено |
-| containers | запрещено | запрещено | запрещено |
-| containerFS | загрузка через `remotefs.Copy` | запрещено | `remotefs.Copy` |
+| root | forbidden | forbidden | forbidden |
+| namespace | server-side apply into this namespace; namespace in the file ≠ target → Override/Skip/Cancel; object exists → Apply/Skip/Cancel (through `fsops.Operation.Collision`) | the same, clean export, `ownerReferences` are stripped with a warning | forbidden |
+| typeFolder | as namespace; manifest kind ≠ folder type → "Apply anyway / Skip" | as namespace | forbidden |
+| object / child typeFolder | as typeFolder (the namespace is taken from the path) | as namespace | forbidden |
+| containers | forbidden | forbidden | forbidden |
+| containerFS | upload through `remotefs.Copy` | forbidden | `remotefs.Copy` |
 
-Диалог копирования манифестов: флажок «Clean export (strip status and server fields)», включён по умолчанию. Многодокументные YAML и JSON при apply поддерживаются.
+Manifest copy dialog: the checkbox "Clean export (strip status and server fields)", on by default. Multi-document YAML and JSON are supported on apply.
 
-### 5.4 Меню F9 → Kubernetes (при активной Kube-панели)
+### 5.4 Menu F9 → Kubernetes (when a Kube panel is active)
 
-- Logs… (`Shift+F3`): для владельца Pod — выбор Pod из его `pods/`; контейнер (choose, если > 1), Tail lines (`KubeLogsTail` = 1000), Previous instance, Since.
+- Logs… (`Shift+F3`): for a Pod owner — choose a Pod from its `pods/`; container (choose, if > 1), Tail lines (`KubeLogsTail` = 1000), Previous instance, Since.
 - Follow logs in terminal (`Alt+F3`).
 - Describe (`Shift+F4`).
-- Open shell in container: `ExecStream` с TTY и `sh`/`bash` из probe.
+- Open shell in container: `ExecStream` with a TTY and `sh`/`bash` from the probe.
 - Refresh snapshot (`Ctrl+R`).
 - Switch context…
-- Фаза 3: Scale…, Restart rollout, Port-forward…, Copy object reference в буфер.
+- Phase 3: Scale…, Restart rollout, Port-forward…, Copy object reference to the clipboard.
 
-### 5.5 Команда в контейнере
+### 5.5 Command in a container
 
-`kubeBackend.Execute(a, cmd)`: на уровне ФС контейнера создаётся `ExecStream` с TTY и командой `[shell, "-c", "cd " + Quote(dir) + " && " + cmd]`, `a.Foreign = stream`, терминал показывается. Ввод с клавиатуры и resize идут в поток, вывод в xterm. По завершении потока `a.Foreign = nil`, статус показывает код завершения, панель контейнера обновляется. Ctrl+C отправляется в поток как байт 0x03 (TTY); Cmd+. отменяет контекст. На других уровнях Kube-панели команда выполняется локально в `FilesystemPath()` с приглашением `local:<path>>`.
+`kubeBackend.Execute(a, cmd)`: at the container FS level an `ExecStream` is created with a TTY and the command `[shell, "-c", "cd " + Quote(dir) + " && " + cmd]`, `a.Foreign = stream`, the terminal is shown. Keyboard input and resize go to the stream, output to xterm. When the stream finishes, `a.Foreign = nil`, the status shows the exit code, the container panel is refreshed. Ctrl+C is sent to the stream as the byte 0x03 (TTY); Cmd+. cancels the context. At the other levels of a Kube panel the command is executed locally in `FilesystemPath()` with the prompt `local:<path>>`.
 
-### 5.6 Подключение
+### 5.6 Connecting
 
-Форма «Kubernetes cluster»: Kubeconfig path (по умолчанию первый путь из `$KUBECONFIG` или `~/.kube/config`), Profile name (blank = context). Затем `a.choose("Context", contexts)` с предвыбранным current-context. `backgroundTask`: Connect, `ServerVersion`, discovery, LIST namespaces. Ошибка показывает текст client-go (включая stderr exec-плагина). Успех: панель переходит на `/`, профиль сохраняется, статус «Connected: k8s:<context> (terminal is local)».
+The "Kubernetes cluster" form: Kubeconfig path (by default the first path from `$KUBECONFIG` or `~/.kube/config`), Profile name (blank = context). Then `a.choose("Context", contexts)` with the current-context preselected. `backgroundTask`: Connect, `ServerVersion`, discovery, LIST namespaces. An error shows the client-go text (including the exec plugin's stderr). Success: the panel moves to `/`, the profile is saved, the status is "Connected: k8s:<context> (terminal is local)".
 
-### 5.7 Ограничения, сообщаемые пользователю
+### 5.7 Limitations reported to the user
 
-- Размер папки в Kube-панели не считается (фаза 3 через `du`).
-- Quick view на объекте — фаза 3 (манифест).
-- Info panel: контекст, сервер, версия, число namespaces — фаза 2.
-- Архивы внутри ФС контейнера не открываются как папки (как у Remote).
+- Folder size is not computed in a Kube panel (phase 3 via `du`).
+- Quick view on an object — phase 3 (manifest).
+- Info panel: context, server, version, number of namespaces — phase 2.
+- Archives inside a container FS are not opened as folders (as in Remote).
 
-## 6. Key bar с модификаторами
+## 6. Key bar with modifiers
 
-### 6.1 Протокол renderer → Go
+### 6.1 Renderer → Go protocol
 
-Новое сообщение `{Type: "modifiers", Shift, Ctrl, Alt, Meta bool}`. Renderer (`app.js`) отправляет его при `keydown`/`keyup` клавиш Shift, Control, Alt, Meta, только если состояние изменилось, и при `blur` окна/`visibilitychange` — сброс в false. Сообщение отправляется в обоих режимах (панели и терминал), но Go использует его только для отрисовки панелей. Нажатие с модификатором (`key` с флагами) не меняет протокол.
+A new message `{Type: "modifiers", Shift, Ctrl, Alt, Meta bool}`. The renderer (`app.js`) sends it on `keydown`/`keyup` of the Shift, Control, Alt, Meta keys, only if the state changed, and on window `blur`/`visibilitychange` — reset to false. The message is sent in both modes (panels and terminal), but Go uses it only for drawing the panels. A keypress with a modifier (`key` with flags) does not change the protocol.
 
-Go: `App.mods modifiers` (битовая маска), обновляется в `Handle`, помечает `dirty`. Draw вызывает `p.backend.KeyBar(p, a.mods)`; документ (viewer/editor) и меню имеют свои таблицы в `document_draw.go` и тоже получают `mods`.
+Go: `App.mods modifiers` (a bitmask), updated in `Handle`, marks `dirty`. Draw calls `p.backend.KeyBar(p, a.mods)`; the document (viewer/editor) and the menu have their own tables in `document_draw.go` and also receive `mods`.
 
-Защита от залипания: если в течение 2 с не пришло ни одного сообщения при удерживаемом модификаторе и приходит `key` без этого флага, маска сбрасывается по флагам этого `key`.
+Stuck-key protection: if within 2 s no message has arrived while a modifier is held and a `key` arrives without that flag, the mask is reset according to the flags of that `key`.
 
-### 6.2 Таблицы
+### 6.2 Tables
 
-Local (совпадает с F1-справкой и Far Manager):
+Local (matches the F1 help and Far Manager):
 
 | Mods | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |------|---|---|---|---|---|---|---|---|---|----|
@@ -324,82 +324,82 @@ Local (совпадает с F1-справкой и Far Manager):
 | Alt | | | | | | | Find | Histry | | |
 | Alt+Shift | | | | | | | | | | |
 
-Remote: как Local, но F8 `Delete`, Shift+F1..F3 пусто, Ctrl+F8..F10 пусто, если сортировка по этим полям не поддерживается сервером.
-Archive: F4, F6, F7, F8 пусто; Shift+F2 `Extract`.
-Kube — по уровням:
+Remote: as Local, but F8 `Delete`, Shift+F1..F3 empty, Ctrl+F8..F10 empty if sorting by these fields is not supported by the server.
+Archive: F4, F6, F7, F8 empty; Shift+F2 `Extract`.
+Kube — by level:
 
-| Уровень | Mods | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+| Level | Mods | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |---------|------|---|---|---|---|---|---|---|---|---|
 | root | — | Help | UserMn | Manif | Edit | Export | | NewNS | Delete | Menu |
 | root | Shift | | | | Descr | | | | | |
 | namespace | — | Help | UserMn | | | Export | | | | Menu |
-| typeFolder (объекты) | — | Help | UserMn | Manif | Edit | Copy | | | Delete | Menu |
-| typeFolder (объекты) | Shift | | | Logs | Descr | | | | Orphan | |
-| typeFolder (объекты) | Alt | | | Follow | | | | | | |
-| object (папки типов) | — | Help | UserMn | | | Export | | | | Menu |
+| typeFolder (objects) | — | Help | UserMn | Manif | Edit | Copy | | | Delete | Menu |
+| typeFolder (objects) | Shift | | | Logs | Descr | | | | Orphan | |
+| typeFolder (objects) | Alt | | | Follow | | | | | | |
+| object (type folders) | — | Help | UserMn | | | Export | | | | Menu |
 | containers | — | Help | UserMn | Manif | | | | | | Menu |
 | containers | Shift | | | Logs | Descr | | | | | |
 | containers | Alt | | | Follow | | | | | | |
 | containerFS | — | Help | UserMn | View | Edit | Copy | RenMov | MkFold | Delete | Menu |
 | containerFS | Shift | | | | | Copy | Rename | | Delete | |
 
-Подписи `Logs`/`Follow` показываются на уровне typeFolder только если текущий объект — Pod или имеет Pod среди дочерних (Deployment, StatefulSet, Job, Service и т.п.); key bar пересчитывается при движении курсора.
+The `Logs`/`Follow` labels are shown at the typeFolder level only if the current object is a Pod or has a Pod among its children (Deployment, StatefulSet, Job, Service, etc.); the key bar is recomputed as the cursor moves.
 
-Ctrl-ряд (сортировки) одинаков для всех режимов там, где поле есть.
+The Ctrl row (sorting) is the same for all modes wherever the field exists.
 
-### 6.3 Тесты
+### 6.3 Tests
 
-- `internal/native/tests/input.cjs`: `keydown Shift` → сообщение `modifiers{Shift:true}`, повторный `keydown` не дублирует, `keyup` → `Shift:false`, `blur` → все false.
-- Go: `draw_test` на подписи key bar для каждой таблицы, включая сброс залипания.
-- Проверка согласованности: тест, что каждая непустая подпись соответствует обработчику в `far_keys.go`/`function()` (таблица «подпись → действие» единая, из неё строятся и key bar, и часть F1-справки).
+- `internal/native/tests/input.cjs`: `keydown Shift` → message `modifiers{Shift:true}`, a repeated `keydown` does not duplicate, `keyup` → `Shift:false`, `blur` → all false.
+- Go: `draw_test` on key bar labels for every table, including the stuck-key reset.
+- Consistency check: a test that every non-empty label corresponds to a handler in `far_keys.go`/`function()` (the "label → action" table is single; both the key bar and part of the F1 help are built from it).
 
-## 7. План реализации
+## 7. Implementation plan
 
-### Фаза 0 — рефакторинг (без новых функций)
+### Phase 0 — refactoring (no new features)
 
 1. `panelBackend`, `backendKind`, `panelCaps`; `localBackend`, `archiveBackend`, `remoteBackend`.
-2. Перенос по таблице 4.3, удаление полей `Remote`, `RemoteLocalPath`, `Archive` из `Panel`.
+2. Migration per table 4.3, removal of the fields `Remote`, `RemoteLocalPath`, `Archive` from `Panel`.
 3. `remotefs.Endpoint{Opener}`.
-4. `documentSource` и перевод `openRemoteDocument`/`saveRemoteDocument`/архивного просмотра на него.
-5. `terminal.Stream` и `App.Foreign` (без реализаций, кроме `Session`).
-6. Key bar с модификаторами (раздел 6) для local/archive/remote.
-7. Проверка 4.5.
+4. `documentSource` and moving `openRemoteDocument`/`saveRemoteDocument`/archive viewing onto it.
+5. `terminal.Stream` and `App.Foreign` (without implementations other than `Session`).
+6. Key bar with modifiers (section 6) for local/archive/remote.
+7. Verification 4.5.
 
-### Фаза 1 — кластер, namespaces, объекты, манифесты
+### Phase 1 — cluster, namespaces, objects, manifests
 
-1. Зависимости client-go, `THIRD_PARTY_NOTICES.txt`, обновление CI-кэша.
-2. `internal/kube`: profile, client, contexts, discovery, snapshot (Table), object, manifest (Get, ExportYAML, Decode, Delete), describe, logs. Тесты на `httptest`.
-3. `Settings.KubeProfiles`, `kubernetes.json`, пункт в Network connections, диалог подключения, disconnect.
-4. `kubeBackend`: уровни root/namespace/typeFolder/object, `tree.go` (прозрачные типы, селекторные дети), `ObjectInfo`, статус в `panel_draw.go`, key bar, меню.
-5. F3/F4 манифестов через `documentSource` (F4 с Update и конфликтом), F5 объект → local и рекурсивный экспорт папок, F8, F7 namespace, Shift+F4, Shift+F3.
-6. Документация: README, F1-справка, `MENU_PARITY.md`, CHANGELOG.
+1. client-go dependencies, `THIRD_PARTY_NOTICES.txt`, CI cache update.
+2. `internal/kube`: profile, client, contexts, discovery, snapshot (Table), object, manifest (Get, ExportYAML, Decode, Delete), describe, logs. Tests on `httptest`.
+3. `Settings.KubeProfiles`, `kubernetes.json`, the item in Network connections, the connection dialog, disconnect.
+4. `kubeBackend`: levels root/namespace/typeFolder/object, `tree.go` (transparent types, selector children), `ObjectInfo`, status in `panel_draw.go`, key bar, menu.
+5. F3/F4 of manifests through `documentSource` (F4 with Update and conflict), F5 object → local and recursive folder export, F8, F7 namespace, Shift+F4, Shift+F3.
+6. Documentation: README, F1 help, `MENU_PARITY.md`, CHANGELOG.
 
-### Фаза 2 — контейнеры
+### Phase 2 — containers
 
-1. `exec.go`, `containerfs.go` с probe; тесты на локальном `sh` через инжектированный `Executor`.
-2. `Opener` для контейнера, маршрутизация F5/F6/F7/F8 в ФС контейнера.
-3. Уровни containers/containerFS, правило C3.
-4. `ExecStream`, `Execute` в контейнере, «Open shell in container», follow-логи, приглашение `pod:`.
-5. F3/F4 файлов контейнера.
+1. `exec.go`, `containerfs.go` with probe; tests on a local `sh` through an injected `Executor`.
+2. `Opener` for a container, routing F5/F6/F7/F8 into the container FS.
+3. The containers/containerFS levels, rule C3.
+4. `ExecStream`, `Execute` in a container, "Open shell in container", follow logs, the `pod:` prompt.
+5. F3/F4 of container files.
 
-### Фаза 3 — apply и расширения
+### Phase 3 — apply and extensions
 
-1. Apply при копировании в namespace (local → k8s, k8s → k8s), вопросы Override/Apply/Skip.
-2. Scale, Restart rollout, Port-forward (`k8s.io/client-go/tools/portforward`), восстановление панели из сессии, Info panel, Quick view, `du`, потоковое копирование деревьев одним `tar`, ephemeral debug-контейнер, объединённые логи всех Pod владельца.
+1. Apply when copying into a namespace (local → k8s, k8s → k8s), the Override/Apply/Skip questions.
+2. Scale, Restart rollout, Port-forward (`k8s.io/client-go/tools/portforward`), restoring the panel from the session, Info panel, Quick view, `du`, streaming copy of trees with a single `tar`, ephemeral debug container, merged logs of all Pods of an owner.
 
-## 8. Тестирование
+## 8. Testing
 
-- `internal/kube`: `httptest`-сервер с discovery, Table-LIST, GET/PUT/PATCH/DELETE, logs; `tree.go`: схлопывание ReplicaSet (включая старые ReplicaSet после rollout), ControllerRevision под StatefulSet, Service → Pod по селектору (в том числе пустой селектор = нет детей), CronJob → Job → Pod, объект с несколькими владельцами, CRD без правил; имена папок типов с конфликтом групп; чистый экспорт; рекурсивный экспорт папок; многодокументный Decode; конфликт Update; forbidden → Skipped.
-- `ContainerFS`: все три варианта листинга, symlink на каталог, имена с пробелами и не-ASCII, отсутствие shell/tar.
-- `internal/ui`: навигация по уровням с кэшем, C3, key bar по уровням и модификаторам, маршрутизация F5 по таблице C4, удаление namespace с вводом имени, `Execute` формирует команду с корректным quoting, `Foreign`-поток перехватывает ввод и возвращает shell, профили не трогают `connections.json`.
-- `./scripts/check.sh --race` без обращений к реальному кластеру; `FARSHMAC_KUBE_CHECK` — opt-in.
+- `internal/kube`: an `httptest` server with discovery, Table LIST, GET/PUT/PATCH/DELETE, logs; `tree.go`: collapsing of ReplicaSet (including old ReplicaSets after a rollout), ControllerRevision under StatefulSet, Service → Pod by selector (including an empty selector = no children), CronJob → Job → Pod, an object with several owners, a CRD without rules; type folder names with group conflicts; clean export; recursive folder export; multi-document Decode; Update conflict; forbidden → Skipped.
+- `ContainerFS`: all three listing variants, a symlink to a directory, names with spaces and non-ASCII, absence of shell/tar.
+- `internal/ui`: navigation across levels with the cache, C3, key bar by level and modifiers, F5 routing per table C4, namespace deletion with name entry, `Execute` builds the command with correct quoting, the `Foreign` stream intercepts input and returns the shell, profiles do not touch `connections.json`.
+- `./scripts/check.sh --race` without access to a real cluster; `FARSHMAC_KUBE_CHECK` — opt-in.
 
-## 9. Принятые решения по открытым вопросам
+## 9. Decisions on open questions
 
-| Вопрос | Решение | Обоснование |
+| Question | Decision | Rationale |
 |--------|---------|-------------|
-| Cluster-scoped объекты (`_cluster`) | Не делаем. | Инструмент — dev tool для быстрого доступа к объектам приложения, не средство обслуживания кластера. |
-| Раскладка namespace и набор ресурсов | Папки по типу ресурса; внутри объекта — папки дочерних типов; ReplicaSet и ControllerRevision схлопываются; Service показывает Pod по селектору. Чёрный список типов не нужен: `events` — обычная папка. | Папка типа изолирует шум любого типа и повторяет привычное `kubectl get <type>`; схлопывание задано в коде (`tree.go`), чтобы дерево было одинаковым и неглубоким. |
-| Describe | `k8s.io/kubectl/pkg/describe`. | Покрывает все встроенные типы и события; рост бинарника умеренный. |
+| Cluster-scoped objects (`_cluster`) | Not doing it. | The tool is a dev tool for quick access to application objects, not a cluster maintenance tool. |
+| Namespace layout and resource set | Folders by resource type; inside an object — child type folders; ReplicaSet and ControllerRevision are collapsed; Service shows Pods by selector. No type blacklist is needed: `events` is an ordinary folder. | A type folder isolates the noise of any type and mirrors the familiar `kubectl get <type>`; the collapsing is defined in code (`tree.go`) so that the tree is the same and shallow. |
+| Describe | `k8s.io/kubectl/pkg/describe`. | Covers all built-in types and events; the binary growth is moderate. |
 
-Открытых вопросов нет. Следующий шаг — фаза 0 (раздел 7).
+There are no open questions. The next step is phase 0 (section 7).

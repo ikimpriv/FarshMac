@@ -106,7 +106,7 @@ func TestRemoteCopyRetryReconnects(t *testing.T) {
 		return fsops.ErrorRetry
 	}
 	pairs := []remotefs.Pair{{Source: filepath.Join(root, "one"), Destination: "/one"}, {Source: filepath.Join(root, "two"), Destination: "/two"}}
-	if err := remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Remote: &c}, pairs, remotefs.CopyOptions{Workers: 1}, o); err != nil {
+	if err := remotefs.Copy(remotefs.Endpoint{}, remotefs.RemoteEndpoint(&c), pairs, remotefs.CopyOptions{Workers: 1}, o); err != nil {
 		t.Fatal(err, failures)
 	}
 	if !dropped || failures == 0 {
@@ -139,7 +139,7 @@ func TestRemoteDeleteRetryReconnects(t *testing.T) {
 	writeRemote(t, f, "/victim", "data")
 	o := fsops.NewOperation("Delete")
 	defer o.Cancel()
-	session := remotefs.NewSession(remotefs.Endpoint{Remote: &c}, o.Context(), o, f)
+	session := remotefs.NewSession(remotefs.RemoteEndpoint(&c), o.Context(), o, f)
 	defer session.Close()
 	dropped, failures := false, 0
 	o.BeforeDelete = func(string, os.FileInfo) int {

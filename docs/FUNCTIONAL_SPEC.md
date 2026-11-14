@@ -1,692 +1,688 @@
-# Функциональная спецификация FarshMac 0.20.0
+# FarshMac 0.20.0 Functional Specification
 
-Документ описывает всё, что приложение делает сейчас, по исходному коду (не по README и parity-документам). Для каждой функции указаны способ вызова, условия доступности, пошаговое поведение, диалоги, точные строки сообщений и файлы исходников. Строки интерфейса приведены дословно на английском, как в коде. Расхождения между кодом и существующей документацией собраны в конце каждой части и сведены в разделе «Сводка расхождений».
+This document describes everything the application does today, based on the source code (not on the README or the parity documents). For every feature it lists how it is invoked, when it is available, the step-by-step behavior, the dialogs, the exact message strings and the source files. Interface strings are given verbatim in English, as in the code. Discrepancies between the code and the existing documentation are collected at the end of each part and consolidated in the "Discrepancy summary" section.
 
-Документ составлен 2026-11-11 по состоянию ветки `main` (коммит `b91313a`). При изменении поведения обновляйте соответствующую часть.
+The document was compiled on 2026-11-11 against the `main` branch (commit `b91313a`). When behavior changes, update the corresponding part.
 
-> **Обновление (ветка `backlog-fixes`, 2026-11-11).** Все 85 пунктов `docs/IMPLEMENTATION_BACKLOG.md` реализованы, поэтому поведение ряда функций изменилось относительно описанного ниже. Списки расхождений в конце каждой части и раздел «Сводка расхождений» закрыты: решения из раздела «Решения по расхождениям» backlog применены к коду, справке F1, README и parity-документам. Ниже обновлены только самые заметные записи (Tab, Ctrl+PgDn, меню сортировки, закладки, fast find); остальные части описывают состояние на коммит `b91313a` — при расхождении источником истины остаётся код и backlog.
+> **Update (branch `backlog-fixes`, 2026-11-11).** All 85 items of `docs/IMPLEMENTATION_BACKLOG.md` have been implemented, so the behavior of a number of features has changed relative to what is described below. The discrepancy lists at the end of each part and the "Discrepancy summary" section are closed: the decisions from the backlog's "Discrepancy decisions" section have been applied to the code, the F1 help, README and the parity documents. Below, only the most visible entries have been updated (Tab, Ctrl+PgDn, the sort menu, bookmarks, fast find); the remaining parts describe the state as of commit `b91313a` — where they differ, the code and the backlog remain the source of truth.
 
-## Содержание
+## Contents
 
-1. [Часть 1. Файловые панели и навигация](#часть-1)
-2. [Часть 2. Файловые операции, архивы, запуск программ](#часть-2)
-3. [Часть 3. Внутренний просмотрщик и редактор](#часть-3)
-4. [Часть 4. Терминал, командная строка, окна, нативная оболочка, renderer](#часть-4)
-5. [Часть 5. Меню F9, диалоги, настройки, сетевые подключения, справка](#часть-5)
-6. [Сводка расхождений](#сводка-расхождений)
-7. [Приложения: дополнения по результатам gap analysis](#приложения)
+1. [Part 1. File panels and navigation](#part-1)
+2. [Part 2. File operations, archives, launching programs](#part-2)
+3. [Part 3. Internal viewer and editor](#part-3)
+4. [Part 4. Terminal, command line, windows, native shell, renderer](#part-4)
+5. [Part 5. F9 menu, dialogs, settings, network connections, help](#part-5)
+6. [Discrepancy summary](#discrepancy-summary)
+7. [Appendices: additions based on the gap analysis](#appendices)
 
 
 
-<a id="часть-1"></a>
-# Часть 1. Файловые панели и навигация
+<a id="part-1"></a>
+# Part 1. File panels and navigation
 
-Источник истины — код в `internal/ui` (версия, отображаемая в строке меню: `FarshMac 0.20.0`, `internal/ui/draw.go`). Все строки интерфейса приведены дословно на английском. Везде ниже «cmd» означает модификатор Ctrl **или** Cmd (⌘), если явно не сказано иначе (`cmd := m.Ctrl || m.Meta` в `far_keys.go`).
+The source of truth is the code in `internal/ui` (the version shown in the menu bar: `FarshMac 0.20.0`, `internal/ui/draw.go`). All interface strings are given verbatim in English. Everywhere below, "cmd" means the Ctrl **or** Cmd (⌘) modifier unless explicitly stated otherwise (`cmd := m.Ctrl || m.Meta` in `far_keys.go`).
 
-Общие соглашения кода, важные для всего раздела:
+General code conventions that matter for the whole section:
 
-- Экран — символьная сетка `Cols × Rows` (ограничения `60..300` × `15..120`, `app.go: Handle("resize")`). Координаты мыши — ячейки сетки.
-- Панель — структура `Panel` (`app.go`): `Path`, `Entries []Entry{Name, Info, Dir}`, `Cursor`, `Offset` (индекс первой видимой записи), `Marked map[string]bool`, `Err` (текст, заменяющий футер панели), `panelOptions{View, Sort, Filter, Reverse, CaseSensitive, MixDirectories, SelectedFirst, Hidden, DisableSortGroups}`, `Remote`, `Archive`, `History`, `states` (запомненные курсор/верхняя строка/пометки для каждого посещённого пути).
-- Все клавиши панели обрабатываются только когда `PanelKeys == true`: нет открытого документа, формы, диалога, меню и приложение не `Busy` (`Poll()`).
-- Порядок обработки клавиш в `App.key()` (важно для конфликтов): Busy → Cmd+N / Cmd+Q → Ctrl+Tab / Cmd+Shift+[ ] → Cmd/Ctrl+O → терминал видим (ничего) → форма → диалог → документ → клавиши Info panel → fast find (печатные без Ctrl/Cmd, не Numpad) → клавиши выделения → закладки папок → Delete/Shift+F8 → Shift+Enter → Cmd+Shift+. → fast find (прочее) → Cmd/Ctrl+Shift+F3/F4 → `farPanelKey` → Cmd/Ctrl+F1/F2/=, Cmd+Shift+\ → Alt+F1/F2/F3/F4/F7/F8/F10 → Shift+F10 → Shift+F4 → F12 → меню → Cmd+цифра / Cmd+буква → F-клавиши → базовая навигация.
+- The screen is a character grid `Cols × Rows` (limits `60..300` × `15..120`, `app.go: Handle("resize")`). Mouse coordinates are grid cells.
+- A panel is the `Panel` struct (`app.go`): `Path`, `Entries []Entry{Name, Info, Dir}`, `Cursor`, `Offset` (index of the first visible entry), `Marked map[string]bool`, `Err` (text that replaces the panel footer), `panelOptions{View, Sort, Filter, Reverse, CaseSensitive, MixDirectories, SelectedFirst, Hidden, DisableSortGroups}`, `Remote`, `Archive`, `History`, `states` (remembered cursor/top line/marks for every visited path).
+- All panel keys are handled only when `PanelKeys == true`: no open document, form, dialog or menu, and the application is not `Busy` (`Poll()`).
+- Key handling order in `App.key()` (important for conflicts): Busy → Cmd+N / Cmd+Q → Ctrl+Tab / Cmd+Shift+[ ] → Cmd/Ctrl+O → terminal visible (nothing) → form → dialog → document → Info panel keys → fast find (printable without Ctrl/Cmd, not Numpad) → selection keys → folder bookmarks → Delete/Shift+F8 → Shift+Enter → Cmd+Shift+. → fast find (the rest) → Cmd/Ctrl+Shift+F3/F4 → `farPanelKey` → Cmd/Ctrl+F1/F2/=, Cmd+Shift+\ → Alt+F1/F2/F3/F4/F7/F8/F10 → Shift+F10 → Shift+F4 → F12 → menu → Cmd+digit / Cmd+letter → F-keys → basic navigation.
 
 ---
 
-## 1. Раскладка экрана
+## 1. Screen layout
 
-#### Строка меню (y = 0)
-- **Вызов:** всегда видна в режиме панелей.
-- **Поведение:** фон Cyan, текст Black. Секции: `Left` (x=2), `Files` (x=11), `Commands` (x=21), `Options` (x=34), `Right` (x=46). При ширине ≥ 70 справа выводится `FarshMac 0.20.0` (x = W − len − 2). Клик левой кнопкой по имени секции открывает соответствующее выпадающее меню (`click()`: `a.Menu = &MenuState{Column: i}`).
-- **Код:** `draw.go: Draw`, `menu.go: menuSections`, `app.go: click`.
+#### Menu bar (y = 0)
+- **Invocation:** always visible in panel mode.
+- **Behavior:** Cyan background, Black text. Sections: `Left` (x=2), `Files` (x=11), `Commands` (x=21), `Options` (x=34), `Right` (x=46). At width ≥ 70, `FarshMac 0.20.0` is printed on the right (x = W − len − 2). A left click on a section name opens the corresponding drop-down menu (`click()`: `a.Menu = &MenuState{Column: i}`).
+- **Code:** `draw.go: Draw`, `menu.go: menuSections`, `app.go: click`.
 
-#### Панели (y = 1 … Rows−5)
-- **Поведение:** обе панели рисуются `drawPanel(g, i, x, 1, w, Rows-4)`. Геометрия из `panelRect(index)`:
-  - По умолчанию split = `Cols/2`; при `panelSplit != 0` — `Cols*panelSplit/100` (левая `[0, split)`, правая `[split, Cols)`).
-  - Если активная панель в режиме `Detailed` или `Long descriptions` и не скрыта, а неактивная панель **не** показывает `Quick view`/`Info panel`/`Tree panel` (либо скрыта), активная занимает всю ширину (`0, Cols`), другая получает ширину 0 и не рисуется.
-  - Скрытая панель (`Hidden`) или `w < 1` — область заливается Gray на Black без рамки.
-- Рамка: двойная (`╔═╗ ║ ╚═╝`) LightCyan на Blue.
-- **Заголовок панели (y = 1):** строка ` <label> `, центрирована, обрезается слева с `…` до `w-8` символов (`tail`). `label`:
-  - локальная: `p.Path`;
-  - удалённая: `Remote.Label() + Path` (например `sftp://user@host` + путь);
-  - архив: `"[Archive] " + label`;
+#### Panels (y = 1 … Rows−5)
+- **Behavior:** both panels are drawn by `drawPanel(g, i, x, 1, w, Rows-4)`. Geometry comes from `panelRect(index)`:
+  - By default split = `Cols/2`; when `panelSplit != 0` — `Cols*panelSplit/100` (left `[0, split)`, right `[split, Cols)`).
+  - If the active panel is in `Detailed` or `Long descriptions` mode and is not hidden, and the inactive panel does **not** show `Quick view`/`Info panel`/`Tree panel` (or is hidden), the active panel takes the full width (`0, Cols`), the other gets width 0 and is not drawn.
+  - A hidden panel (`Hidden`) or `w < 1` — the area is filled Gray on Black without a frame.
+- Frame: double (`╔═╗ ║ ╚═╝`) LightCyan on Blue.
+- **Panel title (y = 1):** the string ` <label> `, centered, truncated on the left with `…` to `w-8` characters (`tail`). `label`:
+  - local: `p.Path`;
+  - remote: `Remote.Label() + Path` (for example `sftp://user@host` + path);
+  - archive: `"[Archive] " + label`;
   - Info panel: `Information`.
-  Активная панель: Black на Cyan; неактивная — LightCyan на Blue.
-- **Строка заголовка колонок (y = 2):** Yellow на Blue, зависит от режима (см. §2).
-- **Строки файлов:** y = 3 … (1 + h − 4), т.е. `rows = Rows − 9` видимых строк на колонку.
-- **Разделитель (y = Rows − 6):** `╟───╢`.
-- **Футер панели (y = Rows − 5):** строка статуса панели (x+2, ширина w−4):
-  - базовая: `"%s in %d items"` где `%s` = `panelSizeLabel(TotalBytes)` → `"<n> bytes"` или человекочитаемое (`1.5M`), `ItemCount` — записей без `..`;
-  - если есть пометки: `"%d selected · " + базовая`;
-  - если установлен фильтр: `"[" + Filter + "] " + …`;
-  - если `p.Err != ""` — вместо всего выводится `Err` (ошибки загрузки, прогресс чтения `Reading folder… Esc stops`, статус дерева и т.д.).
-- **Код:** `panel_draw.go: panelRect, drawPanel, loadInfo`.
+  Active panel: Black on Cyan; inactive — LightCyan on Blue.
+- **Column header line (y = 2):** Yellow on Blue, depends on the mode (see §2).
+- **File lines:** y = 3 … (1 + h − 4), i.e. `rows = Rows − 9` visible lines per column.
+- **Separator (y = Rows − 6):** `╟───╢`.
+- **Panel footer (y = Rows − 5):** the panel status line (x+2, width w−4):
+  - basic: `"%s in %d items"` where `%s` = `panelSizeLabel(TotalBytes)` → `"<n> bytes"` or human-readable (`1.5M`), `ItemCount` — entries excluding `..`;
+  - if there are marks: `"%d selected · " + basic`;
+  - if a filter is set: `"[" + Filter + "] " + …`;
+  - if `p.Err != ""` — `Err` is printed instead of everything (load errors, the read progress `Reading folder… Esc stops`, tree status, etc.).
+- **Code:** `panel_draw.go: panelRect, drawPanel, loadInfo`.
 
-#### Статусная строка (y = Rows − 3)
-- Gray на Black. Выводит `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
-- Сбрасывается Esc (при пустой командной строке и отсутствии фоновых чтений). После завершения команды в терминале: `Exit %d · ⌘O panels / terminal`.
-- **Код:** `draw.go: Draw`, `app.go: Poll`.
+#### Status line (y = Rows − 3)
+- Gray on Black. Prints `a.Status`; if empty — the hint `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
+- Reset by Esc (when the command line is empty and there are no background reads). After a command finishes in the terminal: `Exit %d · ⌘O panels / terminal`.
+- **Code:** `draw.go: Draw`, `app.go: Poll`.
 
-#### Командная строка (y = Rows − 2)
-- `promptPath + ">" + Command`; для удалённой панели `promptPath = "local:" + filesystemPath()` (локальная папка терминала). Строка обрезается слева (`tail`) до `Cols−1`; курсор `▌` ставится после текста.
-- Ввод: любой печатный символ без Ctrl/Alt добавляется (`default` в `key()`); Space при пустой строке — пометка файла, иначе пробел; Backspace удаляет символ (никогда не выходит из каталога); Esc очищает строку и статус; Enter при непустой строке — `execute()` (выполнение в терминале), при пустой — `enterFile()`. Paste (⌘V) при отсутствии модальных окон добавляет текст без переводов строк (control-символы → пробел).
-- История команд: ⌘↑/⌘↓, Ctrl+↑/Ctrl+↓, Ctrl+E/Ctrl+X — предыдущая/следующая (`a.history`, лимит `Settings.HistoryLimit`, по умолчанию 200); Ctrl/⌘+Y — очистить строку; Alt+F8 — меню `Command history` (`Command history is empty` если пусто).
-- **Код:** `draw.go: Draw`, `app.go: key, execute`, `far_keys.go`, `commands.go: historyMenu`.
+#### Command line (y = Rows − 2)
+- `promptPath + ">" + Command`; for a remote panel `promptPath = "local:" + filesystemPath()` (the terminal's local folder). The line is truncated on the left (`tail`) to `Cols−1`; the cursor `▌` is placed after the text.
+- Input: any printable character without Ctrl/Alt is appended (`default` in `key()`); Space on an empty line marks the file, otherwise inserts a space; Backspace deletes a character (never leaves the directory); Esc clears the line and the status; Enter on a non-empty line — `execute()` (run in the terminal), on an empty line — `enterFile()`. Paste (⌘V) when no modal windows are open appends the text without line breaks (control characters → space).
+- Command history: ⌘↑/⌘↓, Ctrl+↑/Ctrl+↓, Ctrl+E/Ctrl+X — previous/next (`a.history`, limit `Settings.HistoryLimit`, default 200); Ctrl/⌘+Y — clear the line; Alt+F8 — the `Command history` menu (`Command history is empty` when empty).
+- **Code:** `draw.go: Draw`, `app.go: key, execute`, `far_keys.go`, `commands.go: historyMenu`.
 
 #### Key bar (y = Rows − 1)
-- **Вызов:** видим при `Settings.ShowKeys` (по умолчанию true); переключается Ctrl/⌘+B, `Options → General settings → Key bar`, `Interface settings`.
-- **Поведение:** 10 ячеек шириной `Cols/10`; номер (Gray на Black) + подпись (Black на Cyan): `Help`, `UserMenu`, `View`, `Edit`, `Copy`, `RenMov`, `MkFold`, `Trash`, `Menu`, `` (10-я пустая). Для удалённой активной панели 8-я подпись — `Delete`. Подписи не меняются при удержании модификаторов.
-- Клик левой кнопкой по key bar вызывает `function(min(10, X*10/Cols+1))`; если key bar скрыт — клик игнорируется.
-- **Код:** `draw.go: Draw`, `app.go: click`.
+- **Invocation:** visible when `Settings.ShowKeys` (default true); toggled by Ctrl/⌘+B, `Options → General settings → Key bar`, `Interface settings`.
+- **Behavior:** 10 cells of width `Cols/10`; number (Gray on Black) + label (Black on Cyan): `Help`, `UserMenu`, `View`, `Edit`, `Copy`, `RenMov`, `MkFold`, `Trash`, `Menu`, `` (the 10th is empty). For a remote active panel the 8th label is `Delete`. Labels do not change while modifiers are held.
+- A left click on the key bar invokes `function(min(10, X*10/Cols+1))`; if the key bar is hidden the click is ignored.
+- **Code:** `draw.go: Draw`, `app.go: click`.
+#### Color themes
+- `Options → Advanced → Colors`: `Classic Far`, `Dark`, `Light`. Dark/Light are a post-processing pass over the palette of the whole grid (Blue→`0x151b24`, LightCyan→`0xc7d7e9`, Cyan→`0x486987`; Light: Blue→`0xf1f3f5`, LightCyan→`0x182b49`, White→Black, Yellow→`0x885000`, Cyan→`0x80b8dd`).
+- **Code:** `draw.go: Draw`, `settings.go: settingsMenu("Colors")`.
 
-#### Цветовые темы
-- `Options → Advanced → Colors`: `Classic Far`, `Dark`, `Light`. Dark/Light — пост-обработка палитры всей сетки (Blue→`0x151b24`, LightCyan→`0xc7d7e9`, Cyan→`0x486987`; Light: Blue→`0xf1f3f5`, LightCyan→`0x182b49`, White→Black, Yellow→`0x885000`, Cyan→`0x80b8dd`).
-- **Код:** `draw.go: Draw`, `settings.go: settingsMenu("Colors")`.
-
-#### Заголовок окна
-- `Update.Title = Panels[Active].Path` (при открытом документе — имя файла документа).
-- **Код:** `app.go: Poll`.
+#### Window title
+- `Update.Title = Panels[Active].Path` (when a document is open — the document's file name).
+- **Code:** `app.go: Poll`.
 
 ---
 
-## 2. Режимы панели (View)
+## 2. Panel modes (View)
 
-Список режимов (`panel_options.go: panelViews`): `Brief`, `Medium`, `Full`, `Wide`, `Detailed`, `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full`, `Info panel`, `Tree panel`, `Quick view`. Пустой `View` трактуется как `Full`.
+List of modes (`panel_options.go: panelViews`): `Brief`, `Medium`, `Full`, `Wide`, `Detailed`, `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full`, `Info panel`, `Tree panel`, `Quick view`. An empty `View` is treated as `Full`.
 
-#### Переключение режима через меню Left/Right
-- **Вызов:** F9 → `Left` / `Right` → пункты `Brief`, `Medium`, `Full`, `Wide`, `Detailed`, (разделитель), `Info panel`, `Tree panel`, `Quick view`. Текущий режим помечен `✓ ` (при `View == ""` отмечен `Full`). F9 открывает меню на колонке `Left` для левой активной панели и `Right` для правой.
-- **Где доступно:** любая панель; ограничения в `setView`.
-- **Поведение (`setView(index, view)`):**
-  1. Удалённая панель и view ∈ {`Tree panel`, `Info panel`, `Quick view`} → статус `Choose a file view for remote panels`, без изменений.
-  2. Архивная панель и `Tree panel` → `Tree view is unavailable inside archives`.
-  3. Иначе `View = view`, `Hidden = false`, перезагрузка `Load(Path)`, сброс ключа предпросмотра.
-- Режимы `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` недоступны из меню (legacy; при загрузке setup/`configurePanel` они принудительно заменяются на `Full`), но код отрисовки для них сохранён.
-- **Код:** `menu.go: menuSections`, `panel_options.go: setView`, `settings.go: configurePanel`.
+#### Switching the mode via the Left/Right menu
+- **Invocation:** F9 → `Left` / `Right` → items `Brief`, `Medium`, `Full`, `Wide`, `Detailed`, (separator), `Info panel`, `Tree panel`, `Quick view`. The current mode is marked with `✓ ` (when `View == ""`, `Full` is marked). F9 opens the menu on the `Left` column for an active left panel and on `Right` for the right one.
+- **Where available:** any panel; restrictions are in `setView`.
+- **Behavior (`setView(index, view)`):**
+  1. Remote panel and view ∈ {`Tree panel`, `Info panel`, `Quick view`} → status `Choose a file view for remote panels`, no changes.
+  2. Archive panel and `Tree panel` → `Tree view is unavailable inside archives`.
+  3. Otherwise `View = view`, `Hidden = false`, reload `Load(Path)`, reset of the preview key.
+- The modes `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` are not available from the menu (legacy; when loading the setup/`configurePanel` they are forcibly replaced with `Full`), but the drawing code for them is kept.
+- **Code:** `menu.go: menuSections`, `panel_options.go: setView`, `settings.go: configurePanel`.
 
-#### Колонки и содержимое по режимам
-- Число колонок (`panelColumns`): `Brief` = 3, `Medium` = 2, остальное = 1. Ширина колонки `cw = (w−2)/columns`; между колонками вертикальная `│`.
-- Метаданные (`metadata`) рисуются только при 1 колонке, `View != "Tree panel"` и ширине ≥ 12: имя │ extra.
-- Заголовок колонок (Yellow): `Name` (многоколоночные и Tree? — нет, см. ниже), `Name / Size / Modified` (одноколоночные по умолчанию: Full, Wide, Alternative full), `Name / Description` (Descriptions, Long descriptions), `Name / Size / UID` (File owners), `Name / Size / Hard links` (File links), `Name / Size / Modified / Accessed / Created / Mode` (Detailed), `Folder tree` (Tree panel).
-- Ширина extra-колонки (`panelExtraWidth`, не зависит от значений строк): Full/Alternative full 24 (size 9 + пробел + дата 14), Wide 9, File links 15, File owners 20, Detailed 72, Descriptions/Long descriptions `w/2`; всё ограничено `w/2`. `sizeWidth` = max(9, длина `panelSize(TotalBytes)`, длины подсчитанных размеров папок с учётом префиксов `~`/`>=`).
-- Поле extra для строки:
-  - по умолчанию (Full): `"%*s %s"` размер + дата `02.01.06 15:04` (`ModTime`);
-  - `Wide`: только размер;
-  - `Descriptions`: описание из `descript.ion`;
-  - `Long descriptions`: размер + описание;
-  - `File owners`: размер + UID (10 позиций); `File links`: размер + `Nlink` (5 позиций); если размер не помещается — `humanSize`;
-  - `Detailed`: размер, дата, `Mode()` (например `-rw-r--r--`), далее ` A:<atime sec> C:<birthtime sec>`.
-- Размер: `<DIR>` для папок (или подсчитанный размер, см. §8), `<LINK>` для символических ссылок, иначе байты или человекочитаемое (`Settings.HumanReadableSizes`, формат `%.1f` + `K/M/G/T`).
-- Цвет имени: папки White; при `Settings.Highlight` символические ссылки Cyan, исполняемые (`mode&0111`) `0x55ff55`, архивы по группе масок `<arc>` `0xff55ff`; помеченные — Yellow; строка курсора в активной панели — Black на Cyan (помеченная под курсором — Yellow на Cyan). Маркер пометки в первой ячейке строки: `√`.
-- В `Tree panel` вместо имени выводится метка ветки `treeLabels[name]` (`├─`, `└─`, `│ `), `..` — как есть.
-- **Код:** `panel_draw.go: drawPanel, panelExtraWidth, panelColumns, panelSize, humanSize`.
+#### Columns and content per mode
+- Number of columns (`panelColumns`): `Brief` = 3, `Medium` = 2, everything else = 1. Column width `cw = (w−2)/columns`; a vertical `│` between columns.
+- Metadata (`metadata`) is drawn only with 1 column, `View != "Tree panel"` and width ≥ 12: name │ extra.
+- Column header (Yellow): `Name` (multi-column and Tree? — no, see below), `Name / Size / Modified` (single-column by default: Full, Wide, Alternative full), `Name / Description` (Descriptions, Long descriptions), `Name / Size / UID` (File owners), `Name / Size / Hard links` (File links), `Name / Size / Modified / Accessed / Created / Mode` (Detailed), `Folder tree` (Tree panel).
+- Width of the extra column (`panelExtraWidth`, independent of the row values): Full/Alternative full 24 (size 9 + space + date 14), Wide 9, File links 15, File owners 20, Detailed 72, Descriptions/Long descriptions `w/2`; everything is capped at `w/2`. `sizeWidth` = max(9, length of `panelSize(TotalBytes)`, lengths of the calculated folder sizes including the `~`/`>=` prefixes).
+- The extra field for a row:
+  - by default (Full): `"%*s %s"` size + date `02.01.06 15:04` (`ModTime`);
+  - `Wide`: size only;
+  - `Descriptions`: the description from `descript.ion`;
+  - `Long descriptions`: size + description;
+  - `File owners`: size + UID (10 positions); `File links`: size + `Nlink` (5 positions); if the size does not fit — `humanSize`;
+  - `Detailed`: size, date, `Mode()` (for example `-rw-r--r--`), then ` A:<atime sec> C:<birthtime sec>`.
+- Size: `<DIR>` for folders (or the calculated size, see §8), `<LINK>` for symbolic links, otherwise bytes or human-readable (`Settings.HumanReadableSizes`, format `%.1f` + `K/M/G/T`).
+- Name color: folders White; with `Settings.Highlight` symbolic links Cyan, executables (`mode&0111`) `0x55ff55`, archives by the `<arc>` mask group `0xff55ff`; marked — Yellow; the cursor row in the active panel — Black on Cyan (a marked entry under the cursor — Yellow on Cyan). The mark marker in the first cell of the row: `√`.
+- In `Tree panel` the branch label `treeLabels[name]` (`├─`, `└─`, `│ `) is printed instead of the name; `..` — as is.
+- **Code:** `panel_draw.go: drawPanel, panelExtraWidth, panelColumns, panelSize, humanSize`.
 
-#### Quick view (быстрый просмотр)
-- **Вызов:** Ctrl+Q (только Ctrl, не ⌘) — переключает **неактивную** панель; `Commands → Quick view on/off`; через меню Left/Right (`setView`) — для любой панели.
-- **Где доступно:** Ctrl+Q и меню Left/Right → `Quick view` работают и для удалённой панели (после backlog `setView` разрешает Quick view для remote; Info/Tree по-прежнему требуют локальную папку). Для члена архива показывается `Archive member: press F3 to extract and view`. Ctrl+L (только Ctrl; ⌘L — Change directory) / Ctrl+T (также ⌘T) переключают Info/Tree; отдельных пунктов в Commands для них нет — виды доступны в Left/Right.
-- **Поведение (`toggleOtherView("Quick view")`):**
-  - если неактивная уже в этом режиме — восстанавливается запомненная пара `{View, Hidden}` из `viewReturns[view]` (вложенные переключения восстанавливаются по цепочке: Brief → Ctrl+L → Ctrl+Q → Ctrl+Q возвращает `Info panel` → Ctrl+L возвращает `Brief`);
-  - иначе запоминается текущая пара, ставится `View = "Quick view"`, `Hidden = false`;
-  - отменяются фоновые загрузки/дерево неактивной панели, сбрасывается превью (`previewKey`, `previewImage`, отмена `previewOperation`).
-- Источник превью — файл под курсором **другой** панели (`updatePreview` в `Poll`, пока не открыт документ/терминал и не Busy). Ключ = путь + размер + mtime; смена ключа во время загрузки отменяет её.
-- Текст превью (`previewText`), выводится построчно с y+2, максимум `h−3` строк, без прокрутки (колесо над Quick view игнорируется):
-  - удалённая панель-источник: `Remote file: use F3 to download and view`;
-  - пока грузится: `Loading…`;
-  - папка: `"<path>\nDirectory (preview, up to 100 entries)\n"` + до 100 имён (скрытые пропускаются при `!ShowHidden`), затем `…`;
-  - изображение/PDF (`preview.Supported`: `.jpg .jpeg .png .gif .tif .tiff .bmp .heic .heif .webp .pdf`): `"<name>\n<size> bytes · <2006-01-02 15:04>"` + `"\n<FORMAT> · <W> × <H> pixels"` или `"\nPDF · page 1 of <N>"`; при ошибке `"\nPreview unavailable (unsupported, damaged or limit exceeded)"`;
-  - обычный файл: первые 16 KiB как текст;
-  - ошибка `os.Stat` — текст ошибки (в частности, для членов архива превью не работает: виртуальный путь не существует на диске);
-  - после Esc: `Preview cancelled`.
-- Изображение: декодируется в отдельном процессе-помощнике (`farshmac --preview-helper <path>`, таймаут 4 с, вывод ≤ 5 MiB, PNG ≤ 3 MiB, thumbnail ≤ 768 px, исходник ≤ 100000×100000 и ≤ 500 Мпикс; для PDF рендерится 1-я страница с учётом поворота). Результат — data-URI PNG, передаётся рендереру как `Update.Preview{X: x+2, Y: 7, W: w−4, H: Rows−13}`; не показывается, если `w < 8` или `Rows < 14`, если источник — удалённая/архивная панель, если открыт документ/меню/форма/диалог/Busy, или пока превью `pending`.
-- **Сообщения:** `This panel view requires a local folder` (toggleOtherView для remote с view ≠ Quick view).
-- **Код:** `far_keys.go: toggleOtherView`, `commands.go: updatePreview`, `image_preview.go`, `preview/preview.go`, `preview/preview_darwin.go`, `panel_draw.go`.
+#### Quick view
+- **Invocation:** Ctrl+Q (Ctrl only, not ⌘) — toggles the **inactive** panel; `Commands → Quick view on/off`; via the Left/Right menu (`setView`) — for any panel.
+- **Where available:** Ctrl+Q and the Left/Right menu → `Quick view` also work for a remote panel (after the backlog, `setView` allows Quick view for remote; Info/Tree still require a local folder). For an archive member, `Archive member: press F3 to extract and view` is shown. Ctrl+L (Ctrl only; ⌘L — Change directory) / Ctrl+T (also ⌘T) toggle Info/Tree; there are no separate Commands items for them — the views are available in Left/Right.
+- **Behavior (`toggleOtherView("Quick view")`):**
+  - if the inactive panel is already in this mode — the remembered pair `{View, Hidden}` from `viewReturns[view]` is restored (nested toggles are restored as a chain: Brief → Ctrl+L → Ctrl+Q → Ctrl+Q returns `Info panel` → Ctrl+L returns `Brief`);
+  - otherwise the current pair is remembered, `View = "Quick view"`, `Hidden = false` are set;
+  - background loads/tree of the inactive panel are cancelled, the preview is reset (`previewKey`, `previewImage`, cancellation of `previewOperation`).
+- The preview source is the file under the cursor of the **other** panel (`updatePreview` in `Poll`, as long as no document/terminal is open and not Busy). Key = path + size + mtime; a key change during loading cancels it.
+- The preview text (`previewText`) is printed line by line from y+2, at most `h−3` lines, without scrolling (the wheel over Quick view is ignored):
+  - remote source panel: `Remote file: use F3 to download and view`;
+  - while loading: `Loading…`;
+  - folder: `"<path>\nDirectory (preview, up to 100 entries)\n"` + up to 100 names (hidden ones are skipped when `!ShowHidden`), then `…`;
+  - image/PDF (`preview.Supported`: `.jpg .jpeg .png .gif .tif .tiff .bmp .heic .heif .webp .pdf`): `"<name>\n<size> bytes · <2006-01-02 15:04>"` + `"\n<FORMAT> · <W> × <H> pixels"` or `"\nPDF · page 1 of <N>"`; on error `"\nPreview unavailable (unsupported, damaged or limit exceeded)"`;
+  - regular file: the first 16 KiB as text;
+  - `os.Stat` error — the error text (in particular, the preview does not work for archive members: the virtual path does not exist on disk);
+  - after Esc: `Preview cancelled`.
+- Image: decoded in a separate helper process (`farshmac --preview-helper <path>`, 4 s timeout, output ≤ 5 MiB, PNG ≤ 3 MiB, thumbnail ≤ 768 px, source ≤ 100000×100000 and ≤ 500 Mpixels; for PDF the 1st page is rendered taking rotation into account). The result is a PNG data URI passed to the renderer as `Update.Preview{X: x+2, Y: 7, W: w−4, H: Rows−13}`; it is not shown if `w < 8` or `Rows < 14`, if the source is a remote/archive panel, if a document/menu/form/dialog is open or Busy, or while the preview is `pending`.
+- **Messages:** `This panel view requires a local folder` (toggleOtherView for remote with view ≠ Quick view).
+- **Code:** `far_keys.go: toggleOtherView`, `commands.go: updatePreview`, `image_preview.go`, `preview/preview.go`, `preview/preview_darwin.go`, `panel_draw.go`.
 
-#### Info panel (информационная панель)
-- **Вызов:** Ctrl+L (только Ctrl) — неактивная панель; меню Left/Right → `Info panel`.
-- **Где доступно:** локальные панели; для remote `setView` → `Choose a file view for remote panels`, `toggleOtherView` → `This panel view requires a local folder`.
-- **Поведение:** заголовок `Information`. Источник — противоположная панель (если она тоже Info panel — сама панель): `path = source.filesystemPath()`; `plugin` = `Remote.Label()+Path` для удалённой или `"Archive: " + Archive.Path` для архивной. Чтение выполняется в одной фоновой горутине на панель (`readInfoPanel`), результат применяется в `Poll`; ключ включает путь, plugin и все настройки Info; повторное чтение того же ключа не раньше чем через 2 с. До первого результата — `Reading information…`.
-- Строки (в порядке вывода, заголовки секций рисуются как `─── Title ───`, значения Yellow прижаты вправо):
+#### Info panel
+- **Invocation:** Ctrl+L (Ctrl only) — the inactive panel; Left/Right menu → `Info panel`.
+- **Where available:** local panels; for remote `setView` → `Choose a file view for remote panels`, `toggleOtherView` → `This panel view requires a local folder`.
+- **Behavior:** title `Information`. The source is the opposite panel (if it is also an Info panel — the panel itself): `path = source.filesystemPath()`; `plugin` = `Remote.Label()+Path` for a remote panel or `"Archive: " + Archive.Path` for an archive panel. Reading is done in one background goroutine per panel (`readInfoPanel`), the result is applied in `Poll`; the key includes the path, plugin and all Info settings; the same key is not re-read sooner than 2 s later. Before the first result — `Reading information…`.
+- Lines (in output order; section headers are drawn as `─── Title ───`, values are Yellow, right-aligned):
   - `InfoHost` (`Computer and user`): `Computer name`, `User name`;
-  - `InfoVolume` (`Drive information`): секция `Disk <mount> (<fstype>)`; `Total bytes`, `Free bytes` (statfs: `Blocks*Bsize`, `Bavail*Bsize`), `Volume label`, `Volume UUID` (CFURL volume keys), `Device` (`Mntfromname`);
-  - `InfoMemory`: секция `Memory`; `Memory used` (`%.0f%%` = (Total − min(Total, Available))/Total), `Installed memory` (`hw.memsize`), `Free physical`, `Available (estimate)` (free+inactive pages), `Compressed`, `Swap total`, `Swap free` (`vm.swapusage`);
-  - plugin ≠ "": секция `Filesystem panel` + строка plugin;
-  - `InfoPower`: секция `Power status`; `Power source` (IOPS providing type или `Unknown`), `Charge status` (`Charging` / `Critical` <10% / `Low` <33% / `Normal` / `High` >66% / `Unknown` / `No battery`), `Battery` `<n>%` (если ≥ 0), `Time remaining` `<h>h <m>m` (если > 0);
-  - `InfoDescription` и plugin == "": секция `Folder description`; перебираются имена из `Settings.FolderDescriptions` (по умолчанию `file_id.diz,README.md,README,readme.txt`; имена с путём пропускаются); первый существующий обычный файл: строка с именем файла, затем до 4096 байт содержимого построчно.
-  Числа без human-readable форматируются с разделителем-пробелом по тысячам.
-- Прокрутка (`InfoOffset`, панель активна): ↓/↑ на 1, PgDn/PgUp на `Rows−7`, Home/End, колесо мыши (любая панель под курсором, ±12 за событие). Индикаторы `▲`/`▼` на правой рамке.
-- Ctrl/⌘+F12 в активной Info panel — форма `Info panel settings` с переключателями `Computer and user`, `Drive information`, `Memory information`, `Folder description`, `Power status` (сбрасывает кеш `infoKeys`).
-- F3 / F4 в активной Info panel — открыть файл описания (первый кандидат, даже если ещё не существует? — нет: используется `infoDescriptionPaths`, который указывает на найденный файл либо на первого кандидата) через `viewPlan` (просмотр/редактирование).
-- Мышь: клик по Info panel делает её активной; если строка относится к секции `Folder description` и есть путь описания: левая кнопка — просмотр, правая/Control-click — редактирование.
-- Клавиши выделения, fast find через Numpad и т.п. в Info panel не действуют (`selectionKey` возвращает false; `infoPanelKey` перехватывает стрелки/PgUp/PgDn/Home/End/F3/F4 раньше остального).
-- **Код:** `info_panel.go`, `sysinfo/info_darwin.go`, `settings.go: settingsMenu("Info panel settings")`.
+  - `InfoVolume` (`Drive information`): section `Disk <mount> (<fstype>)`; `Total bytes`, `Free bytes` (statfs: `Blocks*Bsize`, `Bavail*Bsize`), `Volume label`, `Volume UUID` (CFURL volume keys), `Device` (`Mntfromname`);
+  - `InfoMemory`: section `Memory`; `Memory used` (`%.0f%%` = (Total − min(Total, Available))/Total), `Installed memory` (`hw.memsize`), `Free physical`, `Available (estimate)` (free+inactive pages), `Compressed`, `Swap total`, `Swap free` (`vm.swapusage`);
+  - plugin ≠ "": section `Filesystem panel` + the plugin line;
+  - `InfoPower`: section `Power status`; `Power source` (the IOPS providing type or `Unknown`), `Charge status` (`Charging` / `Critical` <10% / `Low` <33% / `Normal` / `High` >66% / `Unknown` / `No battery`), `Battery` `<n>%` (if ≥ 0), `Time remaining` `<h>h <m>m` (if > 0);
+  - `InfoDescription` and plugin == "": section `Folder description`; the names from `Settings.FolderDescriptions` are tried (default `file_id.diz,README.md,README,readme.txt`; names containing a path are skipped); the first existing regular file: a line with the file name, then up to 4096 bytes of content line by line.
+  Numbers without human-readable formatting use a space as the thousands separator.
+- Scrolling (`InfoOffset`, panel active): ↓/↑ by 1, PgDn/PgUp by `Rows−7`, Home/End, mouse wheel (whichever panel is under the pointer, ±12 per event). `▲`/`▼` indicators on the right frame.
+- Ctrl/⌘+F12 in an active Info panel — the `Info panel settings` form with the toggles `Computer and user`, `Drive information`, `Memory information`, `Folder description`, `Power status` (resets the `infoKeys` cache).
+- F3 / F4 in an active Info panel — open the description file (the first candidate, even if it does not exist yet? — no: `infoDescriptionPaths` is used, which points to the found file or to the first candidate) via `viewPlan` (view/edit).
+- Mouse: a click on the Info panel makes it active; if the line belongs to the `Folder description` section and there is a description path: left button — view, right/Control-click — edit.
+- Selection keys, fast find via Numpad and the like have no effect in the Info panel (`selectionKey` returns false; `infoPanelKey` intercepts arrows/PgUp/PgDn/Home/End/F3/F4 before everything else).
+- **Code:** `info_panel.go`, `sysinfo/info_darwin.go`, `settings.go: settingsMenu("Info panel settings")`.
 
-#### Tree panel (дерево папок)
-- **Вызов:** Ctrl/⌘+T — неактивная панель; меню Left/Right → `Tree panel`.
-- **Где доступно:** только локальные панели вне архивов: `Tree view is unavailable inside archives`, `This panel view requires a local folder` / `Choose a file view for remote panels`.
-- **Поведение:** `Load(path)` в этом режиме запускает фоновый скан (`loadTree → startTree → scanTree`) с корнем `path`:
-  - глубина `Settings.TreeDepth` (1..12, по умолчанию 4; `Options → Advanced → Tree settings`, подсказка `Maximum levels for folder tree (1–12)`, ошибка `Enter a number from 1 to 12`);
-  - лимиты: 50000 узлов (`treeNodeLimit`), 1 000 000 просмотренных записей (`treeEntryLimit`); чтение батчами `ReadDir(256)`; символические ссылки не обходятся; обычные файлы не stat-ятся; скрытые и `.DS_Store` фильтруются по настройкам панели (с учётом `ForcedVisiblePath`); подпапки сортируются текущими настройками сортировки панели;
-  - во время скана футер: `Reading tree… Esc stops`, затем `Reading tree… %d entries · Esc stops`;
-  - по завершении: записи — относительные пути (`a`, `a/b`), первая строка `..` (если корень не `/`), `ItemCount` = число папок, `TotalBytes = 0`; футер (поле `Err`, остаётся постоянно): `"%d folders · depth %d"`, при лимите `Partial tree · limit reached; open a subfolder`, при отмене `Stopped · partial tree`, при ошибке корня — текст ошибки; при пропусках ` · %d unreadable`.
-  - Метки: `├─name` / `└─name` с префиксами `│ ` / `  `; управляющие символы имени экранируются (`\n`, `\r`, `\t`, `\uXXXX`).
-- Enter на узле — `enterFile` → `Load(Join(Path, rel))` → дерево перестраивается с новым корнем; Enter на `..` — корень на уровень выше. Ctrl+PgUp/PgDn аналогично.
-- Пометки Insert/Space/Shift+стрелки работают по именам узлов; Num+/−/* и Ctrl+M — нет (`selectionKey` отключён для Tree).
-- Esc во время скана: `Stopping tree scan…`.
-- Alt+F10 (`Commands → Folder tree`) — то же сканирование в фоновой задаче `Reading folder tree` с модальным списком `Folder tree` (или `Folder tree (partial)`), первая строка — корень; выбор загружает папку в активную панель. Недоступно для remote (`This command requires a local panel. Use F5 to copy remote files first.`).
-- **Код:** `tree.go`, `commands.go: treeMenu`, `far_keys.go: toggleOtherView`.
+#### Tree panel
+- **Invocation:** Ctrl/⌘+T — the inactive panel; Left/Right menu → `Tree panel`.
+- **Where available:** only local panels outside archives: `Tree view is unavailable inside archives`, `This panel view requires a local folder` / `Choose a file view for remote panels`.
+- **Behavior:** `Load(path)` in this mode starts a background scan (`loadTree → startTree → scanTree`) rooted at `path`:
+  - depth `Settings.TreeDepth` (1..12, default 4; `Options → Advanced → Tree settings`, hint `Maximum levels for folder tree (1–12)`, error `Enter a number from 1 to 12`);
+  - limits: 50000 nodes (`treeNodeLimit`), 1 000 000 visited entries (`treeEntryLimit`); reading in batches of `ReadDir(256)`; symbolic links are not followed; regular files are not stat-ed; hidden files and `.DS_Store` are filtered by the panel settings (taking `ForcedVisiblePath` into account); subfolders are sorted by the panel's current sort settings;
+  - during the scan the footer shows `Reading tree… Esc stops`, then `Reading tree… %d entries · Esc stops`;
+  - on completion: entries are relative paths (`a`, `a/b`), the first line is `..` (if the root is not `/`), `ItemCount` = number of folders, `TotalBytes = 0`; footer (the `Err` field, stays permanently): `"%d folders · depth %d"`, when the limit is hit `Partial tree · limit reached; open a subfolder`, when cancelled `Stopped · partial tree`, on a root error — the error text; when entries were skipped ` · %d unreadable`.
+  - Labels: `├─name` / `└─name` with the prefixes `│ ` / `  `; control characters in the name are escaped (`\n`, `\r`, `\t`, `\uXXXX`).
+- Enter on a node — `enterFile` → `Load(Join(Path, rel))` → the tree is rebuilt with the new root; Enter on `..` — the root goes one level up. Ctrl+PgUp/PgDn likewise.
+- Marks via Insert/Space/Shift+arrows work on node names; Num+/−/* and Ctrl+M do not (`selectionKey` is disabled for Tree).
+- Esc during the scan: `Stopping tree scan…`.
+- Alt+F10 (`Commands → Folder tree`) — the same scan in a background task `Reading folder tree` with the modal list `Folder tree` (or `Folder tree (partial)`), the first line is the root; selecting loads the folder into the active panel. Not available for remote (`This command requires a local panel. Use F5 to copy remote files first.`).
+- **Code:** `tree.go`, `commands.go: treeMenu`, `far_keys.go: toggleOtherView`.
 
-#### Detailed / Long descriptions — полноэкранная панель
-- При активной панели в `Detailed`/`Long descriptions` вторая панель не рисуется (ширина 0), кроме случаев, когда она показывает Quick view/Info/Tree (тогда обычный split). Клик мышью в область с шириной 0 не попадает ни в одну панель.
-- **Код:** `panel_draw.go: panelRect`.
+#### Detailed / Long descriptions — full-screen panel
+- When the active panel is in `Detailed`/`Long descriptions`, the second panel is not drawn (width 0), except when it shows Quick view/Info/Tree (then the usual split). A mouse click in a zero-width area hits no panel.
+- **Code:** `panel_draw.go: panelRect`.
 
 #### Human-readable sizes
-- **Вызов:** ⌘/Ctrl+Shift+S; `Options → Panel settings → Human-readable sizes (off = bytes)`.
-- **Поведение:** `Settings.HumanReadableSizes` переключается, `configurePanel` для обеих панелей без перечитывания; размеры в строках и футер пересчитываются сразу (`drawPanel` читает `Settings.HumanReadableSizes`), устаревает только неотображаемый `InfoText`.
-- **Код:** `far_keys.go`, `panel_draw.go`.
+- **Invocation:** ⌘/Ctrl+Shift+S; `Options → Panel settings → Human-readable sizes (off = bytes)`.
+- **Behavior:** `Settings.HumanReadableSizes` is toggled, `configurePanel` for both panels without re-reading; the sizes in the rows and the footer are recalculated immediately (`drawPanel` reads `Settings.HumanReadableSizes`), only the non-displayed `InfoText` becomes stale.
+- **Code:** `far_keys.go`, `panel_draw.go`.
 
 ---
 
-## 3. Загрузка каталога и состояние
+## 3. Directory loading and state
 
-#### Panel.Load (общий механизм)
-- **Поведение:**
-  1. Путь приводится к абсолютному. Remote → `loadRemote` (или асинхронно `loadPanel`); Archive и путь внутри архива → `loadArchiveDirectory`; `View == "Tree panel"` → `loadTree`; иначе локальное чтение (`fsops.ReadDirectory`), в приложении всегда асинхронно (`Async == true`, `NewAsync`), с футером `Reading folder… Esc stops` и операцией `Reading folder`.
-  2. Фильтрация при чтении: `.DS_Store` при `IgnoreDSStore`; скрытые (имя с `.` или флаг `UF_HIDDEN` 0x8000) при `HideHidden`, кроме `ForcedVisiblePath` (папка, созданная F7); для не-папок — маска панели `Filter` (`matchesMask`). Символические ссылки на папки считаются папками (`os.Stat` цели).
-  3. `beginLoad`: сохраняет состояние предыдущего пути в `states[prev]` (имя под курсором, верхняя строка, пометки), восстанавливает состояние нового пути; **при переходе в родителя курсор всегда ставится на только что покинутую папку** (даже если у родителя было сохранённое состояние); путь добавляется в `History` панели (уникально, лимит 200); первой записью добавляется `..` (если `Dir(abs) != abs`).
-  4. Читаются описания `descript.ion` (`Settings.DescriptionFile`), сортировка (`sortEntries`), `installEntries` (восстановление курсора/верхней строки по именам, пометок только для существующих имён; курсор клампится, `Offset ≤ Cursor`), `loadInfo` (`TotalBytes` — сумма размеров файлов, `ItemCount`, `InfoText`).
-  5. Ошибка асинхронной загрузки: панель откатывается к предыдущему состоянию (`previous`), `Err` = текст ошибки (виден в футере панели). Удачная загрузка при ошибке синхронного `Load` — `a.error(err)` → строка статуса.
-- Esc при активном чтении: `Stopping folder scan…` (отмена операции), Esc при этом не очищает командную строку.
-- При асинхронной загрузке запросы позиции курсора (F7, matchOtherPanel) записываются в ожидающее состояние (`pendingPosition`).
-- **Код:** `app.go: Load, beginLoad, installEntries`, `panel_load.go`, `hidden_darwin.go`, `remote.go: loadRemote`, `archive_panel.go: loadArchiveDirectory`.
+#### Panel.Load (the general mechanism)
+- **Behavior:**
+  1. The path is made absolute. Remote → `loadRemote` (or asynchronously `loadPanel`); Archive and a path inside the archive → `loadArchiveDirectory`; `View == "Tree panel"` → `loadTree`; otherwise a local read (`fsops.ReadDirectory`), in the application always asynchronous (`Async == true`, `NewAsync`), with the footer `Reading folder… Esc stops` and the operation `Reading folder`.
+  2. Filtering while reading: `.DS_Store` when `IgnoreDSStore`; hidden entries (name starting with `.` or the `UF_HIDDEN` flag 0x8000) when `HideHidden`, except `ForcedVisiblePath` (a folder created with F7); for non-folders — the panel's `Filter` mask (`matchesMask`). Symbolic links to folders count as folders (`os.Stat` of the target).
+  3. `beginLoad`: saves the state of the previous path in `states[prev]` (name under the cursor, top line, marks), restores the state of the new path; **when going to the parent the cursor is always placed on the folder just left** (even if the parent had a saved state); the path is added to the panel's `History` (unique, limit 200); `..` is added as the first entry (if `Dir(abs) != abs`).
+  4. `descript.ion` descriptions are read (`Settings.DescriptionFile`), sorting (`sortEntries`), `installEntries` (restoring the cursor/top line by names, marks only for existing names; the cursor is clamped, `Offset ≤ Cursor`), `loadInfo` (`TotalBytes` — the sum of file sizes, `ItemCount`, `InfoText`).
+  5. Asynchronous load error: the panel rolls back to the previous state (`previous`), `Err` = the error text (visible in the panel footer). A failed synchronous `Load` — `a.error(err)` → the status line.
+- Esc during an active read: `Stopping folder scan…` (cancels the operation); in this case Esc does not clear the command line.
+- During an asynchronous load, cursor position requests (F7, matchOtherPanel) are recorded in a pending state (`pendingPosition`).
+- **Code:** `app.go: Load, beginLoad, installEntries`, `panel_load.go`, `hidden_darwin.go`, `remote.go: loadRemote`, `archive_panel.go: loadArchiveDirectory`.
 
-#### Обновление панели (Re-read)
-- **Вызов:** ⌘R или Ctrl+R (активная панель); меню `Left/Right → Re-read ⌘R` (конкретная панель).
-- **Поведение (`rereadPanel`):** сбрасывает ключи Info panel; для архива — повторно открывает индекс архива (`openArchive`), иначе `Load(Path)`. Курсор/пометки сохраняются по именам.
-- Полный `refresh()` обеих панелей происходит после возврата из терминала (⌘O), смены настроек панели, F7, создания ссылки и т.д.
-- **Код:** `archive_panel.go: rereadPanel`, `app.go: refresh`.
+#### Panel refresh (Re-read)
+- **Invocation:** ⌘R or Ctrl+R (active panel); menu `Left/Right → Re-read ⌘R` (a specific panel).
+- **Behavior (`rereadPanel`):** resets the Info panel keys; for an archive — re-opens the archive index (`openArchive`), otherwise `Load(Path)`. Cursor/marks are preserved by names.
+- A full `refresh()` of both panels happens after returning from the terminal (⌘O), changing panel settings, F7, creating a link, etc.
+- **Code:** `archive_panel.go: rereadPanel`, `app.go: refresh`.
 
 ---
 
-## 4. Навигация клавишами
+## 4. Keyboard navigation
 
-#### Tab — смена активной панели
-- **Вызов:** Tab.
-- **Поведение:** `Active = 1 − Active`; скрытая панель пропускается, при обеих скрытых активная панель показывается (P1-01). На Quick view / Info / Tree / скрытой панели файловые клавиши (Enter, F3–F8, Insert и т. п.) не действуют, статус `Switch to a file panel first (Tab)`.
-- **Код:** `app.go: key`.
+#### Tab — switch the active panel
+- **Invocation:** Tab.
+- **Behavior:** `Active = 1 − Active`; a hidden panel is skipped; when both are hidden the active panel is shown (P1-01). On Quick view / Info / Tree / a hidden panel, file keys (Enter, F3–F8, Insert, etc.) have no effect, status `Switch to a file panel first (Tab)`.
+- **Code:** `app.go: key`.
 
-#### Стрелки ↑/↓
-- Курсор ±1 с ограничением `[0, len−1]`. С Ctrl — история команд (см. §1). В Info panel — прокрутка. При открытом fast find — следующий/предыдущий match.
-- **Код:** `app.go: key`.
+#### Arrows ↑/↓
+- Cursor ±1, limited to `[0, len−1]`. With Ctrl — command history (see §1). In the Info panel — scrolling. With fast find open — next/previous match.
+- **Code:** `app.go: key`.
 
 #### ←/→
-- Только в многоколоночных режимах (`Brief`, `Medium`): курсор ± `Rows−9` (одна колонка), с ограничением. В одноколоночных — ничего (командная строка не редактируется стрелками).
-- С Ctrl/⌘ при пустой командной строке — ширина панелей (§12).
-- **Код:** `app.go: key`.
+- Only in multi-column modes (`Brief`, `Medium`): cursor ± `Rows−9` (one column), clamped. In single-column modes — nothing (the command line is not edited with arrows).
+- With Ctrl/⌘ on an empty command line — panel widths (§12).
+- **Code:** `app.go: key`.
 
 #### PgUp / PgDn
-- Курсор ± `(Rows−9) × columns` (страница), ограничение по границам. Shift+PgUp/PgDn — выделение диапазона (§5). Ctrl/⌘+PgUp/PgDn — родитель/вход (ниже).
-- **Код:** `app.go: key`.
+- Cursor ± `(Rows−9) × columns` (a page), clamped to the bounds. Shift+PgUp/PgDn — range selection (§5). Ctrl/⌘+PgUp/PgDn — parent/enter (below).
+- **Code:** `app.go: key`.
 
 #### Home / End
-- Курсор на 0 / `len−1`. Shift — выделение; в Info panel — прокрутка.
+- Cursor to 0 / `len−1`. Shift — selection; in the Info panel — scrolling.
 
-#### Enter — открыть
-- **Вызов:** Enter при пустой командной строке; двойной клик левой кнопкой; Enter в fast find.
-- **Поведение (`enterFile`):**
-  - удалённая панель: папка → `Load`, файл → `openRemoteDocument(false)`;
-  - архив: `enterArchiveMember` (§10);
-  - локальная: `os.Stat` (ошибка → статус); папка (включая `.app`; запуск — Shift+Enter) → `Load`; архив по `fsops.ArchiveFormat` (`.tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar .zip .jar .war .7z .rar .cpio`) → `openArchive`; ассоциация с `Command` по маске → запуск в терминале; обычный исполняемый файл (`mode&0111`) → выполняется в терминале как команда (`terminal.Quote(path)`); иначе → `/usr/bin/open <path>` (задача `Opening <name>`).
-- На `..` — `Current()` = родитель → `Load(parent)`.
-- **Код:** `launch.go: enterFile, externalPlan, launch`.
+#### Enter — open
+- **Invocation:** Enter on an empty command line; left double-click; Enter in fast find.
+- **Behavior (`enterFile`):**
+  - remote panel: folder → `Load`, file → `openRemoteDocument(false)`;
+  - archive: `enterArchiveMember` (§10);
+  - local: `os.Stat` (error → status); folder (including `.app`; launching — Shift+Enter) → `Load`; an archive per `fsops.ArchiveFormat` (`.tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar .zip .jar .war .7z .rar .cpio`) → `openArchive`; an association with a `Command` by mask → run in the terminal; a regular executable file (`mode&0111`) → executed in the terminal as a command (`terminal.Quote(path)`); otherwise → `/usr/bin/open <path>` (task `Opening <name>`).
+- On `..` — `Current()` = the parent → `Load(parent)`.
+- **Code:** `launch.go: enterFile, externalPlan, launch`.
 
-#### Ctrl/⌘+PgUp — в родительский каталог
-- **Поведение:** `Load(filepath.Dir(Path))`. В корне архива выводит из архива в папку с архивом (путь оказывается вне архива → локальная загрузка, `Archive = nil`). Для remote — родитель на сервере. Курсор встаёт на покинутую папку.
-- **Код:** `far_keys.go`.
+#### Ctrl/⌘+PgUp — to the parent directory
+- **Behavior:** `Load(filepath.Dir(Path))`. At the archive root it leaves the archive into the folder containing the archive (the path ends up outside the archive → local load, `Archive = nil`). For remote — the parent on the server. The cursor lands on the folder just left.
+- **Code:** `far_keys.go`.
 
-#### Ctrl/⌘+PgDn — войти в папку/архив
-- **Поведение:** если под курсором папка или `fsops.ArchiveFormat(name) != ""` — `enterFile()`. Входит ровно в поддерживаемые форматы (в т. ч. `.war .cpio .tbz .txz`); одиночные `.gz/.bz2/.xz` без `.tar` архивами не считаются.
-- **Код:** `far_keys.go`, `launch.go`.
+#### Ctrl/⌘+PgDn — enter a folder/archive
+- **Behavior:** if a folder is under the cursor or `fsops.ArchiveFormat(name) != ""` — `enterFile()`. Enters exactly the supported formats (including `.war .cpio .tbz .txz`); single `.gz/.bz2/.xz` without `.tar` are not considered archives.
+- **Code:** `far_keys.go`, `launch.go`.
 
 #### Backspace
-- Удаляет последний символ командной строки; при пустой строке ничего не делает (не выходит в родителя). В fast find — удаляет символ запроса.
+- Deletes the last character of the command line; on an empty line does nothing (does not go to the parent). In fast find — deletes a query character.
 
 #### Cmd+L — Change directory
-- **Диалог:** заголовок `Change directory`, текст `Enter a directory`, поле = текущий путь, кнопки `OK`/`Cancel`.
-- **Поведение:** `expand(s, Path)`: `~`/`~/…` → домашний каталог; относительный путь — относительно текущего; `Load`; ошибка → статус.
-- **Код:** `app.go: gotoPrompt, expand`.
+- **Dialog:** title `Change directory`, text `Enter a directory`, field = the current path, buttons `OK`/`Cancel`.
+- **Behavior:** `expand(s, Path)`: `~`/`~/…` → the home directory; a relative path — relative to the current one; `Load`; error → status.
+- **Code:** `app.go: gotoPrompt, expand`.
 
-#### Alt+F1 / Alt+F2 — выбор тома
-- **Вызов:** Alt+F1 (левая), Alt+F2 (правая); меню `Left/Right → Change volume… AltF1/AltF2`; `Commands → Mounted volumes` (активная).
-- **Диалог:** список `Volumes and home`: `/`, домашний каталог, затем все записи `/Volumes/*`.
-- **Поведение:** выбор делает панель активной, сбрасывает `Remote = nil` (архив при этом не сбрасывается явно, но `Load` локального пути вне архива обнуляет `Archive`), загружает путь.
-- **Код:** `panel_options.go: volumes`.
+#### Alt+F1 / Alt+F2 — volume selection
+- **Invocation:** Alt+F1 (left), Alt+F2 (right); menu `Left/Right → Change volume… AltF1/AltF2`; `Commands → Mounted volumes` (active).
+- **Dialog:** the list `Volumes and home`: `/`, the home directory, then all `/Volumes/*` entries.
+- **Behavior:** selecting makes the panel active, resets `Remote = nil` (the archive is not reset explicitly, but a `Load` of a local path outside the archive clears `Archive`), loads the path.
+- **Code:** `panel_options.go: volumes`.
 
-#### ⌘= / ⌘Shift+\ (Ctrl варианты) — та же папка в другой панели
-- **Вызов:** Ctrl/⌘+`=`; Ctrl/⌘+Shift+`\`/`|`; `Commands → Same folder in other panel ⌘=`.
-- **Поведение (`matchOtherPanel`):** целевой панели копируются `Remote`, `RemoteLocalPath`, `Archive` источника; если она была в Tree/Info/Quick view — переключается в `Full`; `Load(src.Path)`; при ошибке прежние Remote/Archive восстанавливаются, статус = ошибка; курсор ставится на то же имя, что в источнике (или в pending-позицию при асинхронной загрузке); `Hidden = false`.
-- **Код:** `archive_panel.go: matchOtherPanel`.
+#### ⌘= / ⌘Shift+\ (Ctrl variants) — the same folder in the other panel
+- **Invocation:** Ctrl/⌘+`=`; Ctrl/⌘+Shift+`\`/`|`; `Commands → Same folder in other panel ⌘=`.
+- **Behavior (`matchOtherPanel`):** the source's `Remote`, `RemoteLocalPath`, `Archive` are copied to the target panel; if it was in Tree/Info/Quick view — it switches to `Full`; `Load(src.Path)`; on error the previous Remote/Archive are restored, status = the error; the cursor is placed on the same name as in the source (or on the pending position for an asynchronous load); `Hidden = false`.
+- **Code:** `archive_panel.go: matchOtherPanel`.
 
-#### ⌘U / Ctrl+U — поменять панели местами
-- Меняет структуры `Panels[0]` и `Panels[1]` (включая режимы, пути, пометки); активный индекс не меняется (фокус переходит на другую папку). Сбрасывает превью.
-- **Код:** `app.go: key`, `menu.go`.
+#### ⌘U / Ctrl+U — swap panels
+- Swaps the `Panels[0]` and `Panels[1]` structs (including modes, paths, marks); the active index does not change (focus moves to the other folder). Resets the preview.
+- **Code:** `app.go: key`, `menu.go`.
 
-#### F7 — новая папка (навигационная часть)
-- **Диалог:** `Make folder`, `Folder name`, пусто; для remote — `remoteMkdir`. В архиве — запрещено (`Archive is read-only. Use F5 to copy files out.`).
-- **Поведение:** `os.MkdirAll(expand(s, base), 0755)`; ошибка → подтверждение `Error` / `Cannot create folder\n<path>\n\n<err>` с кнопками `Retry`, `Cancel`; успех → `refresh()` + `focusCreatedDirectory`: `ForcedVisiblePath = path` (созданная скрытая папка показывается даже при скрытых файлах), загружается родитель созданной папки, курсор на неё (или pending), панель становится активной; если не найдена — `Folder created; hidden by panel settings`.
-- **Код:** `app.go: function(7)`, `launch.go: focusCreatedDirectory`.
+#### F7 — new folder (the navigation part)
+- **Dialog:** `Make folder`, `Folder name`, empty; for remote — `remoteMkdir`. In an archive — forbidden (`Archive is read-only. Use F5 to copy files out.`).
+- **Behavior:** `os.MkdirAll(expand(s, base), 0755)`; error → confirmation `Error` / `Cannot create folder\n<path>\n\n<err>` with the buttons `Retry`, `Cancel`; success → `refresh()` + `focusCreatedDirectory`: `ForcedVisiblePath = path` (a created hidden folder is shown even with hidden files off), the parent of the created folder is loaded, the cursor is placed on it (or pending), the panel becomes active; if not found — `Folder created; hidden by panel settings`.
+- **Code:** `app.go: function(7)`, `launch.go: focusCreatedDirectory`.
 
-#### Folder history (история папок)
-- **Вызов:** Alt+F12; `Commands → Folder history`.
-- **Поведение:** объединяет `a.folderHistory` и `History` обеих панелей (уникально, лимит `HistoryLimit`), показывает в обратном порядке (последние сверху) в списке `Folder history`; выбор → `Load` в активную панель. История сохраняется в setup.json (`Folders`) при `Save setup`.
-- **Код:** `commands.go: historyMenu("Folders")`, `settings.go: saveSetup`.
+#### Folder history
+- **Invocation:** Alt+F12; `Commands → Folder history`.
+- **Behavior:** merges `a.folderHistory` and the `History` of both panels (unique, limit `HistoryLimit`), shows them in reverse order (most recent on top) in the `Folder history` list; selecting → `Load` into the active panel. The history is saved to setup.json (`Folders`) on `Save setup`.
+- **Code:** `commands.go: historyMenu("Folders")`, `settings.go: saveSetup`.
 
 #### View/edit history
-- **Вызов:** Alt+F11; `Commands → File view/edit history`. Список `View/edit history` (`View <path>` / `Edit <path>`), пусто → `View/edit history is empty`.
+- **Invocation:** Alt+F11; `Commands → File view/edit history`. The list `View/edit history` (`View <path>` / `Edit <path>`), empty → `View/edit history is empty`.
 
-#### Find file / Find folder (навигация к результату)
-- **Вызов:** Alt+F7 / `Commands → Find file…`, `Find folder…`. Только локальные панели.
-- **Диалог:** `Find file` / `Find folder`: `Name masks` (`*`), `Containing text`, `Search subfolders` (вкл.), `Case sensitive text`; кнопка `Find`.
-- **Поведение:** поиск от текущей папки (лимит 10000 совпадений, задача `Searching <root>`); результат — список `"<title> — %d found, %d unreadable"` (+ ` (limit)`), относительные пути; выбор → `revealPath`: папка → загрузить её, файл → загрузить родителя и поставить курсор (или `File is hidden by the current panel filter`). Нет совпадений: `No matches (%d unreadable paths)`.
-- **Код:** `commands.go: findFiles, revealPath`.
+#### Find file / Find folder (navigating to the result)
+- **Invocation:** Alt+F7 / `Commands → Find file…`, `Find folder…`. Local panels only.
+- **Dialog:** `Find file` / `Find folder`: `Name masks` (`*`), `Containing text`, `Search subfolders` (on), `Case sensitive text`; button `Find`.
+- **Behavior:** the search starts from the current folder (limit 10000 matches, task `Searching <root>`); the result is the list `"<title> — %d found, %d unreadable"` (+ ` (limit)`), relative paths; selecting → `revealPath`: folder → load it, file → load the parent and place the cursor (or `File is hidden by the current panel filter`). No matches: `No matches (%d unreadable paths)`.
+- **Code:** `commands.go: findFiles, revealPath`.
 
 #### Screens (F12, Ctrl+Tab)
-- F12 — список `Screens`: `Panels` + открытые документы (`View `/`Edit `, `* ` для изменённых). Ctrl+Tab / Ctrl+Shift+Tab, ⌘Shift+] / ⌘Shift+[ — циклическое переключение между панелями и документами.
-- **Код:** `document.go: screenMenu, cycleScreen`, `app.go: key`.
+- F12 — the `Screens` list: `Panels` + open documents (`View `/`Edit `, `* ` for modified ones). Ctrl+Tab / Ctrl+Shift+Tab, ⌘Shift+] / ⌘Shift+[ — cyclic switching between the panels and documents.
+- **Code:** `document.go: screenMenu, cycleScreen`, `app.go: key`.
 
 ---
 
-## 5. Выделение файлов
+## 5. File selection
 
-Общее: `..` никогда не помечается. `changeSelection` перед изменением сохраняет `PreviousMarked` и `RestoreMarked`. Папки включаются в массовые операции только при `Settings.SelectFolders` (`Panel settings → Select folders with file masks`), если не указано иное. Пометки хранятся по именам и восстанавливаются при возврате в папку (`states`).
+General: `..` is never marked. `changeSelection` saves `PreviousMarked` and `RestoreMarked` before a change. Folders are included in bulk operations only when `Settings.SelectFolders` (`Panel settings → Select folders with file masks`), unless stated otherwise. Marks are stored by name and restored when returning to the folder (`states`).
 
-#### Insert / Space — пометить текущий
-- **Вызов:** Insert; Space при пустой командной строке.
-- **Поведение (`mark`):** инвертирует пометку текущей записи (кроме `..`), курсор вниз на 1 (ограничен последним элементом). Работает в любом файловом режиме, включая Tree panel.
-- **Код:** `app.go: mark`.
+#### Insert / Space — mark the current entry
+- **Invocation:** Insert; Space on an empty command line.
+- **Behavior (`mark`):** inverts the mark of the current entry (except `..`), cursor down by 1 (limited to the last element). Works in any file mode, including Tree panel.
+- **Code:** `app.go: mark`.
 
-#### Shift+↑/↓/PgUp/PgDn/Home/End — выделение диапазона
-- **Поведение:** целевая позиция вычисляется как при обычной навигации (шаг страницы `(Rows−9)×columns`); значение пометки `on = !Marked[текущий]`; все записи от старой позиции до целевой **не включая целевую** получают `on`; `RestoreMarked` = прежние пометки; курсор на целевую. В Tree panel тоже работает.
-- **Код:** `far_keys.go: farPanelKey`.
+#### Shift+↑/↓/PgUp/PgDn/Home/End — range selection
+- **Behavior:** the target position is computed as for normal navigation (page step `(Rows−9)×columns`); the mark value `on = !Marked[current]`; all entries from the old position up to the target, **excluding the target**, receive `on`; `RestoreMarked` = the previous marks; the cursor goes to the target. Also works in Tree panel.
+- **Code:** `far_keys.go: farPanelKey`.
 
-#### Num + / Num − — Select/Deselect group по маске
-- **Вызов:** NumpadAdd / NumpadSubtract (всегда), либо клавиши `+`/`-` основной клавиатуры при пустой командной строке; `Files → Select group… Num +`, `Deselect group… Num −`.
-- **Где доступно:** не в Quick view/Info/Tree.
-- **Диалог:** `Select group` / `Deselect group`, текст `Masks: *.go;*.md | *_test.go (exclude)`, значение по умолчанию `*`, `OK`/`Cancel`.
-- **Поведение:** `validateMasks` (ошибка `unknown mask group` или ошибка `filepath.Match`); маски через `,`/`;`, `*.*` ≡ `*`, регистронезависимо, часть после `|` — исключения, группы `<name>` разворачиваются из `Settings.MaskGroups`. Совпавшие файлы помечаются/снимаются, прочие не меняются.
-- **Код:** `selection_keys.go`, `panel_options.go: selectGroup, matchesMask, validateMasks`.
+#### Num + / Num − — Select/Deselect group by mask
+- **Invocation:** NumpadAdd / NumpadSubtract (always), or the `+`/`-` keys of the main keyboard on an empty command line; `Files → Select group… Num +`, `Deselect group… Num −`.
+- **Where available:** not in Quick view/Info/Tree.
+- **Dialog:** `Select group` / `Deselect group`, text `Masks: *.go;*.md | *_test.go (exclude)`, default value `*`, `OK`/`Cancel`.
+- **Behavior:** `validateMasks` (error `unknown mask group` or a `filepath.Match` error); masks separated by `,`/`;`, `*.*` ≡ `*`, case-insensitive, the part after `|` is the exclusions, `<name>` groups are expanded from `Settings.MaskGroups`. Matching files are marked/unmarked, the others are unchanged.
+- **Code:** `selection_keys.go`, `panel_options.go: selectGroup, matchesMask, validateMasks`.
 
-#### Num * — инвертировать
-- **Вызов:** NumpadMultiply или `*` при пустой строке; `Files → Invert selection Num *`.
-- **Поведение:** инвертирует файлы; папки включаются при `SelectFolders`, либо при Ctrl/⌘ или Alt; при Alt+Num* папки **снимаются** (`return false`), файлы инвертируются.
-- **Код:** `selection_keys.go`.
+#### Num * — invert
+- **Invocation:** NumpadMultiply or `*` on an empty line; `Files → Invert selection Num *`.
+- **Behavior:** inverts files; folders are included when `SelectFolders`, or with Ctrl/⌘ or Alt; with Alt+Num* folders are **unmarked** (`return false`), files are inverted.
+- **Code:** `selection_keys.go`.
 
-#### Ctrl/⌘+Num +/− — по расширению; Alt+Num +/− — по базовому имени
-- **Поведение:** берётся текущая запись (если `..` — ничего); сравнивается `strings.ToLower(ext)` (cmd) или `lower(name без ext)` (Alt); совпавшие помечаются (+) / снимаются (−); папки при `SelectFolders`.
+#### Ctrl/⌘+Num +/− — by extension; Alt+Num +/− — by base name
+- **Behavior:** the current entry is taken (if `..` — nothing); `strings.ToLower(ext)` (cmd) or `lower(name without ext)` (Alt) is compared; matching entries are marked (+) / unmarked (−); folders when `SelectFolders`.
 
-#### Shift+Num +/− — все файлы
-- Только с Numpad-кодами: пометить/снять все (папки при `SelectFolders`).
+#### Shift+Num +/− — all files
+- Only with Numpad codes: mark/unmark all (folders when `SelectFolders`).
 
 #### Ctrl/⌘+M — Restore selection
-- Меняет местами `Marked` и `RestoreMarked` (повторное нажатие возвращает обратно). Также `Files → Restore selection ⌘M`.
-- **Код:** `panel_options.go: selectGroup("Restore")`.
-
+- Swaps `Marked` and `RestoreMarked` (pressing again swaps back). Also `Files → Restore selection ⌘M`.
+- **Code:** `panel_options.go: selectGroup("Restore")`.
 #### Compare folders
-- `Commands → Compare folders`: в обеих панелях (пометки сохраняются в `RestoreMarked`) помечаются файлы, которых нет напротив, отличающиеся размером или более новые. Статус: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
-- **Код:** `commands.go: compareFolders`.
+- `Commands → Compare folders`: in both panels (marks are saved to `RestoreMarked`) files that are missing on the opposite side, differ in size, or are newer are marked. Status: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
+- **Code:** `commands.go: compareFolders`.
 
-#### Копирование имён в буфер (Ctrl+Insert и др.)
-- **Вызов:** Ctrl/⌘+Insert; Alt+Shift+Insert; Ctrl+Alt+Shift+Insert. Также ⌘C при пустой командной строке (`copyPanelCommand`).
-- **Поведение:** если командная строка непуста и нет Shift/Alt — копируется командная строка. Иначе: имена выбранных (`Selected()`: помеченные, либо текущий, если он не `..`) через `\n`; с Alt — полные пути; с Alt+Ctrl — пути с разрешёнными симлинками (`EvalSymlinks`, ошибка → статус) или `Remote.Label()+path` для remote. Если ничего нет — путь панели.
-- **Код:** `far_keys.go`, `mouse.go: copyPanelCommand`.
+#### Copying names to the clipboard (Ctrl+Insert and others)
+- **Invocation:** Ctrl/⌘+Insert; Alt+Shift+Insert; Ctrl+Alt+Shift+Insert. Also ⌘C on an empty command line (`copyPanelCommand`).
+- **Behavior:** if the command line is non-empty and there is no Shift/Alt — the command line is copied. Otherwise: the names of the selected entries (`Selected()`: marked ones, or the current one if it is not `..`) separated by `\n`; with Alt — full paths; with Alt+Ctrl — paths with symlinks resolved (`EvalSymlinks`, error → status) or `Remote.Label()+path` for remote. If there is nothing — the panel path.
+- **Code:** `far_keys.go`, `mouse.go: copyPanelCommand`.
 
 ---
 
-## 6. Сортировка
+## 6. Sorting
 
-#### Ctrl/⌘+F3…F11 — режим сортировки
-- F3 `Name`, F4 `Extension`, F5 `Modified`, F6 `Size`, F7 `Unsorted`, F8 `Created`, F9 `Accessed`, F10 `Description`, F11 `Owner`. Повторное нажатие того же режима переключает `Reverse`; новый режим сбрасывает `Reverse = false`. Затем `Load(Path)`.
-- Для remote режимы `Created`, `Accessed`, `Owner`, `Description` → `This sort mode requires local file metadata`.
-- Примечание: ⌘+Shift+F3/F4 перехватываются раньше (принудительный внутренний просмотр/редактор), ⌘+Alt+F3 — подсчёт размеров.
-- **Код:** `far_keys.go`.
+#### Ctrl/⌘+F3…F11 — sort mode
+- F3 `Name`, F4 `Extension`, F5 `Modified`, F6 `Size`, F7 `Unsorted`, F8 `Created`, F9 `Accessed`, F10 `Description`, F11 `Owner`. Pressing the same mode again toggles `Reverse`; a new mode resets `Reverse = false`. Then `Load(Path)`.
+- For remote, the modes `Created`, `Accessed`, `Owner`, `Description` → `This sort mode requires local file metadata`.
+- Note: ⌘+Shift+F3/F4 are intercepted earlier (forced internal viewer/editor), ⌘+Alt+F3 — folder size calculation.
+- **Code:** `far_keys.go`.
 
-#### Ctrl/⌘+F12 — меню сортировки
-- **Диалог:** список `Sort mode`: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`. Пункты 4–7 — переключатели; пункт `Directories first` переименован в `Mix directories and files` (переключает `MixDirectories`). Текущий режим и включённые переключатели отмечены `✓ `. Для remote-панели режимы, требующие локальных метаданных, отклоняются (`This sort mode requires local file metadata`). Также `Left/Right → Sort modes…`.
-- В активной Info panel Ctrl+F12 открывает `Info panel settings`.
-- **Код:** `panel_options.go: sortMenu`.
+#### Ctrl/⌘+F12 — sort menu
+- **Dialog:** the list `Sort mode`: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`. Items 4–7 are toggles; the item `Directories first` has been renamed to `Mix directories and files` (toggles `MixDirectories`). The current mode and the enabled toggles are marked with `✓ `. For a remote panel, modes requiring local metadata are rejected (`This sort mode requires local file metadata`). Also `Left/Right → Sort modes…`.
+- In an active Info panel Ctrl+F12 opens `Info panel settings`.
+- **Code:** `panel_options.go: sortMenu`.
 
 #### Shift+F12 — Selected first; Shift+F11 — Sort groups on/off
-- Shift+F12 переключает `SelectedFirst`, Shift+F11 — `DisableSortGroups`; оба перечитывают панель.
+- Shift+F12 toggles `SelectedFirst`, Shift+F11 — `DisableSortGroups`; both re-read the panel.
 
-#### Правила сравнения (`sortEntries`)
-1. `..` всегда первым.
-2. Папки перед файлами, если `!MixDirectories`.
-3. `SelectedFirst`: помеченные раньше.
-4. Группы сортировки (`Settings.SortGroups`, маски через `;` в порядке приоритета; `Options → Advanced → Sort groups`, подсказка `Masks in priority order, separated by semicolons`; `Commands → Edit sort groups…`): при `!DisableSortGroups` и режиме ≠ `Unsorted` индекс первой совпавшей маски (несовпавшие — 10000).
-5. `Unsorted` — порядок чтения каталога (стабильная сортировка).
-6. Ключ режима: `Created`/`Accessed` (Birthtime/Atime sec+nsec), `Owner` (UID), `Description` (строка описания), `Extension` (lower ext), `Size` (`entrySize`: для папок — подсчитанный размер или 0), `Modified` (ModTime).
-7. Равенство → имя (регистронезависимо, если `!CaseSensitive`).
-8. `Reverse` инвертирует результат шагов 6–7 (не влияет на `..`, папки/файлы, selected first, группы).
-- **Код:** `panel_options.go: sortEntries`, `sort_stat.go: compareStat`, `folder_sizes.go: entrySize`.
+#### Comparison rules (`sortEntries`)
+1. `..` is always first.
+2. Folders before files if `!MixDirectories`.
+3. `SelectedFirst`: marked entries come earlier.
+4. Sort groups (`Settings.SortGroups`, masks separated by `;` in priority order; `Options → Advanced → Sort groups`, hint `Masks in priority order, separated by semicolons`; `Commands → Edit sort groups…`): when `!DisableSortGroups` and the mode ≠ `Unsorted`, the index of the first matching mask (non-matching — 10000).
+5. `Unsorted` — directory read order (stable sort).
+6. The mode key: `Created`/`Accessed` (Birthtime/Atime sec+nsec), `Owner` (UID), `Description` (the description string), `Extension` (lower ext), `Size` (`entrySize`: for folders — the calculated size or 0), `Modified` (ModTime).
+7. Ties → name (case-insensitive if `!CaseSensitive`).
+8. `Reverse` inverts the result of steps 6–7 (does not affect `..`, folders/files, selected first, groups).
+- **Code:** `panel_options.go: sortEntries`, `sort_stat.go: compareStat`, `folder_sizes.go: entrySize`.
 
 ---
 
-## 7. Фильтры, маски, группы масок, скрытые файлы
+## 7. Filters, masks, mask groups, hidden files
 
 #### File panel filter
-- **Вызов:** `Commands → File panel filter…` (активная панель).
-- **Диалог:** `File panel filter`, текст `Include masks | exclude masks; empty shows all`, значение — текущий фильтр.
-- **Поведение:** `validateMasks`; `Filter` применяется только к файлам (папки видны всегда) при каждой загрузке — локальной, удалённой, архивной; в футере панели показывается `[<filter>]`. Фильтр сохраняется в setup (`panelOptions`).
-- **Код:** `panel_options.go: filterPanel, matchesMask`.
+- **Invocation:** `Commands → File panel filter…` (active panel).
+- **Dialog:** `File panel filter`, text `Include masks | exclude masks; empty shows all`, value — the current filter.
+- **Behavior:** `validateMasks`; `Filter` applies only to files (folders are always visible) on every load — local, remote, archive; the panel footer shows `[<filter>]`. The filter is saved in the setup (`panelOptions`).
+- **Code:** `panel_options.go: filterPanel, matchesMask`.
 
 #### Groups of file masks
-- **Вызов:** `Options → Advanced → Groups of file masks`.
-- **Диалог:** список `Add group…` + `name = masks`; форма `Mask group`: `Name`, `Masks (empty deletes)`. Ошибки: `Invalid group name` (пусто или содержит `<>,;|`), `Use literal masks in groups` (вложенные `<>`), ошибки масок.
-- По умолчанию: `arc` = `*.zip,*.tar,*.gz,*.bz2,*.xz,*.tgz,*.tbz,*.tbz2,*.txz,*.7z,*.rar,*.jar,*.war,*.cpio`, `source` = `*.go,*.c,*.h,*.js,*.ts,*.py`, `exec` = `*.sh,*.command`. Используются в фильтре, выделении, sort groups, ассоциациях и подсветке (`<arc>`).
-- **Код:** `settings.go`, `panel_options.go: expandMasks`.
+- **Invocation:** `Options → Advanced → Groups of file masks`.
+- **Dialog:** the list `Add group…` + `name = masks`; the form `Mask group`: `Name`, `Masks (empty deletes)`. Errors: `Invalid group name` (empty or contains `<>,;|`), `Use literal masks in groups` (nested `<>`), mask errors.
+- Defaults: `arc` = `*.zip,*.tar,*.gz,*.bz2,*.xz,*.tgz,*.tbz,*.tbz2,*.txz,*.7z,*.rar,*.jar,*.war,*.cpio`, `source` = `*.go,*.c,*.h,*.js,*.ts,*.py`, `exec` = `*.sh,*.command`. Used in the filter, selection, sort groups, associations and highlighting (`<arc>`).
+- **Code:** `settings.go`, `panel_options.go: expandMasks`.
 
-#### Скрытые файлы
-- **Вызов:** ⌘Shift+. (нативно перехватывается, keyCode 47), Ctrl+H; `Options → Panel settings → Show hidden files (Cmd+Shift+.)`.
-- **Поведение:** переключает `Settings.ShowHidden` (по умолчанию true), сбрасывает `ForcedVisiblePath`, `configurePanel` + `refresh()` обеих панелей; курсор остаётся на том же имени. Скрытыми считаются имена с `.` и файлы с флагом `UF_HIDDEN` (для локальных; в архивах и remote — только по точке). Настройка сохраняется в setup (это не «display only» состояние).
-- **Код:** `app.go: key`, `far_keys.go`, `hidden_darwin.go`, `settings.go`.
+#### Hidden files
+- **Invocation:** ⌘Shift+. (intercepted natively, keyCode 47), Ctrl+H; `Options → Panel settings → Show hidden files (Cmd+Shift+.)`.
+- **Behavior:** toggles `Settings.ShowHidden` (default true), resets `ForcedVisiblePath`, `configurePanel` + `refresh()` of both panels; the cursor stays on the same name. Hidden entries are names starting with `.` and files with the `UF_HIDDEN` flag (for local; in archives and remote — by the dot only). The setting is saved in the setup (it is not a "display only" state).
+- **Code:** `app.go: key`, `far_keys.go`, `hidden_darwin.go`, `settings.go`.
 
 #### .DS_Store
-- `Options → Panel settings → Hide and ignore .DS_Store` (`Settings.IgnoreDSStore`, по умолчанию false): `.DS_Store` скрывается в панелях, дереве, превью папок, а также исключается при подсчёте размеров (`sizeKey` включает флаг, поэтому кеш размеров раздельный) и в операциях (`o.IgnoreDSStore`).
-- **Код:** `app.go: Load`, `tree.go`, `folder_size_cache.go`.
+- `Options → Panel settings → Hide and ignore .DS_Store` (`Settings.IgnoreDSStore`, default false): `.DS_Store` is hidden in the panels, the tree, folder previews, and is also excluded from size calculation (`sizeKey` includes the flag, so the size cache is separate) and from operations (`o.IgnoreDSStore`).
+- **Code:** `app.go: Load`, `tree.go`, `folder_size_cache.go`.
 
-#### Panel settings (полный список)
-- Форма `Panel settings`: `Show hidden files (Cmd+Shift+.)`, `Highlight files`, `Human-readable sizes (off = bytes)`, `Hide and ignore .DS_Store`, `Select folders with file masks`. Применение → `refresh()`.
-
----
-
-## 8. Подсчёт размеров папок
-
-#### F3 на папке — размеры помеченных/текущей
-- **Вызов:** F3 / ⌘3 / Numpad5, когда под курсором папка; `Files → View / folder size F3`.
-- **Где доступно:** локальные, удалённые (1 воркер) и архивные панели; не при `Busy`.
-- **Поведение (`calculateFolderSizes(false)`):** список = помеченные папки; если нет — папка под курсором; на `..` без пометок считается **текущая** папка, результат показывается в строке `..` вместо `<DIR>`. Фоновая задача с прогрессом `Calculating folder sizes` (`ScanProgress` каждые 64 записи), до 4 воркеров (`min(4, n)`), для remote — 1. Обход: локально `fsops.WalkDir`, архив — по индексу, remote — рекурсивно (глубина ≤ 128: `remote directory depth exceeds 128`; ≤ 100000 записей в папке: `remote folder exceeds 100000 entries`; небезопасное имя: `server returned an unsafe filename`). Для каждой папки считаются `Bytes`, `Files`, `Dirs`, `Unreadable` (ошибки обхода/Info).
-- Применение результата только если панель всё ещё на том же пути/источнике: результаты сливаются в `folderSizes`, панель пересортировывается (курсор/верх по именам сохраняются), статус `Calculated %d folders`, при нечитаемых `; %d unreadable entries (>= means partial size)`, при остановке ` · <ошибка>`. Отмена (Esc) сохраняет уже завершённые папки (`applyCompleted = true`).
-- Отображение: в колонке размера вместо `<DIR>` — число; `>=` перед частичным (есть `Unreadable`), `~` перед устаревшим (кеш). Подсчитанные размеры участвуют в сортировке `Size`. Пометки не меняются.
-- **Код:** `folder_sizes.go`, `launch.go: openConfigured`.
-
-#### ⌘Option+F3 (Ctrl+Alt+F3) — все папки
-- `calculateFolderSizes(true)`: все папки панели (кроме `..`), независимо от пометок. `Files → Calculate all folder sizes ⌘⌥F3`.
-
-#### Кеш размеров
-- При каждом `beginLoad` (`loadFolderSizes`): ключ `{Path, Source, IgnoreDSStore}` (`Source` = `local`, `Remote.Label()` или `archive:<generation>:<path>` — переоткрытый архив получает новое поколение и кеш не переиспользуется). При смене ключа текущая карта сохраняется в историю снапшотов (если ≤ 16384 записей и ≤ 2 MiB оценки), а для нового ключа восстанавливается сохранённая карта; все восстановленные значения помечаются `Stale` (`~`). Лимиты истории: 128 каталогов, 16384 записей суммарно, 2 MiB суммарно; вытесняются самые старые. Повторная загрузка того же пути (Re-read) также помечает значения `~`. После установки списка `pruneFolderSizes` удаляет размеры для исчезнувших папок. Ничего не сохраняется на диск.
-- **Код:** `folder_size_cache.go`.
+#### Panel settings (full list)
+- The form `Panel settings`: `Show hidden files (Cmd+Shift+.)`, `Highlight files`, `Human-readable sizes (off = bytes)`, `Hide and ignore .DS_Store`, `Select folders with file masks`. Applying → `refresh()`.
 
 ---
 
-## 9. Закладки окна (bookmarks)
+## 8. Folder size calculation
 
-Десять слотов 0–9 на экземпляр окна: закладка папки (панель) или документа (просмотрщик/редактор). Не сохраняются, другим окнам не видны; при ⌘N новое окно начинает с пустыми слотами. Поля `Settings.Shortcuts/ShortcutRemotes/ShortcutArchives` остались только для чтения старых `setup.json` и не используются.
+#### F3 on a folder — sizes of the marked/current folders
+- **Invocation:** F3 / ⌘3 / Numpad5 when a folder is under the cursor; `Files → View / folder size F3`.
+- **Where available:** local, remote (1 worker) and archive panels; not when `Busy`.
+- **Behavior (`calculateFolderSizes(false)`):** the list = the marked folders; if none — the folder under the cursor; on `..` without marks the **current** folder is calculated and the result is shown in the `..` row instead of `<DIR>`. A background task with the progress `Calculating folder sizes` (`ScanProgress` every 64 entries), up to 4 workers (`min(4, n)`), for remote — 1. Traversal: locally `fsops.WalkDir`, archive — by the index, remote — recursively (depth ≤ 128: `remote directory depth exceeds 128`; ≤ 100000 entries per folder: `remote folder exceeds 100000 entries`; an unsafe name: `server returned an unsafe filename`). For each folder `Bytes`, `Files`, `Dirs`, `Unreadable` (traversal/Info errors) are counted.
+- The result is applied only if the panel is still on the same path/source: the results are merged into `folderSizes`, the panel is re-sorted (cursor/top are preserved by names), status `Calculated %d folders`, with unreadable entries `; %d unreadable entries (>= means partial size)`, when stopped ` · <error>`. Cancellation (Esc) keeps the folders already completed (`applyCompleted = true`).
+- Display: in the size column a number replaces `<DIR>`; `>=` before a partial one (has `Unreadable`), `~` before a stale one (cache). Calculated sizes take part in `Size` sorting. Marks are not changed.
+- **Code:** `folder_sizes.go`, `launch.go: openConfigured`.
 
-#### ⌘⌥0…9 — сохранить папку
-- **Вызов:** ⌘⌥ + цифра (те же клавиши, что в просмотрщике/редакторе), не Numpad; цифра берётся из кода `DigitN`, раскладка и Option не мешают. Варианты с Shift и Ctrl не действуют (macOS забирает ⌘⇧3/4/5 под скриншоты и Ctrl+цифра под рабочие столы). ⌘1…9 больше не дублируют F1…F9. `Commands → Bookmarks… → Save current folder…` → диалог `Save bookmark`, `Slot 0–9`, значение `1`, ошибка `Choose 0–9`.
-- **Поведение:** `Bookmarks[n] = {Kind: folder, Path, Cursor: имя файла под курсором (не `..`)}`; для remote — копия конфигурации без пароля/пассфразы/host key с `Directory = Path`; для архива — `Archive = Archive.Path`. Статус `Bookmark %d saved: <path/file>`.
-- **Код:** `bookmarks.go: bookmarkKey, panelBookmarkKey, saveFolderBookmark`.
+#### ⌘Option+F3 (Ctrl+Alt+F3) — all folders
+- `calculateFolderSizes(true)`: all folders of the panel (except `..`), regardless of marks. `Files → Calculate all folder sizes ⌘⌥F3`.
 
-#### ⌘0…9 — перейти
-- **Поведение:** пустой слот → `Bookmark %d is empty`. Закладка документа → см. раздел «Cmd+0..9 / Cmd+Option+0..9 — закладки» (открывает просмотрщик/редактор). Закладка папки: из документа сначала показываются панели (экраны документов остаются открытыми). Remote: если какая-то панель уже подключена к тому же серверу — переподключение активной панели в сохранённый каталог, иначе диалог соединения с заполненными полями. Архивная → `openArchiveAt(archive, path, cursor)`. Локальная: проверка `os.Stat` (ошибка → статус), не папка → `Bookmark is not a directory`; затем отмена загрузок, `Remote = nil`, `Archive = nil`, `loadSource(path)`. После загрузки курсор ставится на запомненный файл (`placeCursor`; для асинхронной загрузки через `pendingPosition`); если файла нет — курсор как обычно. Запомненные позиции курсора и пометки (`states`) сохраняются.
-- Меню `Bookmarks`: `Save current folder…`, затем `0  <label>` … `9  <label>`: папка — `<путь>/<файл>` (для remote с префиксом `Label()`), документ — `Edit|View <путь>:<строка>`, справка — `Help`.
-- **Код:** `bookmarks.go: goBookmark, goFolderBookmark, bookmarksMenu`.
-
----
-
-## 10. Fast find (быстрый поиск по префиксу)
-
-#### Alt+символ — начать поиск
-- **Вызов:** Option+печатный символ (Cocoa переводит символ по текущей раскладке без Option-трансформации, `panel_keys_darwin.h`; Numpad `*`, `+`, `-` сохраняют коды). Также вставка текста (⌘V) при открытом окне поиска.
-- **Поведение (`fastFindText`):** символы добавляются по одному; для каждого префикса ищется первое совпадение `filepath.Match(lower(query)+"*", lower(name))` от текущего курсора вперёд по кругу (кроме `..`); если префикс не найден и запрос уже не пуст — ввод останавливается на первом несовпавшем символе (первый символ принимается всегда). Управляющие символы завершают ввод. Запрос может содержать `*` и `?` (подстановочные знаки); `[` и `\` трактуются буквально; сравнение с NFC-нормализацией.
-- Окно: рамка Black на Gray, 3 строки, ширина `min(40, W−4)`, у нижнего края (`y = H−7`), слева для левой панели и справа для правой; заголовок ` Find `, поле Black на Cyan с хвостом запроса и `▌`.
-- Клавиши при открытом поиске: печатные без Ctrl/⌘ — добавить; Backspace — удалить символ и повторить поиск; ↓/↑ или ⌘Enter/Ctrl+Enter / ⌘Shift+Enter — следующее/предыдущее совпадение по кругу; Enter — закрыть и `enterFile()`; Esc — закрыть (позиция сохраняется); любая другая клавиша закрывает поиск и обрабатывается обычным образом. Клик мышью, Delete, Shift+Enter, ⌘Shift+., Num+/−/*, закладки также закрывают поиск.
-- Приоритет: печатные Alt-символы и уже открытый поиск обрабатываются раньше клавиш выделения, кроме явных Numpad-кодов.
-- **Код:** `fastfind.go`, `app.go: key, Handle("paste")`, `internal/native/panel_keys_darwin.h`.
+#### Size cache
+- On every `beginLoad` (`loadFolderSizes`): key `{Path, Source, IgnoreDSStore}` (`Source` = `local`, `Remote.Label()` or `archive:<generation>:<path>` — a re-opened archive gets a new generation and the cache is not reused). When the key changes, the current map is saved to the snapshot history (if ≤ 16384 entries and ≤ 2 MiB estimated), and for the new key the saved map is restored; all restored values are marked `Stale` (`~`). History limits: 128 directories, 16384 entries in total, 2 MiB in total; the oldest are evicted. Re-loading the same path (Re-read) also marks the values `~`. After the list is installed, `pruneFolderSizes` removes sizes for folders that have disappeared. Nothing is saved to disk.
+- **Code:** `folder_size_cache.go`.
 
 ---
 
-## 11. Архивы в панели
+## 9. Window bookmarks
 
-#### Enter на архиве — открыть архив как папку
-- **Поведение (`openArchive`):** фоновая задача `Opening archive` читает индекс (`fsops.ReadArchiveIndex`); затем `Remote = nil`, `Archive = catalog`, режим Tree/Info/Quick view заменяется на `Full`, `Load(target)` (если целевой путь не каталог архива — корень). Если панель уже показывает этот же архив, сохраняется текущий подкаталог (используется Re-read).
-- Внутри: заголовок `[Archive] <path>`; записи — члены каталога (`Children[rel]`), с учётом `.DS_Store`/скрытых (по точке)/фильтра; `TotalBytes` — сумма размеров членов, `ItemCount`; `InfoText` = `Archive (read-only)\nF5 extracts selected files/folders\n.. exits the archive`; ошибки `outside archive`, `not an archive directory`.
-- Enter в архиве (`enterArchiveMember`): папка → `Load`; вложенный архив → `Copy the nested archive out with F5 to open it`; файл → `viewArchiveMember` (извлечение во временный каталог `farshmac-archive-view-*`, задача `Opening archive member`, документ read-only; симлинк → `Use F5 to copy the archive link`).
-- `..` в корне архива или Ctrl+PgUp → путь вне архива → обычная локальная загрузка (курсор на файле архива).
-- F4/F6/F7/F8 → `Archive is read-only. Use F5 to copy files out.`; Shift+Enter на члене → `Use F5 to copy this archive item out before opening it with macOS`.
-- `filesystemPath()` для архива — папка, содержащая архив (используется терминалом и командной строкой).
-- Закладки и matchOtherPanel переносят `Archive`.
-- **Код:** `archive_panel.go`, `launch.go: enterFile`, `fsops/formats.go`.
+Ten slots 0–9 per window instance: a folder bookmark (panel) or a document bookmark (viewer/editor). They are not saved and are not visible to other windows; on ⌘N the new window starts with empty slots. The fields `Settings.Shortcuts/ShortcutRemotes/ShortcutArchives` remain only for reading old `setup.json` files and are not used.
 
----
+#### ⌘⌥0…9 — save the folder
+- **Invocation:** ⌘⌥ + digit (the same keys as in the viewer/editor), not Numpad; the digit is taken from the `DigitN` code, the layout and Option do not interfere. Shift and Ctrl variants have no effect (macOS takes ⌘⇧3/4/5 for screenshots and Ctrl+digit for desktops). ⌘1…9 no longer duplicate F1…F9. `Commands → Bookmarks… → Save current folder…` → the dialog `Save bookmark`, `Slot 0–9`, value `1`, error `Choose 0–9`.
+- **Behavior:** `Bookmarks[n] = {Kind: folder, Path, Cursor: name of the file under the cursor (not `..`)}`; for remote — a copy of the configuration without password/passphrase/host key with `Directory = Path`; for an archive — `Archive = Archive.Path`. Status `Bookmark %d saved: <path/file>`.
+- **Code:** `bookmarks.go: bookmarkKey, panelBookmarkKey, saveFolderBookmark`.
 
-## 12. Вставка имён/путей в командную строку
-
-#### ⌘Enter / Ctrl+J — имя текущего файла
-- **Поведение (`insertFilename`):** имя записи под курсором (включая `..`); если содержит управляющие символы → `Cannot insert a filename containing control characters`; имя с ведущим `-` получает префикс `./`; если есть символы вне `[A-Za-z0-9_./-]` — `terminal.Quote`; перед вставкой добавляется пробел, если строка не оканчивается пробелом/табом; после имени — пробел. Команда не выполняется. Также `Commands → Insert filename ⌘Enter`. При открытом fast find ⌘Enter — следующее совпадение.
-- **Код:** `app.go: insertFilename`.
-
-#### Ctrl/⌘+F — полный путь текущего файла; Ctrl/⌘+; — текущего файла другой панели
-- `appendPanelValue(p.Current())` / другой панели: всегда `terminal.Quote(value)` + пробел; пустое значение игнорируется; управляющие символы → `Cannot insert a path containing control characters`.
-
-#### Ctrl/⌘+Shift+Enter — имя текущего файла другой панели
-- `appendPanelValue(other.Entries[other.Cursor].Name)` (только имя, в кавычках при необходимости).
-
-#### Ctrl/⌘+[ и Ctrl/⌘+] — путь левой / правой панели; с Shift — активной / неактивной
-- Коды `BracketLeft`/`BracketRight` или символы `[ ] { }`. Примечание: ⌘Shift+[ / ] перехватываются раньше как переключение экранов (`cycleScreen`), поэтому Shift-варианты реально доступны только с Ctrl.
-- **Код:** `far_keys.go: farPanelKey, appendPanelValue`.
-
-#### ⌘Space — автодополнение
-- `Settings.CompleteFiles` (по умолчанию true, `Terminal settings`/`AutoComplete settings`). Дополняет последнее слово командной строки относительно пути активной панели; кавычки/`$`/`\` в слове → `Completion: use an unquoted path prefix`; одно совпадение вставляется (в кавычках при необходимости, папки с `/`), несколько — список `Complete filename`; нет → `No matching paths`. Регистр по `CompleteIgnoreCase`.
-- **Код:** `completion.go`.
-
-#### Shift+Insert — вставка из буфера
-- Обрабатывается рендерером (`pasteRequest`) → `paste` → командная строка/диалог/поиск. Особенность архитектуры: системный pasteboard доступен только рендереру, поэтому в Go нет обработки Shift+Insert; headless-тесты используют сообщение `paste`.
+#### ⌘0…9 — go to
+- **Behavior:** empty slot → `Bookmark %d is empty`. A document bookmark → see the section "Cmd+0..9 / Cmd+Option+0..9 — bookmarks" (opens the viewer/editor). A folder bookmark: from a document the panels are shown first (the document screens stay open). Remote: if some panel is already connected to the same server — the active panel is reconnected to the saved directory, otherwise the connection dialog with pre-filled fields. Archive → `openArchiveAt(archive, path, cursor)`. Local: an `os.Stat` check (error → status), not a folder → `Bookmark is not a directory`; then loads are cancelled, `Remote = nil`, `Archive = nil`, `loadSource(path)`. After loading the cursor is placed on the remembered file (`placeCursor`; for an asynchronous load via `pendingPosition`); if the file is missing — the cursor as usual. The remembered cursor positions and marks (`states`) are preserved.
+- The `Bookmarks` menu: `Save current folder…`, then `0  <label>` … `9  <label>`: folder — `<path>/<file>` (for remote with the `Label()` prefix), document — `Edit|View <path>:<line>`, help — `Help`.
+- **Code:** `bookmarks.go: goBookmark, goFolderBookmark, bookmarksMenu`.
 
 ---
 
-## 13. Мышь
+## 10. Fast find (quick prefix search)
 
-#### Попадание (`panelAt`, `panelItem`)
-- Панель определяется по `panelRect`: `1 ≤ y < Rows−4`, `px < x < px+w−1`, панель не скрыта. Строка файла: `3 ≤ y < Rows−6`; колонка `min(columns−1, (x−px−1)/((w−2)/columns))`; индекс `Offset + column×(Rows−9) + (y−3)`; клики по заголовку, рамке, футеру, за пределами списка игнорируются (курсор не меняется). Quick view и Info panel не имеют элементов (Info обрабатывается отдельно).
-- **Код:** `mouse.go`.
-
-#### Клик левой кнопкой
-- Активирует панель, ставит курсор на элемент, запоминает якорь (`mouseAnchors[panel]`, сбрасывается при смене пути), начинает drag-сессию. Пометки не меняются.
-- **Shift+клик:** помечает диапазон от якоря до элемента (добавляет к существующим).
-- **⌘+клик или правая кнопка / Control+клик (рендерер шлёт `Button: 2`):** инвертирует пометку элемента и ставит курсор; якорь = элемент.
-- **Двойной клик левой (без Shift/⌘):** завершает drag и посылает Enter (`enterFile`).
-- Клик, когда открыты меню/диалог/форма/документ/Busy с кнопкой ≠ 0 — игнорируется; при `Busy` левый клик по кнопке `Cancel` прогресса — отмена. Любой клик закрывает fast find.
-- **Код:** `mouse.go: panelMouse`, `app.go: click`.
-
-#### Drag (перетаскивание с зажатой кнопкой)
-- Левая: пометки сбрасываются к состоянию на момент нажатия (`base`) и помечается диапазон якорь…текущий; курсор следует. Правая/Control: диапазон от последнего элемента до текущего получает значение первого клика (пометить или снять). Выход за верх/низ списка прокручивает `Offset` на 1 за событие; x ограничивается панелью. Drag прекращается при смене пути панели или `mouseUp`.
-- **Код:** `mouse.go: dragMouse`.
-
-#### Колесо / scroll
-- `wheel` (`Delta`) и `scroll` (`Y×3`), ограничение ±12 за событие. Над файловой панелью: `Offset` смещается в пределах `[0, len−capacity]`, курсор клампится в видимую область. Над Info panel — `InfoOffset`. Над Quick view — ничего. Панель определяется позицией указателя (не активная). При диалоге/Busy — игнорируется; в меню/форме — перемещение выбора.
-- **Код:** `mouse.go: scrollMouse`.
-
-#### Клик по строке меню / key bar / командной строке
-- y=0 левой: открывает секцию меню под курсором (при открытом меню клик вне его закрывает меню; внутри — выполняет пункт).
-- y=Rows−1 левой: функциональная клавиша по позиции (только при видимом key bar).
-- Клик по статусной/командной строке (y = Rows−3, Rows−2) ничего не делает.
+#### Alt+character — start the search
+- **Invocation:** Option+printable character (Cocoa translates the character by the current layout without the Option transformation, `panel_keys_darwin.h`; Numpad `*`, `+`, `-` keep their codes). Also pasting text (⌘V) while the search window is open.
+- **Behavior (`fastFindText`):** characters are added one by one; for each prefix the first match of `filepath.Match(lower(query)+"*", lower(name))` is searched from the current cursor forward, wrapping around (except `..`); if the prefix is not found and the query is already non-empty — input stops at the first non-matching character (the first character is always accepted). Control characters end the input. The query may contain `*` and `?` (wildcards); `[` and `\` are treated literally; comparison uses NFC normalization.
+- Window: Black on Gray frame, 3 lines, width `min(40, W−4)`, at the bottom edge (`y = H−7`), on the left for the left panel and on the right for the right one; title ` Find `, the field Black on Cyan with the tail of the query and `▌`.
+- Keys while the search is open: printable without Ctrl/⌘ — add; Backspace — delete a character and repeat the search; ↓/↑ or ⌘Enter/Ctrl+Enter / ⌘Shift+Enter — next/previous match, wrapping around; Enter — close and `enterFile()`; Esc — close (the position is kept); any other key closes the search and is handled normally. A mouse click, Delete, Shift+Enter, ⌘Shift+., Num+/−/*, bookmarks also close the search.
+- Priority: printable Alt characters and an already open search are handled before the selection keys, except for explicit Numpad codes.
+- **Code:** `fastfind.go`, `app.go: key, Handle("paste")`, `internal/native/panel_keys_darwin.h`.
 
 ---
 
-## 14. Видимость панелей, ширина, зум
+## 11. Archives in the panel
 
-#### ⌘F1 / ⌘F2 (Ctrl+F1/F2) — скрыть/показать левую/правую; Ctrl/⌘+P — неактивную
-- **Поведение (`togglePanel`):** `Hidden` инвертируется; если скрывается активная и другая видима — активной становится другая. Меню `Left/Right → Panel on/off ⌘F1/⌘F2`. Скрытая область — серая заливка; Tab может вернуть фокус на скрытую панель. Toggle view (`toggleOtherView`, `setView`, `matchOtherPanel`) снимает `Hidden`.
-- **Код:** `archive_panel.go: togglePanel`, `far_keys.go`.
+#### Enter on an archive — open the archive as a folder
+- **Behavior (`openArchive`):** the background task `Opening archive` reads the index (`fsops.ReadArchiveIndex`); then `Remote = nil`, `Archive = catalog`, the Tree/Info/Quick view mode is replaced with `Full`, `Load(target)` (if the target path is not an archive directory — the root). If the panel already shows this same archive, the current subdirectory is kept (used by Re-read).
+- Inside: title `[Archive] <path>`; entries are the members of the directory (`Children[rel]`), honoring `.DS_Store`/hidden (by the dot)/the filter; `TotalBytes` — the sum of member sizes, `ItemCount`; `InfoText` = `Archive (read-only)\nF5 extracts selected files/folders\n.. exits the archive`; errors `outside archive`, `not an archive directory`.
+- Enter in an archive (`enterArchiveMember`): folder → `Load`; a nested archive → `Copy the nested archive out with F5 to open it`; file → `viewArchiveMember` (extraction to the temporary directory `farshmac-archive-view-*`, task `Opening archive member`, the document is read-only; symlink → `Use F5 to copy the archive link`).
+- `..` at the archive root or Ctrl+PgUp → a path outside the archive → a normal local load (the cursor on the archive file).
+- F4/F6/F7/F8 → `Archive is read-only. Use F5 to copy files out.`; Shift+Enter on a member → `Use F5 to copy this archive item out before opening it with macOS`.
+- `filesystemPath()` for an archive — the folder containing the archive (used by the terminal and the command line).
+- Bookmarks and matchOtherPanel carry `Archive` over.
+- **Code:** `archive_panel.go`, `launch.go: enterFile`, `fsops/formats.go`.
 
-#### Ctrl/⌘+← / → — ширина панелей; Ctrl/⌘+Num5 — сброс
-- Только при пустой командной строке и без Shift. `panelSplit` (0 = 50/50) меняется на ±2 в пределах `20..80` процентов ширины левой панели. Num5 с cmd — `panelSplit = 0`. Не сохраняется в setup.
-- **Код:** `far_keys.go`, `panel_draw.go: panelRect`.
+---
 
-#### Ctrl/⌘+O — панели ↔ терминал
-- Скрывает панели и показывает встроенный терминал (закрывает меню и fast find); при показе синхронизирует cwd shell с активной локальной панелью (когда shell у prompt). Возврат: при готовом shell активная панель перечитывается в cwd shell (`syncCwd`), иначе — отложено до prompt; затем `refresh()` обеих панелей. Футер терминала: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    ⌘.  Interrupt` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt`.
-- **Код:** `app.go: key, showTerminal, returnFromTerminal, syncCwd`.
+## 12. Inserting names/paths into the command line
+#### ⌘Enter / Ctrl+J — the current file's name
+- **Behavior (`insertFilename`):** the name of the entry under the cursor (including `..`); if it contains control characters → `Cannot insert a filename containing control characters`; a name with a leading `-` gets the prefix `./`; if there are characters outside `[A-Za-z0-9_./-]` — `terminal.Quote`; a space is added before the insertion if the line does not end with a space/tab; a space after the name. The command is not executed. Also `Commands → Insert filename ⌘Enter`. With fast find open, ⌘Enter — next match.
+- **Code:** `app.go: insertFilename`.
 
-#### Alt+F9 — зум окна
-- `Update.Zoom = true` → нативное `[window zoom:]` (развернуть/восстановить окно macOS). Масштаб шрифта: `Options → General settings → Font size (10–24)` (`Font size must be 10–24`); отдельных клавиш масштабирования в панелях нет.
-- **Код:** `far_keys.go`, `window_darwin.m`.
+#### Ctrl/⌘+F — the full path of the current file; Ctrl/⌘+; — the current file of the other panel
+- `appendPanelValue(p.Current())` / of the other panel: always `terminal.Quote(value)` + a space; an empty value is ignored; control characters → `Cannot insert a path containing control characters`.
+
+#### Ctrl/⌘+Shift+Enter — the name of the current file of the other panel
+- `appendPanelValue(other.Entries[other.Cursor].Name)` (name only, quoted when needed).
+
+#### Ctrl/⌘+[ and Ctrl/⌘+] — the path of the left / right panel; with Shift — active / inactive
+- Codes `BracketLeft`/`BracketRight` or the characters `[ ] { }`. Note: ⌘Shift+[ / ] are intercepted earlier as screen switching (`cycleScreen`), so the Shift variants are really only available with Ctrl.
+- **Code:** `far_keys.go: farPanelKey, appendPanelValue`.
+
+#### ⌘Space — autocompletion
+- `Settings.CompleteFiles` (default true, `Terminal settings`/`AutoComplete settings`). Completes the last word of the command line relative to the active panel's path; quotes/`$`/`\` in the word → `Completion: use an unquoted path prefix`; a single match is inserted (quoted when needed, folders with `/`), several — the list `Complete filename`; none → `No matching paths`. Case per `CompleteIgnoreCase`.
+- **Code:** `completion.go`.
+
+#### Shift+Insert — paste from the clipboard
+- Handled by the renderer (`pasteRequest`) → `paste` → command line/dialog/search. An architectural peculiarity: the system pasteboard is available only to the renderer, so there is no Shift+Insert handling in Go; headless tests use the `paste` message.
+
+---
+
+## 13. Mouse
+
+#### Hit testing (`panelAt`, `panelItem`)
+- The panel is determined by `panelRect`: `1 ≤ y < Rows−4`, `px < x < px+w−1`, the panel is not hidden. A file row: `3 ≤ y < Rows−6`; column `min(columns−1, (x−px−1)/((w−2)/columns))`; index `Offset + column×(Rows−9) + (y−3)`; clicks on the title, frame, footer, outside the list are ignored (the cursor does not change). Quick view and Info panel have no items (Info is handled separately).
+- **Code:** `mouse.go`.
+
+#### Left click
+- Activates the panel, places the cursor on the item, remembers the anchor (`mouseAnchors[panel]`, reset when the path changes), starts a drag session. Marks are not changed.
+- **Shift+click:** marks the range from the anchor to the item (adds to the existing ones).
+- **⌘+click or right button / Control+click (the renderer sends `Button: 2`):** inverts the item's mark and places the cursor; anchor = the item.
+- **Left double-click (without Shift/⌘):** ends the drag and sends Enter (`enterFile`).
+- A click while a menu/dialog/form/document is open or Busy with button ≠ 0 is ignored; when `Busy`, a left click on the progress `Cancel` button cancels. Any click closes fast find.
+- **Code:** `mouse.go: panelMouse`, `app.go: click`.
+
+#### Drag (with the button held)
+- Left: marks are reset to the state at the moment of the press (`base`) and the range anchor…current is marked; the cursor follows. Right/Control: the range from the last item to the current one receives the value of the first click (mark or unmark). Going past the top/bottom of the list scrolls `Offset` by 1 per event; x is limited to the panel. The drag stops when the panel path changes or on `mouseUp`.
+- **Code:** `mouse.go: dragMouse`.
+
+#### Wheel / scroll
+- `wheel` (`Delta`) and `scroll` (`Y×3`), limited to ±12 per event. Over a file panel: `Offset` is shifted within `[0, len−capacity]`, the cursor is clamped into the visible area. Over the Info panel — `InfoOffset`. Over Quick view — nothing. The panel is determined by the pointer position (not the active one). With a dialog/Busy — ignored; in a menu/form — moves the selection.
+- **Code:** `mouse.go: scrollMouse`.
+
+#### Click on the menu bar / key bar / command line
+- y=0 left: opens the menu section under the cursor (with a menu open, a click outside it closes the menu; inside — executes the item).
+- y=Rows−1 left: the function key by position (only when the key bar is visible).
+- A click on the status/command line (y = Rows−3, Rows−2) does nothing.
+
+---
+
+## 14. Panel visibility, width, zoom
+
+#### ⌘F1 / ⌘F2 (Ctrl+F1/F2) — hide/show the left/right panel; Ctrl/⌘+P — the inactive one
+- **Behavior (`togglePanel`):** `Hidden` is inverted; if the active panel is being hidden and the other is visible, the other becomes active. Menu `Left/Right → Panel on/off ⌘F1/⌘F2`. The hidden area is a gray fill; Tab can return focus to the hidden panel. Toggle view (`toggleOtherView`, `setView`, `matchOtherPanel`) clears `Hidden`.
+- **Code:** `archive_panel.go: togglePanel`, `far_keys.go`.
+
+#### Ctrl/⌘+← / → — panel widths; Ctrl/⌘+Num5 — reset
+- Only on an empty command line and without Shift. `panelSplit` (0 = 50/50) changes by ±2 within `20..80` percent of the left panel width. Num5 with cmd — `panelSplit = 0`. Not saved in the setup.
+- **Code:** `far_keys.go`, `panel_draw.go: panelRect`.
+
+#### Ctrl/⌘+O — panels ↔ terminal
+- Hides the panels and shows the built-in terminal (closes the menu and fast find); on showing, syncs the shell cwd with the active local panel (when the shell is at a prompt). Returning: with a ready shell the active panel is re-read in the shell cwd (`syncCwd`), otherwise deferred until the prompt; then `refresh()` of both panels. Terminal footer: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    ⌘.  Interrupt` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt`.
+- **Code:** `app.go: key, showTerminal, returnFromTerminal, syncCwd`.
+
+#### Alt+F9 — window zoom
+- `Update.Zoom = true` → native `[window zoom:]` (maximize/restore the macOS window). Font scale: `Options → General settings → Font size (10–24)` (`Font size must be 10–24`); there are no separate zoom keys in the panels.
+- **Code:** `far_keys.go`, `window_darwin.m`.
 
 #### ⌃⌘F — Full screen
-- `Commands → Full screen`: `Update.Fullscreen = true` (нативное переключение).
+- `Commands → Full screen`: `Update.Fullscreen = true` (native toggle).
 
 ---
 
-## 15. Прочее, относящееся к панелям
+## 15. Other panel-related features
 
 #### Ctrl/⌘+B — key bar on/off
-- Переключает `Settings.ShowKeys`.
+- Toggles `Settings.ShowKeys`.
 
-#### Shift+Enter — открыть в macOS
-- `openSystemSelected`: remote → `Copy remote files to a local panel before opening them with macOS`; член архива → сообщение выше; иначе `/usr/bin/open <path>` (папки — в Finder) в задаче `Opening <name>`.
-- **Код:** `launch.go`.
+#### Shift+Enter — open in macOS
+- `openSystemSelected`: remote → `Copy remote files to a local panel before opening them with macOS`; an archive member → the message above; otherwise `/usr/bin/open <path>` (folders — in Finder) in the task `Opening <name>`.
+- **Code:** `launch.go`.
 
-#### Описания файлов (descript.ion)
-- `Files → Describe files…`: диалог `Describe files`, `Description (empty removes it)`, значение — текущее описание первого выбранного; запись файла `Settings.DescriptionFile` (`Options → Advanced → File descriptions`, `Description file name`, ошибка `Enter a file name without a path`) атомарно; имена с пробелами в кавычках; ошибка `this filename cannot be stored in descript.ion`. Чтение: строки `name desc` или `"name with spaces" desc`, лимит строки 1 MiB. Не для remote/архива.
-- **Код:** `panel_options.go: readDescriptions, describeFiles`.
+#### File descriptions (descript.ion)
+- `Files → Describe files…`: the dialog `Describe files`, `Description (empty removes it)`, value — the current description of the first selected entry; the `Settings.DescriptionFile` file (`Options → Advanced → File descriptions`, `Description file name`, error `Enter a file name without a path`) is written atomically; names with spaces are quoted; error `this filename cannot be stored in descript.ion`. Reading: lines `name desc` or `"name with spaces" desc`, line limit 1 MiB. Not for remote/archive.
+- **Code:** `panel_options.go: readDescriptions, describeFiles`.
 
 #### Save setup (Shift+F9, Options → Save setup)
-- Сохраняет `Settings`, `panelOptions` обеих панелей (режим, сортировка, фильтр, флаги, Hidden), пути (`filesystemPath`), историю команд/папок/просмотра в `~/Library/Application Support/FarshMac/setup.json`; статус `Setup saved`. При `AutoSave` — при закрытии. Папки восстанавливаются через session.json (отдельно).
-- **Код:** `settings.go`.
+- Saves `Settings`, the `panelOptions` of both panels (mode, sort, filter, flags, Hidden), the paths (`filesystemPath`), the command/folder/view history to `~/Library/Application Support/FarshMac/setup.json`; status `Setup saved`. With `AutoSave` — on close. Folders are restored via session.json (separately).
+- **Code:** `settings.go`.
 
 #### Alt+F6 — Create link
-- Форма `Create link`: `Link name` (путь в другой панели + имя), `Symbolic link` (вкл.); `os.Symlink`/`os.Link`; `refresh()`. Не для remote/архива.
+- The form `Create link`: `Link name` (the other panel's path + name), `Symbolic link` (on); `os.Symlink`/`os.Link`; `refresh()`. Not for remote/archive.
 
-#### F1 — справка
-- Открывает документ `FarshMac — Help` с текстом `help` (см. расхождения ниже).
+#### F1 — help
+- Opens the document `FarshMac — Help` with the `help` text (see the discrepancies below).
 
 ---
 
-## Расхождения между справкой F1 / README / парити-документами и кодом
+## Discrepancies between the F1 help / README / parity documents and the code
 
-> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+> **Closed on the `backlog-fixes` branch:** the decisions for each item are in the "Discrepancy decisions" section of `docs/IMPLEMENTATION_BACKLOG.md`.
 
-1. **F1: `Cmd+R Refresh panels`** — код перечитывает только активную панель (`rereadPanel(a.Active)`); обе панели перечитываются лишь при `refresh()` (возврат из терминала, смена настроек). Меню `Left/Right → Re-read ⌘R` вызывает перечитывание конкретной панели независимо от активности.
-2. **F1: `Cmd+Shift+.  Show / hide hidden files (display only)`** — на деле переключается персистентная настройка `Settings.ShowHidden` (та же, что в `Panel settings`), и она сохраняется в setup.json; «display only» неверно. Ctrl+H делает то же, но в справке/README не упомянут.
-3. **F1: `Ctrl+Q`, `Ctrl+L / Ctrl+T`, `Ctrl+P / Ctrl+B`, `Ctrl+F3..F11`, `Ctrl+F12`, `Ctrl+F / Ctrl+;`, `Ctrl+PgUp/PgDn`, `Ctrl+Left/Right`, `Ctrl+Insert`, `Ctrl+E/X/Y`** — в коде большинство этих сочетаний принимают и ⌘ (`cmd = Ctrl || Meta`): Ctrl+T, Ctrl+P, Ctrl+B, Ctrl+F3..F12, Ctrl+F, Ctrl+;, Ctrl+PgUp/PgDn, Ctrl+←/→, Ctrl+Y, Ctrl+Insert работают и с ⌘. Исключения — только Ctrl: Ctrl+Q, Ctrl+L (⌘L = Change directory), Ctrl+H, Ctrl+E/X, Ctrl+1..9 / Ctrl+Shift+1..9. Справка это не отражает.
-4. **Не задокументированы в F1/README, но есть в коде:** Ctrl+J (вставить имя файла), Ctrl/⌘+Shift+Enter (имя файла другой панели), Ctrl+[ / Ctrl+] (путь левой/правой панели) и Ctrl+Shift+[ / ] (активной/неактивной), ⌘/Ctrl+Shift+S (human-readable sizes), Shift+F11 (sort groups on/off), Alt+F6 (создать ссылку), Alt+F9 (zoom окна), Alt+F7 (find file), Alt+F8 (command history), Alt+F10 (folder tree), Numpad5 = F3, Ctrl+Alt+Shift+Insert (пути с разрешёнными симлинками), Ctrl+U (swap), Ctrl+R, Ctrl+↑/↓ (история команд), Shift+F10 (последнее меню), Compare folders, Shift+клик/⌘+клик/правая кнопка/drag мышью.
-5. **F1: `Ctrl+Shift+1..9 Save folder shortcut (panels)` / `Ctrl+1..9`** — корректно, но переход по локальной закладке дополнительно **сбрасывает все запомненные позиции курсора панели** (`p.states = nil`), что нигде не описано.
-6. **F1: `Num * Invert files; Cmd/Ctrl+Num * includes folders`** — не упомянуто, что Alt+Num* инвертирует файлы и одновременно снимает пометки с папок.
-7. **Меню `Sort mode → Directories first`** — пункт переключает `MixDirectories` (т.е. при выборе папки *перестают* идти первыми, если флаг был выключен); индикаторов состояния у переключателей `Reverse order`, `Case sensitive`, `Directories first`, `Selected first` нет.
-8. **F1: `Ctrl+PgUp/PgDown Parent / enter folder or archive`** — `isArchiveName` для Ctrl+PgDn включает `.gz`, `.bz2`, `.xz` без `.tar`, которые `fsops.ArchiveFormat` не поддерживает: Ctrl+PgDn на таком файле вызывает `enterFile`, который откроет файл системным приложением, а не как архив.
-9. **BEHAVIOR_PARITY: «Esc retains the found position»** и **«Search does not replace the command line»** — соответствует коду. Но Paste в fast find описан как «until the first unmatched character» — код принимает первый символ всегда, даже без совпадения (`TestFastFindIncludesFirstLetterWithoutMatch`).
-10. **README: `F3 / F4 View / edit; F3 on a folder calculates selected folder sizes`** — верно; дополнительно F4 на папке открывает `File attributes` (не задокументировано в README/F1).
-11. **Легаси-режимы** `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` упомянуты в F1 (`File links view   Names, sizes and hard-link counts`), но недоступны ни из меню, ни из настроек: `configurePanel` принудительно переводит их в `Full` при старте/refresh. Режим `Medium` (2 колонки) есть в меню, но не упомянут в справке.
-12. **F1: `Tab Switch active panel`** — Tab переключает фокус и на скрытую (⌘F1/⌘F2) панель; в таком состоянии курсор и заголовок не видны.
-13. **Справка F1 и меню `Commands → Quick view on/off Ctrl+Q`** — Quick view через Ctrl+Q допускается для удалённой неактивной панели (показывает `Remote file: use F3 to download and view`), тогда как через меню Left/Right для remote запрещён (`Choose a file view for remote panels`); для членов архива Quick view показывает ошибку `stat`, т.к. виртуальный путь не существует (нигде не описано).
+1. **F1: `Cmd+R Refresh panels`** — the code re-reads only the active panel (`rereadPanel(a.Active)`); both panels are re-read only on `refresh()` (return from the terminal, settings change). The menu `Left/Right → Re-read ⌘R` re-reads the specific panel regardless of which is active.
+2. **F1: `Cmd+Shift+.  Show / hide hidden files (display only)`** — in fact the persistent setting `Settings.ShowHidden` is toggled (the same as in `Panel settings`), and it is saved to setup.json; "display only" is wrong. Ctrl+H does the same but is not mentioned in the help/README.
+3. **F1: `Ctrl+Q`, `Ctrl+L / Ctrl+T`, `Ctrl+P / Ctrl+B`, `Ctrl+F3..F11`, `Ctrl+F12`, `Ctrl+F / Ctrl+;`, `Ctrl+PgUp/PgDn`, `Ctrl+Left/Right`, `Ctrl+Insert`, `Ctrl+E/X/Y`** — in the code most of these combinations also accept ⌘ (`cmd = Ctrl || Meta`): Ctrl+T, Ctrl+P, Ctrl+B, Ctrl+F3..F12, Ctrl+F, Ctrl+;, Ctrl+PgUp/PgDn, Ctrl+←/→, Ctrl+Y, Ctrl+Insert also work with ⌘. Exceptions — Ctrl only: Ctrl+Q, Ctrl+L (⌘L = Change directory), Ctrl+H, Ctrl+E/X, Ctrl+1..9 / Ctrl+Shift+1..9. The help does not reflect this.
+4. **Not documented in F1/README but present in the code:** Ctrl+J (insert file name), Ctrl/⌘+Shift+Enter (the other panel's file name), Ctrl+[ / Ctrl+] (the left/right panel path) and Ctrl+Shift+[ / ] (active/inactive), ⌘/Ctrl+Shift+S (human-readable sizes), Shift+F11 (sort groups on/off), Alt+F6 (create link), Alt+F9 (window zoom), Alt+F7 (find file), Alt+F8 (command history), Alt+F10 (folder tree), Numpad5 = F3, Ctrl+Alt+Shift+Insert (paths with resolved symlinks), Ctrl+U (swap), Ctrl+R, Ctrl+↑/↓ (command history), Shift+F10 (last menu), Compare folders, Shift+click/⌘+click/right button/mouse drag.
+5. **F1: `Ctrl+Shift+1..9 Save folder shortcut (panels)` / `Ctrl+1..9`** — correct, but going to a local bookmark additionally **resets all remembered cursor positions of the panel** (`p.states = nil`), which is described nowhere.
+6. **F1: `Num * Invert files; Cmd/Ctrl+Num * includes folders`** — it is not mentioned that Alt+Num* inverts files and at the same time unmarks folders.
+7. **Menu `Sort mode → Directories first`** — the item toggles `MixDirectories` (i.e. when selected, folders *stop* coming first if the flag was off); the toggles `Reverse order`, `Case sensitive`, `Directories first`, `Selected first` have no state indicators.
+8. **F1: `Ctrl+PgUp/PgDown Parent / enter folder or archive`** — `isArchiveName` for Ctrl+PgDn includes `.gz`, `.bz2`, `.xz` without `.tar`, which `fsops.ArchiveFormat` does not support: Ctrl+PgDn on such a file calls `enterFile`, which opens the file with the system application rather than as an archive.
+9. **BEHAVIOR_PARITY: "Esc retains the found position"** and **"Search does not replace the command line"** — match the code. But Paste in fast find is described as "until the first unmatched character" — the code always accepts the first character, even without a match (`TestFastFindIncludesFirstLetterWithoutMatch`).
+10. **README: `F3 / F4 View / edit; F3 on a folder calculates selected folder sizes`** — correct; additionally F4 on a folder opens `File attributes` (not documented in README/F1).
+11. **Legacy modes** `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` are mentioned in F1 (`File links view   Names, sizes and hard-link counts`) but are not available from the menu or the settings: `configurePanel` forcibly switches them to `Full` at startup/refresh. The `Medium` mode (2 columns) is in the menu but not mentioned in the help.
+12. **F1: `Tab Switch active panel`** — Tab also switches focus to a hidden (⌘F1/⌘F2) panel; in that state the cursor and title are not visible.
+13. **F1 help and the menu `Commands → Quick view on/off Ctrl+Q`** — Quick view via Ctrl+Q is allowed for a remote inactive panel (shows `Remote file: use F3 to download and view`), whereas via the Left/Right menu it is forbidden for remote (`Choose a file view for remote panels`); for archive members Quick view shows a `stat` error because the virtual path does not exist (described nowhere).
 
 
-<a id="часть-2"></a>
-# Часть 2. Файловые операции, архивы, запуск программ
+<a id="part-2"></a>
+# Part 2. File operations, archives, launching programs
 
-Описание составлено по текущему коду (`internal/ui`, `internal/fsops`, `internal/remotefs`), а не по документации. Строки интерфейса приведены дословно (английский, как в коде). Расхождения между документацией и кодом собраны в конце.
+The description is based on the current code (`internal/ui`, `internal/fsops`, `internal/remotefs`), not on the documentation. Interface strings are given verbatim (English, as in the code). Discrepancies between the documentation and the code are collected at the end.
+## Common Operation Infrastructure
 
-## Общая инфраструктура операций
+### Background Tasks and "Busy"
 
-### Фоновые задачи и «Busy»
+#### Background task (`backgroundTask` / `workProgress` / `backgroundProgress`)
+- **Invocation:** internally, by any long-running operation (copying, deletion, archives, search, opening an archive, process list, etc.).
+- **Where available:** only if `a.Busy == false` and the window is not closed; otherwise the call is silently ignored (one operation per window).
+- **Behavior:**
+  1. An `fsops.Operation(label)` is created with `IgnoreDSStore = Settings.IgnoreDSStore`; `a.Busy = true`, `a.Operation = o`, `a.Status = label`.
+  2. The work runs in a goroutine; the result (`apply`, `cleanup`, `err`) is received in `pollTask` (from `Poll`, on the engine queue).
+  3. While `Busy`: `PanelKeys=false`; keys — only `Escape`/`Alt+C` (cancel) and the keys of an open question dialog; clicks — only on the progress `Cancel` button or on the question; `Cmd+Q` responds with the status `Wait for the file operation to finish`.
+  4. On completion: `a.LastProgress` = a snapshot of the progress, `Busy=false`, `Status=""`; on error → `a.error(err)` (status line = error text) and, if `task.reportError` (always for `workProgress`), a modal confirmation `"<Label> failed"` with the error text and an `OK` button — except for cancellation (`operation cancelled`/`context canceled`), for which there is no dialog, only the status `operation cancelled`.
+  5. `workProgress` additionally: attaches `operationQuestions(o)` (Retry/Skip and read-only questions), treats `ErrSkipped` as success; on success the status is `Done` or `Done — N item(s) skipped`; `cleanup` always does `a.refresh()` (re-reads both panels).
+  6. `backgroundProgress` — the same task without the question handler and without the final error dialog (the error appears only in the status).
+- **Code:** `internal/ui/task.go` (`backgroundTask`, `pollTask`), `internal/ui/progress.go` (`workProgress`), `internal/ui/commands.go` (`backgroundProgress`).
 
-#### Фоновая задача (`backgroundTask` / `workProgress` / `backgroundProgress`)
-- **Вызов:** внутренне, любой длительной операцией (копирование, удаление, архивы, поиск, открытие архива, список процессов и т. д.).
-- **Где доступно:** только если `a.Busy == false` и окно не закрыто; иначе вызов молча игнорируется (одна операция на окно).
-- **Поведение:**
-  1. Создаётся `fsops.Operation(label)` с `IgnoreDSStore = Settings.IgnoreDSStore`; `a.Busy = true`, `a.Operation = o`, `a.Status = label`.
-  2. Работа выполняется в goroutine; результат (`apply`, `cleanup`, `err`) принимается в `pollTask` (из `Poll`, на engine queue).
-  3. Пока `Busy`: `PanelKeys=false`; клавиши — только `Escape`/`Alt+C` (отмена) и клавиши открытого диалога-вопроса; клики — только по кнопке `Cancel` прогресса или по вопросу; `Cmd+Q` отвечает статусом `Wait for the file operation to finish`.
-  4. По завершении: `a.LastProgress` = снимок прогресса, `Busy=false`, `Status=""`; при ошибке → `a.error(err)` (статусная строка = текст ошибки) и, если `task.reportError` (всегда для `workProgress`), модальное подтверждение `"<Label> failed"` с текстом ошибки и кнопкой `OK` — кроме отмены (`operation cancelled`/`context canceled`), для которой диалога нет, только статус `operation cancelled`.
-  5. `workProgress` дополнительно: подключает `operationQuestions(o)` (вопросы Retry/Skip и read-only), игнорирует `ErrSkipped` как успех; при успехе статус `Done` или `Done — N item(s) skipped`; `cleanup` всегда делает `a.refresh()` (перечитывает обе панели).
-  6. `backgroundProgress` — та же задача без обработчика вопросов и без финального диалога ошибки (ошибка только в статусе).
-- **Код:** `internal/ui/task.go` (`backgroundTask`, `pollTask`), `internal/ui/progress.go` (`workProgress`), `internal/ui/commands.go` (`backgroundProgress`).
+#### Progress window
+- **Invocation:** drawn automatically while `a.Operation != nil`.
+- **Behavior (drawing, `drawProgress`):** a modal 88×15 window (smaller on a small screen) with the title = the operation label. Contents:
+  - line 1: the current path (`Progress.Path`, trimmed from the left with `tail`).
+  - While `Scanning` or `Streaming` (total unknown): `Working / calculating… ▰▱▱▱  N items` with frame animation `▰▱▱▱ ▱▰▱▱ ▱▱▰▱ ▱▱▱▰` (150 ms/frame), where N = `TotalFiles`. In `Streaming` mode there is an additional line `File  ████░░░░` (progress of the current file).
+  - Otherwise: `Total %5.1f%%  <Files> / <TotalFiles> items`, below it the overall bar (`█`/`░`, by bytes; if `TotalBytes==0` — by files), then `File  <bar of the current file>`.
+  - If `Workers > 1`, the file line is replaced with `Parallel transfers: <Active> active / <Workers> workers`.
+  - Statistics: `<bytes> / <total>  ·  <rate>/s  ·  <elapsed>s` (+ `  ETA Ns` if the rate > 0 and the total is known); in `Streaming`: `<bytes> processed · <rate>/s · <elapsed>s`.
+  - Button `{ Cancel }` (mnemonic `c`).
+- **Cancellation:** `Esc`, `Alt+C` or a click on `Cancel` → `cancelOperation()`: `Operation.Cancel()`, the open question dialog is closed (`OperationQuestion`, or one with the title `Overwrite`/`Cannot preserve metadata`), status `Cancelling…`. The worker sees the cancellation via `o.Check()`/the context (including window closing via `Close()`).
+- **Code:** `internal/ui/progress.go`, `internal/fsops/progress.go` (`Progress`, `Operation`, `Streaming`, `Scan`, `Ready`).
 
-#### Окно прогресса
-- **Вызов:** рисуется автоматически, пока `a.Operation != nil`.
-- **Поведение (отрисовка, `drawProgress`):** модальное окно 88×15 (меньше при малом экране) с заголовком = label операции. Содержимое:
-  - строка 1: текущий путь (`Progress.Path`, обрезанный слева `tail`).
-  - Пока `Scanning` или `Streaming` (итог неизвестен): `Working / calculating… ▰▱▱▱  N items` с анимацией кадров `▰▱▱▱ ▱▰▱▱ ▱▱▰▱ ▱▱▱▰` (150 мс/кадр), где N = `TotalFiles`. В режиме `Streaming` дополнительно строка `File  ████░░░░` (прогресс текущего файла).
-  - Иначе: `Total %5.1f%%  <Files> / <TotalFiles> items`, под ней общий бар (`█`/`░`, по байтам; если `TotalBytes==0` — по файлам), затем `File  <бар текущего файла>`.
-  - Если `Workers > 1`, строка файла заменяется на `Parallel transfers: <Active> active / <Workers> workers`.
-  - Статистика: `<bytes> / <total>  ·  <rate>/s  ·  <elapsed>s` (+ `  ETA Ns`, если скорость > 0 и итог известен); в `Streaming`: `<bytes> processed · <rate>/s · <elapsed>s`.
-  - Кнопка `{ Cancel }` (мнемоника `c`).
-- **Отмена:** `Esc`, `Alt+C` или клик по `Cancel` → `cancelOperation()`: `Operation.Cancel()`, закрывается открытый диалог-вопрос (`OperationQuestion`, либо с заголовком `Overwrite`/`Cannot preserve metadata`), статус `Cancelling…`. Worker видит отмену через `o.Check()`/контекст (включая закрытие окна `Close()`).
-- **Код:** `internal/ui/progress.go`, `internal/fsops/progress.go` (`Progress`, `Operation`, `Streaming`, `Scan`, `Ready`).
+#### Questions during an operation (common mechanism)
+- **Behavior:** the worker pushes a closure onto `a.jobs` which opens `confirm(...)` with `Form.OperationQuestion = true`, and blocks on the answer channel; parallel workers are serialized by the `o.Questions` mutex. Cancelling the operation (Esc, window close) unblocks the question — the last option (`Cancel`) is returned. Esc in a question dialog = `cancelOperation()` of the whole operation (since `Busy`), not just closing the dialog. `PageUp/PageDown` scroll long messages; Alt+letter — button mnemonics.
+- **Code:** `internal/ui/operation_questions.go` (`operationChoice`), `internal/ui/app.go` (`key` while `Busy`).
 
-#### Вопросы во время операции (общий механизм)
-- **Поведение:** worker ставит closure в `a.jobs`, которая открывает `confirm(...)` с `Form.OperationQuestion = true`, и блокируется на канале ответа; параллельные воркеры сериализуются мьютексом `o.Questions`. Отмена операции (Esc, закрытие окна) разблокирует вопрос — возвращается последний вариант (`Cancel`). Esc в диалоге-вопросе = `cancelOperation()` всей операции (т. к. `Busy`), а не только закрытие диалога. `PageUp/PageDown` листают длинные сообщения; Alt+буква — мнемоники кнопок.
-- **Код:** `internal/ui/operation_questions.go` (`operationChoice`), `internal/ui/app.go` (`key` при `Busy`).
+#### Retry/Skip error dialog (`o.Failure`)
+- **Dialogs:** title `Error`; text: `Cannot <operation>\n<source>` + (if present) `\nTo: <destination>` + `\n\n<OS error text>`; buttons `Retry`, `Skip`, `Skip all`, `Cancel`.
+- **Behavior:** `Retry` repeats only the step that failed (`o.Attempt`), not the whole batch; `Skip` marks the item as skipped (`Skipped++`, `CompleteTree`); `Skip all` — all subsequent errors in this operation are skipped without questions; `Cancel`/Esc — `ErrCancelled`. `context.Canceled` errors are turned into `ErrCancelled`. Operation steps wrapped in `Attempt`: `copy`, `move`, `read folder`, `read attributes`, `create folder`, `delete`, `delete source`, `delete source folder`, `move to Trash`, `open destination`, `read destination`, `connect`, `create archive`, `extract archive`, `create folder` (remote).
+- **Code:** `internal/fsops/recovery.go` (`Attempt`, `SkipItem`, `IgnoreSkipped`), `internal/ui/operation_questions.go`.
 
-#### Диалог ошибки Retry/Skip (`o.Failure`)
-- **Диалоги:** заголовок `Error`; текст: `Cannot <operation>\n<source>` + (если есть) `\nTo: <destination>` + `\n\n<текст ошибки ОС>`; кнопки `Retry`, `Skip`, `Skip all`, `Cancel`.
-- **Поведение:** `Retry` повторяет только тот шаг, который упал (`o.Attempt`), а не весь пакет; `Skip` помечает элемент пропущенным (`Skipped++`, `CompleteTree`); `Skip all` — все последующие ошибки в этой операции пропускаются без вопросов; `Cancel`/Esc — `ErrCancelled`. Ошибки `context.Canceled` превращаются в `ErrCancelled`. Операции-шаги, обёрнутые в `Attempt`: `copy`, `move`, `read folder`, `read attributes`, `create folder`, `delete`, `delete source`, `delete source folder`, `move to Trash`, `open destination`, `read destination`, `connect`, `create archive`, `extract archive`, `create folder` (remote).
-- **Код:** `internal/fsops/recovery.go` (`Attempt`, `SkipItem`, `IgnoreSkipped`), `internal/ui/operation_questions.go`.
+#### "read-only" question on deletion (`o.BeforeDelete`)
+- **When:** before deleting/moving to Trash a regular file without write bits (`mode & 0222 == 0`); not asked for directories and other types.
+- **Dialog:** `Warning`: `The file is read only\n<path>\nDelete it?`; buttons `Delete`, `All`, `Skip`, `Skip all`, `Cancel`. `All`/`Skip all` are remembered until the end of the operation.
+- **Code:** `operation_questions.go` (`operationQuestions`), applied in `fsops.removeTreeStep`, `ui/delete.go` (Trash), `remotefs.removeTreeStep`.
 
-#### Вопрос «read-only» при удалении (`o.BeforeDelete`)
-- **Когда:** перед удалением/перемещением в Trash обычного файла без битов записи (`mode & 0222 == 0`); для каталогов и других типов не задаётся.
-- **Диалог:** `Warning`: `The file is read only\n<path>\nDelete it?`; кнопки `Delete`, `All`, `Skip`, `Skip all`, `Cancel`. `All`/`Skip all` запоминаются до конца операции.
-- **Код:** `operation_questions.go` (`operationQuestions`), применяется в `fsops.removeTreeStep`, `ui/delete.go` (Trash), `remotefs.removeTreeStep`.
-
-## Копирование и перемещение
+## Copying and Moving
 
 #### F5 — Copy
-- **Вызов:** `F5`, `Cmd+5`, меню `Files → Copy…` (`F5`); `Shift+F5` — только текущий элемент (см. ниже).
-- **Где доступно:** активная панель локальная, удалённая или архивная; **недоступно**, если противоположная панель — архив (статус `Choose a regular destination panel; writing into archives is not supported`). Если выбор пуст (пустая панель или курсор на `..` без отметок) — ничего.
-- **Выбор элементов:** `Panel.Selected()` — все отмеченные (кроме `..`), иначе текущий элемент (не `..`). Перед операцией сохраняется `RestoreMarked` (для `Cmd+M`).
-- **Диалог (форма, заголовок `Copy`):**
-  - `Copy N item(s) to:` — значение по умолчанию: путь противоположной панели; если выбран один элемент — `<путь другой панели>/<имя элемента>`. Текст выделен (`Form.Selected = Settings.SelectDialogInput`, по умолчанию on): набор символа заменяет значение, `Cmd+A` выделяет, вставка заменяет.
-  - `[x] Preserve permissions (mode, owner, group, ACL)` — по умолчанию `Settings.CopyPermissions` (default true).
+- **Invocation:** `F5`, `Cmd+5`, menu `Files → Copy…` (`F5`); `Shift+F5` — only the current item (see below).
+- **Where available:** the active panel is local, remote or archive; **unavailable** if the opposite panel is an archive (status `Choose a regular destination panel; writing into archives is not supported`). If the selection is empty (empty panel or the cursor on `..` without marks) — nothing happens.
+- **Item selection:** `Panel.Selected()` — all marked items (except `..`), otherwise the current item (not `..`). Before the operation, `RestoreMarked` is saved (for `Cmd+M`).
+- **Dialog (form, title `Copy`):**
+  - `Copy N item(s) to:` — default value: the path of the opposite panel; if a single item is selected — `<path of the other panel>/<item name>`. The text is selected (`Form.Selected = Settings.SelectDialogInput`, on by default): typing a character replaces the value, `Cmd+A` selects all, pasting replaces.
+  - `[x] Preserve permissions (mode, owner, group, ACL)` — defaults to `Settings.CopyPermissions` (default true).
   - `[x] Preserve attributes (xattrs, flags, timestamps)` — `Settings.CopyAttributes` (default true).
-  - `Parallel transfers (1–8):` — `Settings.CopyWorkers` (default 4, нормализуется в 1..8).
-  - Кнопки `{ Copy }` `[ Cancel ]` (Primary = `Copy`). Флажки переключаются Space/←/→/мышью/Alt+мнемоника.
-  - Валидация: нечисло или вне 1..8 → статус `parallel transfers must be between 1 and 8`, форма закрывается, операция не стартует. Значения флажков и workers сохраняются в `Settings` (персистируются с setup).
-- **Интерпретация назначения:**
-  - `expand(s, base)`: `~`/`~/…` → домашний каталог; относительный путь — относительно `base` (путь активной панели; для архива — каталог файла архива; при участии удалённой панели — путь панели назначения); `filepath.Clean`.
-  - Назначение проверяется `Lstat` через `targetEndpoint` (локально или на сервере). Если выбрано >1 элементов и назначение не существующий каталог → ошибка `destination must be an existing directory`.
-  - `transferIntoDirectory(input, dst, suggested, count, isDir)`: элементы кладутся **внутрь** каталога `dst` (как `dst/<basename>`), если `dst` — существующий каталог **и** (элементов > 1, **или** введённый путь отличается от предложенного, **или** ввод оканчивается на `/`). Предложенный одиночный путь, даже если это существующий каталог, означает сам этот объект (слияние каталога `folder` в существующий `folder`, не `folder/folder`).
-- **Выполнение (`remotefs.Copy`, используется и для локальных копий):**
-  1. `o.CopyMetadata = &{Permissions, Attributes}`; подключаются `metadataQuestions(o, false)`, `collisionQuestions(o, Settings.ConfirmOverwrite)`.
-  2. Из архива: сначала `catalog.ExtractSelection(names, <tmp>/content, o)` во временный каталог `farshmac-archive-copy-*` (удаляется `defer`), далее обычное копирование из temp.
-  3. `o.Parallel(workers)`, `o.Streaming()` (итог заранее неизвестен — индикатор «Working / calculating…» и счётчик). Воркеры — отдельные goroutine с собственными сессиями (для FTP/SFTP — отдельные соединения); очередь `workers*2`.
-  4. Обход (walk): пропускаются `Ignored` (`.DS_Store` при `IgnoreDSStore`), лимиты `1 000 000` записей / глубина `256` → `transfer tree limit exceeded`. Каталоги создаются обходчиком (локально с Permissions: `Mkdir 0700`, затем финальные метаданные; без Permissions — `Mkdir 0777` через umask); существующий каталог назначения используется (слияние), не-каталог → `destination is not a directory: <path>`. Файлы ставятся в очередь воркеров.
-  5. Локально→локально каждый файл идёт через `fsops.Transfer(src, dst, move=false, …)`; при участии сервера — `copyFile` (см. «Удалённые панели»).
-  6. Проверки до старта: `destination is inside source` (одинаковый endpoint и назначение внутри источника), `validateLocalPair`.
-  7. После всех файлов — метаданные каталогов в обратном порядке (`ApplyMetadata`).
-- **Локальный файл (`fsops.Copy` → `copyEntry`):**
-  - Символические ссылки никогда не разыменовываются: копируется ссылка (`Readlink`+`Symlink`).
-  - Жёсткие ссылки: внутри одной операции учитываются только при `moving` (перемещение между томами), см. F6.
-  - Обычный файл: если оба флажка метаданных включены (или опции не заданы) — `fclonefileat(... CLONE_NOOWNERCOPY)` (APFS clone, атомарно, без замены существующего). При `ENOTSUP/EXDEV/EINVAL/ENOSYS/EPERM` — потоковое копирование: временный файл `.farshmac-copy-<rand>` в каталоге назначения (режим 0600, или 0666 при выключенном Permissions), буфер 256 КиБ с прогрессом, затем публикация через `renamex_np(RENAME_EXCL)` — существующий файл никогда не перезаписывается «вслепую». Если один из флажков выключен — clonefile не используется (чтобы не «протекли» метаданные).
-  - Спецфайлы (сокеты, устройства…) → `unsupported special file: <path>`.
-  - Метаданные (`preserveMetadata`, `metadata_darwin.go`): при включённых опциях после копии — `lchown` (owner/group), `copyfile(COPYFILE_NOFOLLOW | ACL | XATTR)`, `lchmod`, `setattrlist` (creation/modification/access time с наносекундами, и для симлинков), `lchflags`. После этого сверка `lstat` источника и копии: различия → ошибка `<src>: destination did not preserve <permissions|owner/group|file flags|modification time|creation time>` и диалог «Cannot preserve metadata» (см. ниже). При отказе результат копии удаляется (`RemoveAll(dst)`), источник не трогается.
-  - Каталог при неявной политике (`CopyMetadata == nil`, например append-префикс) — `Chmod`+`Chtimes` как у источника.
-- **Коллизии:** см. «Диалог коллизии».
-- **Отмена:** `Esc` → `Cancelling…`; незавершённый временный файл удаляется; уже завершённые файлы остаются («не откатываются»); каталоги, созданные обходчиком, остаются (при обходе из `remotefs.Copy`); при `fsops.Copy` каталога целиком (путь cross-volume move/append-префикс) незавершённый новый каталог удаляется `RemoveAll`.
-- **Сообщения:** статус `Copy` → `Done` / `Done — N item(s) skipped`; ошибка → статус + диалог `Copy failed` `[OK]`; `operation cancelled`.
-- **Особые случаи:** `.DS_Store` пропускается при `Settings.IgnoreDSStore` (`Hide and ignore .DS_Store` в Panel settings); F5 из архива извлекает (см. «Архивы»); удалённые панели — см. ниже. Тест `TestCopyOptionsDialogAndPersistence` подтверждает: выключенные флажки → права/дата не сохраняются; выбор запоминается в setup.
-- **Код:** `internal/ui/transfers.go` (`transferDialog`, `transferIntoDirectory`), `internal/remotefs/transfer.go` (`Copy`), `internal/fsops/files.go` (`Copy`, `copyEntry`, `copyRegularStream`, `createCopyTemp`), `internal/fsops/clone_darwin.go`, `internal/fsops/metadata_darwin.go`, `internal/fsops/parallel.go`, `internal/fsops/ignore.go`, `internal/fsops/walk.go`.
+  - `Parallel transfers (1–8):` — `Settings.CopyWorkers` (default 4, normalized to 1..8).
+  - Buttons `{ Copy }` `[ Cancel ]` (Primary = `Copy`). Checkboxes are toggled with Space/←/→/mouse/Alt+mnemonic.
+  - Validation: a non-number or a value outside 1..8 → status `parallel transfers must be between 1 and 8`, the form closes, the operation does not start. The checkbox values and workers are saved in `Settings` (persisted with setup).
+- **Destination interpretation:**
+  - `expand(s, base)`: `~`/`~/…` → the home directory; a relative path — relative to `base` (the active panel path; for an archive — the directory of the archive file; when a remote panel is involved — the destination panel path); `filepath.Clean`.
+  - The destination is checked with `Lstat` via `targetEndpoint` (locally or on the server). If more than one item is selected and the destination is not an existing directory → error `destination must be an existing directory`.
+  - `transferIntoDirectory(input, dst, suggested, count, isDir)`: items are placed **inside** the directory `dst` (as `dst/<basename>`) if `dst` is an existing directory **and** (there is more than one item, **or** the entered path differs from the suggested one, **or** the input ends with `/`). The suggested single path, even if it is an existing directory, means that object itself (merging the directory `folder` into the existing `folder`, not `folder/folder`).
+- **Execution (`remotefs.Copy`, also used for local copies):**
+  1. `o.CopyMetadata = &{Permissions, Attributes}`; `metadataQuestions(o, false)` and `collisionQuestions(o, Settings.ConfirmOverwrite)` are attached.
+  2. From an archive: first `catalog.ExtractSelection(names, <tmp>/content, o)` into a temporary directory `farshmac-archive-copy-*` (removed via `defer`), then a normal copy from temp.
+  3. `o.Parallel(workers)`, `o.Streaming()` (the total is not known in advance — the "Working / calculating…" indicator and counter). Workers are separate goroutines with their own sessions (for FTP/SFTP — separate connections); the queue is `workers*2`.
+  4. Walk: `Ignored` entries are skipped (`.DS_Store` with `IgnoreDSStore`), limits of `1 000 000` entries / depth `256` → `transfer tree limit exceeded`. Directories are created by the walker (locally with Permissions: `Mkdir 0700`, then final metadata; without Permissions — `Mkdir 0777` through umask); an existing destination directory is reused (merge), a non-directory → `destination is not a directory: <path>`. Files are put into the worker queue.
+  5. Local→local, each file goes through `fsops.Transfer(src, dst, move=false, …)`; when a server is involved — `copyFile` (see "Remote panels").
+  6. Pre-start checks: `destination is inside source` (same endpoint and the destination inside the source), `validateLocalPair`.
+  7. After all files — directory metadata in reverse order (`ApplyMetadata`).
+- **Local file (`fsops.Copy` → `copyEntry`):**
+  - Symbolic links are never dereferenced: the link itself is copied (`Readlink`+`Symlink`).
+  - Hard links: within a single operation they are only tracked when `moving` (moving between volumes), see F6.
+  - Regular file: if both metadata checkboxes are on (or the options are not set) — `fclonefileat(... CLONE_NOOWNERCOPY)` (APFS clone, atomic, no replacement of an existing file). On `ENOTSUP/EXDEV/EINVAL/ENOSYS/EPERM` — streaming copy: a temporary file `.farshmac-copy-<rand>` in the destination directory (mode 0600, or 0666 when Permissions is off), a 256 KiB buffer with progress, then publication via `renamex_np(RENAME_EXCL)` — an existing file is never overwritten "blindly". If one of the checkboxes is off, clonefile is not used (so that metadata does not "leak").
+  - Special files (sockets, devices…) → `unsupported special file: <path>`.
+  - Metadata (`preserveMetadata`, `metadata_darwin.go`): with the options on, after the copy — `lchown` (owner/group), `copyfile(COPYFILE_NOFOLLOW | ACL | XATTR)`, `lchmod`, `setattrlist` (creation/modification/access time with nanoseconds, also for symlinks), `lchflags`. Then the `lstat` of the source and the copy are compared: differences → error `<src>: destination did not preserve <permissions|owner/group|file flags|modification time|creation time>` and the "Cannot preserve metadata" dialog (see below). On refusal the copy result is removed (`RemoveAll(dst)`), the source is untouched.
+  - A directory under the implicit policy (`CopyMetadata == nil`, e.g. the append prefix) — `Chmod`+`Chtimes` as in the source.
+- **Collisions:** see "Collision dialog".
+- **Cancellation:** `Esc` → `Cancelling…`; the unfinished temporary file is removed; already completed files remain (they are "not rolled back"); directories created by the walker remain (when walking from `remotefs.Copy`); with `fsops.Copy` of a whole directory (the cross-volume move/append-prefix path) the unfinished new directory is removed with `RemoveAll`.
+- **Messages:** status `Copy` → `Done` / `Done — N item(s) skipped`; error → status + dialog `Copy failed` `[OK]`; `operation cancelled`.
+- **Special cases:** `.DS_Store` is skipped with `Settings.IgnoreDSStore` (`Hide and ignore .DS_Store` in Panel settings); F5 from an archive extracts (see "Archives"); remote panels — see below. The test `TestCopyOptionsDialogAndPersistence` confirms: with the checkboxes off → permissions/date are not preserved; the choice is remembered in setup.
+- **Code:** `internal/ui/transfers.go` (`transferDialog`, `transferIntoDirectory`), `internal/remotefs/transfer.go` (`Copy`), `internal/fsops/files.go` (`Copy`, `copyEntry`, `copyRegularStream`, `createCopyTemp`), `internal/fsops/clone_darwin.go`, `internal/fsops/metadata_darwin.go`, `internal/fsops/parallel.go`, `internal/fsops/ignore.go`, `internal/fsops/walk.go`.
 
 #### F6 — Move / rename
-- **Вызов:** `F6`, `Cmd+6`, меню `Files → Rename or move…`; `Shift+F6` — только текущий элемент.
-- **Где доступно:** локальная панель; в архиве → статус `Archive is read-only. Use F5 to copy files out.`; если любая из панелей удалённая → `remoteMoveDialog` (см. ниже); противоположная панель-архив → `Choose a regular destination panel; writing into archives is not supported`.
-- **Диалог:** простой `prompt` (Dialog) с заголовком `Move / rename`, текстом `N item(s) to`, полем ввода (значение как у F5: путь другой панели или `<другая панель>/<имя>`), кнопками `OK` / `Cancel`. Флажков метаданных и воркеров нет (перемещение всегда сохраняет все метаданные и выполняется последовательно, без параллельных воркеров). Если `Settings.RememberDialogValues` и значение пустое — подставляется прошлый ввод.
-- **Поведение (`fsops.Transfer(src, dst, move=true)` по каждому элементу, последовательно):**
-  1. `o.IgnoreDSStore = false` — при перемещении `.DS_Store` переносится вместе с каталогом (`Ignored` учитывает `!o.moving`). `o.Streaming()` — дерево не сканируется заранее (same-volume rename мгновенный).
-  2. Подключаются `moveMetadataQuestions` и `collisionQuestions`. Та же логика назначения/`transferIntoDirectory`, что у F5.
-  3. Проверки: `destination is inside source`; `source and destination are the same file`.
-  4. Назначение не существует → `fsops.Move` = `renamex_np(RENAME_EXCL)` (атомарно, без замены). `EXDEV` → `moveAcrossVolumes`: `o.Scan` (подсчёт итога), `Copy` с `o.moving=true` (всегда Permissions+Attributes), затем `Remove(src)` через `Attempt("delete source")`. Источник удаляется только после полной копии и явного согласия на потерю метаданных.
-  5. Каталог → существующий каталог: рекурсивное слияние по элементам; после обхода, если источник опустел — `Attempt("delete source", os.Remove)`; при пропусках источник-каталог остаётся.
-  6. Файл → существующий файл: диалог коллизии. `Replace`: проверка, что назначение не изменилось (`destination changed during move`), затем `os.Rename` (same volume) или staging-копия в `.farshmac-transfer-*` + `Rename` поверх + удаление источника. `Append`: `appendFile` затем удаление источника.
-  7. Жёсткие ссылки (`hardlinks.go`): при `moving` запоминаются (dev, inode) скопированных файлов с `Nlink ≥ 2`; повторная встреча того же inode → `os.Link` на уже скопированный файл вместо копирования; при неудаче — вопрос метаданных с ошибкой `cannot preserve hard-link relationship: …`. После публикации через staging пути перепривязываются (`relocateHardlinks`).
-- **Диалог «Cannot preserve metadata» (`metadataQuestions`):** заголовок `Cannot preserve metadata`; текст: `Move with changed metadata and remove the source?\n<src>\nTo: <dst>\n\n<err>` (для F5: `Copy with changed metadata?`); кнопки `Move anyway` (F5: `Copy anyway`), `For all`, `Retry`, `Skip`, `Skip all`, `Cancel`. `For all`/`Skip all` запоминаются; `Retry` → `ErrRetryMetadata` (повтор только метаданных); `Skip` → элемент пропущен, источник остаётся; `Cancel`/Esc → отмена всей операции.
-- **Сообщения:** статус `Move / rename` → `Done`/`Done — N item(s) skipped`; `Move / rename failed` `[OK]`; ошибки `destination changed during move`, `cannot replace a file with a directory or a directory with a file`, `choose a different destination name`, `destination must be an existing directory`.
-- **Код:** `internal/ui/transfers.go`, `internal/ui/move_metadata.go`, `internal/fsops/transfer.go` (`transfer`, `moveAcrossVolumes`), `internal/fsops/move_darwin.go`, `internal/fsops/hardlinks.go`, `internal/fsops/append.go`.
+- **Invocation:** `F6`, `Cmd+6`, menu `Files → Rename or move…`; `Shift+F6` — only the current item.
+- **Where available:** a local panel; in an archive → status `Archive is read-only. Use F5 to copy files out.`; if either panel is remote → `remoteMoveDialog` (see below); an archive as the opposite panel → `Choose a regular destination panel; writing into archives is not supported`.
+- **Dialog:** a simple `prompt` (Dialog) with the title `Move / rename`, the text `N item(s) to`, an input field (value as for F5: the other panel's path or `<other panel>/<name>`), buttons `OK` / `Cancel`. There are no metadata checkboxes or workers (a move always preserves all metadata and runs sequentially, without parallel workers). If `Settings.RememberDialogValues` is on and the value is empty — the previous input is substituted.
+- **Behavior (`fsops.Transfer(src, dst, move=true)` for each item, sequentially):**
+  1. `o.IgnoreDSStore = false` — when moving, `.DS_Store` is carried along with the directory (`Ignored` takes `!o.moving` into account). `o.Streaming()` — the tree is not scanned in advance (a same-volume rename is instant).
+  2. `moveMetadataQuestions` and `collisionQuestions` are attached. The same destination/`transferIntoDirectory` logic as for F5.
+  3. Checks: `destination is inside source`; `source and destination are the same file`.
+  4. Destination does not exist → `fsops.Move` = `renamex_np(RENAME_EXCL)` (atomic, no replacement). `EXDEV` → `moveAcrossVolumes`: `o.Scan` (counting the total), `Copy` with `o.moving=true` (always Permissions+Attributes), then `Remove(src)` via `Attempt("delete source")`. The source is removed only after a complete copy and explicit consent to the loss of metadata.
+  5. Directory → existing directory: recursive merge item by item; after the walk, if the source became empty — `Attempt("delete source", os.Remove)`; with skips the source directory remains.
+  6. File → existing file: the collision dialog. `Replace`: a check that the destination has not changed (`destination changed during move`), then `os.Rename` (same volume) or a staging copy in `.farshmac-transfer-*` + `Rename` over it + removal of the source. `Append`: `appendFile` then removal of the source.
+  7. Hard links (`hardlinks.go`): when `moving`, the (dev, inode) of copied files with `Nlink ≥ 2` are remembered; encountering the same inode again → `os.Link` to the already copied file instead of copying; on failure — a metadata question with the error `cannot preserve hard-link relationship: …`. After publication through staging the paths are relinked (`relocateHardlinks`).
+- **"Cannot preserve metadata" dialog (`metadataQuestions`):** title `Cannot preserve metadata`; text: `Move with changed metadata and remove the source?\n<src>\nTo: <dst>\n\n<err>` (for F5: `Copy with changed metadata?`); buttons `Move anyway` (F5: `Copy anyway`), `For all`, `Retry`, `Skip`, `Skip all`, `Cancel`. `For all`/`Skip all` are remembered; `Retry` → `ErrRetryMetadata` (repeats only the metadata); `Skip` → the item is skipped, the source remains; `Cancel`/Esc → cancellation of the whole operation.
+- **Messages:** status `Move / rename` → `Done`/`Done — N item(s) skipped`; `Move / rename failed` `[OK]`; errors `destination changed during move`, `cannot replace a file with a directory or a directory with a file`, `choose a different destination name`, `destination must be an existing directory`.
+- **Code:** `internal/ui/transfers.go`, `internal/ui/move_metadata.go`, `internal/fsops/transfer.go` (`transfer`, `moveAcrossVolumes`), `internal/fsops/move_darwin.go`, `internal/fsops/hardlinks.go`, `internal/fsops/append.go`.
 
-#### Shift+F5 / Shift+F6 — копировать/переместить только текущий элемент
-- **Вызов:** `Shift+F5`, `Shift+F6` (`farPanelKey`).
-- **Поведение:** временно обнуляется `p.Marked`, вызывается `transferDialog`, затем отметки и `RestoreMarked` восстанавливаются — диалог предлагает `<другая панель>/<имя текущего>` и оперирует только текущим элементом. Все остальные правила как у F5/F6.
-- **Код:** `internal/ui/far_keys.go` (`currentTransfer`).
+#### Shift+F5 / Shift+F6 — copy/move only the current item
+- **Invocation:** `Shift+F5`, `Shift+F6` (`farPanelKey`).
+- **Behavior:** `p.Marked` is temporarily cleared, `transferDialog` is called, then the marks and `RestoreMarked` are restored — the dialog suggests `<other panel>/<current name>` and operates only on the current item. All other rules are as for F5/F6.
+- **Code:** `internal/ui/far_keys.go` (`currentTransfer`).
 
-#### Диалог коллизии (файл уже существует)
-- **Когда:** назначение существует и хотя бы одна сторона не каталог (каталог→каталог сливается без вопроса). Если `Settings.ConfirmOverwrite` выключен (`Confirm overwrite` в General settings / `Overwrite files` в Confirmations) — автоматически `Replace` (но вопрос о read-only всё равно задаётся).
-- **Диалог:** заголовок `Warning`; текст:
+#### Collision dialog (file already exists)
+- **When:** the destination exists and at least one side is not a directory (directory→directory merges without a question). If `Settings.ConfirmOverwrite` is off (`Confirm overwrite` in General settings / `Overwrite files` in Confirmations) — automatically `Replace` (but the read-only question is still asked).
+- **Dialog:** title `Warning`; text:
   ```
   The file already exists
   <destination>
@@ -694,707 +690,707 @@
   New: <N> bytes  2006-01-02 15:04:05
   Existing: <N> bytes  2006-01-02 15:04:05
   ```
-  (для каталога вместо размера `Folder`; при отсутствии info — `New: unavailable`). Кнопки: `Overwrite`, `Skip`, `Rename`, `Append` (только если обе стороны — обычные файлы), `Cancel`; флажок `[ ] Remember choice` (Space/Enter на нём, `Alt+M`, клик). Запомненный выбор действует до конца этой операции (не сохраняется в настройках); `Cancel` не запоминается; запомненный `Append` для пары, где append невозможен, вызывает повторный вопрос.
-- **Rename:** кандидат `<stem> (copy)<ext>` в том же каталоге. Без «Remember» — форма `Rename` с полем `New name` (предзаполнено кандидатом, выделено), `{ OK } [ Cancel ]`; пустое/Esc → отмена операции; относительный ввод раскрывается относительно каталога назначения. С «Remember» — кандидат применяется без вопросов для каждой коллизии; если и кандидат существует, передача снова проверяет его (новая коллизия → очередной кандидат `… (copy) (copy)`), никогда не перезаписывая вслепую. Пустое имя/то же имя → `choose a different destination name`.
-- **Append (`appendFile`):** только два обычных файла (`append requires two regular files`). Старое назначение копируется в staging `.farshmac-append-*` (с его метаданными через дочернюю операцию), `chmod 0600`, дописывается источник с прогрессом, `chmod` в права назначения, проверка `destination changed during append`/`source size changed during append`, `Rename` поверх; при move затем удаляется источник. Отмена оставляет старый файл нетронутым.
-- **Overwrite (Replace):** `cannot replace a file with a directory or a directory with a file`; копия ставится в staging `.farshmac-transfer-*/item` рядом, проверяется, что назначение не изменилось (`destination changed during copy`), затем `os.Rename` поверх.
-- **Read-only назначение:** при `Overwrite`/`Append` на обычный файл без битов записи — `Warning`: `The file is read only\n<dst>\nOverwrite it?`, кнопки `Overwrite`, `All`, `Skip`, `Skip all`, `Cancel` (All/Skip all запоминаются).
-- **Код:** `internal/ui/operation_questions.go` (`collisionQuestions`, `fileComparison`), `internal/fsops/transfer.go`, `internal/fsops/append.go`, `internal/fsops/recovery.go` (`Resolve`, константы `Replace/Skip/Cancel/Append/Rename`).
+  (for a directory, `Folder` instead of the size; when info is unavailable — `New: unavailable`). Buttons: `Overwrite`, `Skip`, `Rename`, `Append` (only if both sides are regular files), `Cancel`; checkbox `[ ] Remember choice` (Space/Enter on it, `Alt+M`, click). The remembered choice applies until the end of this operation (not saved in settings); `Cancel` is not remembered; a remembered `Append` for a pair where append is impossible triggers the question again.
+- **Rename:** the candidate is `<stem> (copy)<ext>` in the same directory. Without "Remember" — a `Rename` form with the field `New name` (prefilled with the candidate, selected), `{ OK } [ Cancel ]`; empty/Esc → cancellation of the operation; relative input is expanded relative to the destination directory. With "Remember" — the candidate is applied without questions for every collision; if the candidate also exists, the transfer checks it again (a new collision → the next candidate `… (copy) (copy)`), never overwriting blindly. Empty name/the same name → `choose a different destination name`.
+- **Append (`appendFile`):** only two regular files (`append requires two regular files`). The old destination is copied to staging `.farshmac-append-*` (with its metadata via a child operation), `chmod 0600`, the source is appended with progress, `chmod` to the destination's permissions, checks `destination changed during append`/`source size changed during append`, `Rename` over it; on move the source is then removed. Cancellation leaves the old file untouched.
+- **Overwrite (Replace):** `cannot replace a file with a directory or a directory with a file`; the copy is placed in staging `.farshmac-transfer-*/item` next to it, a check that the destination has not changed (`destination changed during copy`), then `os.Rename` over it.
+- **Read-only destination:** on `Overwrite`/`Append` onto a regular file without write bits — `Warning`: `The file is read only\n<dst>\nOverwrite it?`, buttons `Overwrite`, `All`, `Skip`, `Skip all`, `Cancel` (All/Skip all are remembered).
+- **Code:** `internal/ui/operation_questions.go` (`collisionQuestions`, `fileComparison`), `internal/fsops/transfer.go`, `internal/fsops/append.go`, `internal/fsops/recovery.go` (`Resolve`, the constants `Replace/Skip/Cancel/Append/Rename`).
 
-#### Ошибки во время копирования/перемещения
-- См. «Диалог ошибки Retry/Skip». Пример (тест `TestLocalTransferPermissionErrorStaysVisible`): каталог назначения без прав записи → диалог `Error` с `permission denied`; Esc → источник цел, назначение не создано.
-- Дополнительные тексты: `transfer tree limit exceeded`, `unsupported special file: …`, `destination is not a directory: …`, `source size changed while copying …` (remote), `outside archive`.
+#### Errors during copying/moving
+- See "Retry/Skip error dialog". Example (test `TestLocalTransferPermissionErrorStaysVisible`): a destination directory without write permission → an `Error` dialog with `permission denied`; Esc → the source is intact, the destination is not created.
+- Additional texts: `transfer tree limit exceeded`, `unsupported special file: …`, `destination is not a directory: …`, `source size changed while copying …` (remote), `outside archive`.
 
-## Создание папок
+## Creating Folders
 
-#### F7 — Make folder (локально)
-- **Вызов:** `F7`, `Cmd+7`, меню `Files → Make folder…`.
-- **Где доступно:** локальная панель; в архиве → `Archive is read-only. Use F5 to copy files out.`; удалённая панель → см. remote.
-- **Диалог:** `prompt` заголовок `Make folder`, текст `Folder name`, пустое поле (или прошлое значение при `Remember dialog values`), кнопки `OK`/`Cancel`.
-- **Поведение:** пустая/пробельная строка — ничего. `expand(s, <путь панели>)` (поддерживаются `~`, относительные и абсолютные пути), `os.MkdirAll(path, 0755)` — вложенные пути `a/b/c` создаются целиком; существующий каталог — не ошибка. Затем `refresh()` и `focusCreatedDirectory`: панель загружает родителя созданного каталога и ставит курсор на него (`ForcedVisiblePath` делает его видимым несмотря на фильтры); если всё же скрыт — статус `Folder created; hidden by panel settings`.
-- **Ошибка:** подтверждение `Error`: `Cannot create folder\n<path>\n\n<err>`, кнопки `Retry`, `Cancel` (Retry повторяет MkdirAll).
-- **Код:** `internal/ui/app.go` (`function` case 7), `internal/ui/launch.go` (`focusCreatedDirectory`).
+#### F7 — Make folder (local)
+- **Invocation:** `F7`, `Cmd+7`, menu `Files → Make folder…`.
+- **Where available:** a local panel; in an archive → `Archive is read-only. Use F5 to copy files out.`; a remote panel → see remote.
+- **Dialog:** `prompt` with the title `Make folder`, the text `Folder name`, an empty field (or the previous value with `Remember dialog values`), buttons `OK`/`Cancel`.
+- **Behavior:** an empty/whitespace string — nothing. `expand(s, <panel path>)` (`~`, relative and absolute paths are supported), `os.MkdirAll(path, 0755)` — nested paths `a/b/c` are created in full; an existing directory is not an error. Then `refresh()` and `focusCreatedDirectory`: the panel loads the parent of the created directory and places the cursor on it (`ForcedVisiblePath` makes it visible despite filters); if it is still hidden — status `Folder created; hidden by panel settings`.
+- **Error:** confirmation `Error`: `Cannot create folder\n<path>\n\n<err>`, buttons `Retry`, `Cancel` (Retry repeats MkdirAll).
+- **Code:** `internal/ui/app.go` (`function` case 7), `internal/ui/launch.go` (`focusCreatedDirectory`).
 
-#### F7 на удалённой панели — Make remote folder
-- **Диалог:** `Make remote folder` / `Folder name` / пусто.
-- **Поведение:** имя должно быть одним компонентом (`remotefs.ValidName`), иначе статус `enter one folder name`; фоновая задача `Creating remote folder`: `Dial`, `Mkdir(<путь панели>/<имя>)` через `Attempt("create folder")` с диалогом `Error` Retry/Skip/Skip all/Cancel; Skip → статус `Folder creation skipped`; ошибка → `<err> (create folder <target>)` + диалог `Creating remote folder failed`; успех → refresh и курсор на новой папке.
-- **Код:** `internal/ui/remote.go` (`remoteMkdir`).
+#### F7 on a remote panel — Make remote folder
+- **Dialog:** `Make remote folder` / `Folder name` / empty.
+- **Behavior:** the name must be a single component (`remotefs.ValidName`), otherwise status `enter one folder name`; background task `Creating remote folder`: `Dial`, `Mkdir(<panel path>/<name>)` via `Attempt("create folder")` with an `Error` dialog Retry/Skip/Skip all/Cancel; Skip → status `Folder creation skipped`; error → `<err> (create folder <target>)` + dialog `Creating remote folder failed`; success → refresh and the cursor on the new folder.
+- **Code:** `internal/ui/remote.go` (`remoteMkdir`).
 
-## Удаление
+## Deletion
 
 #### F8 / Delete / Cmd+8 — Move to Trash
-- **Вызов:** `F8`, `Delete` (без модификаторов), `Cmd+8`, меню `Files → Move to Trash…`. Key bar: `8Trash` (на удалённой панели `8Delete`).
-- **Где доступно:** локальная панель; архив → `Archive is read-only…`; удалённая → `remoteDelete`.
-- **Диалог (если `Settings.ConfirmDelete`, default on; `Confirm deletion`):** заголовок `Move to Trash`, текст `Move <name1>, <name2>, … to Trash?` (basename всех выбранных через `, `), кнопки `Move to Trash`, `Cancel`.
-- **Поведение:** `workProgress("Moving to Trash")`, `o.Streaming()`; для каждого пути: `o.Check()`, `o.Add(path,0)`, `Attempt("move to Trash")`: `Lstat`, вопрос read-only (`BeforeDelete`, только для обычных файлов без прав записи), затем `fsops.Trash(path)`: проверка UTF-8/NUL (`invalid filename encoding`), `Lstat`, `o.Begin`, вызов ObjC `farshmac_trash_item` → `[[NSFileManager defaultManager] trashItemAtURL:resultingItemURL:error:]` (Trash соответствующего тома; каталог перемещается целиком, без обхода; прервать перенос одного элемента нельзя — отмена срабатывает перед следующим). Ошибка → `trash <path>: <localizedDescription или "Unable to move item to Trash">` в диалоге `Error` (Retry/Skip/Skip all/Cancel). **Сбой Trash никогда не переходит в постоянное удаление**; после ошибки/отмены остальные элементы не трогаются (тест `TestTrashFailureNeverFallsBackAndCancelStopsBatch`).
-- **Сообщения:** `Done`, `Done — N item(s) skipped`, `Moving to Trash failed` `[OK]`, `operation cancelled`.
-- **Код:** `internal/ui/delete.go`, `internal/fsops/trash_darwin.go`, `internal/fsops/trash_darwin.m`.
+- **Invocation:** `F8`, `Delete` (without modifiers), `Cmd+8`, menu `Files → Move to Trash…`. Key bar: `8Trash` (on a remote panel `8Delete`).
+- **Where available:** a local panel; archive → `Archive is read-only…`; remote → `remoteDelete`.
+- **Dialog (if `Settings.ConfirmDelete`, default on; `Confirm deletion`):** title `Move to Trash`, text `Move <name1>, <name2>, … to Trash?` (basenames of all selected items joined with `, `), buttons `Move to Trash`, `Cancel`.
+- **Behavior:** `workProgress("Moving to Trash")`, `o.Streaming()`; for each path: `o.Check()`, `o.Add(path,0)`, `Attempt("move to Trash")`: `Lstat`, the read-only question (`BeforeDelete`, only for regular files without write permission), then `fsops.Trash(path)`: UTF-8/NUL check (`invalid filename encoding`), `Lstat`, `o.Begin`, the ObjC call `farshmac_trash_item` → `[[NSFileManager defaultManager] trashItemAtURL:resultingItemURL:error:]` (the Trash of the corresponding volume; a directory is moved as a whole, without a walk; moving a single item cannot be interrupted — cancellation takes effect before the next one). Error → `trash <path>: <localizedDescription or "Unable to move item to Trash">` in an `Error` dialog (Retry/Skip/Skip all/Cancel). **A Trash failure never turns into permanent deletion**; after an error/cancellation the remaining items are not touched (test `TestTrashFailureNeverFallsBackAndCancelStopsBatch`).
+- **Messages:** `Done`, `Done — N item(s) skipped`, `Moving to Trash failed` `[OK]`, `operation cancelled`.
+- **Code:** `internal/ui/delete.go`, `internal/fsops/trash_darwin.go`, `internal/fsops/trash_darwin.m`.
 
 #### Shift+F8 / Shift+Delete — Delete permanently
-- **Вызов:** `Shift+F8`, `Shift+Delete`, меню `Files → Delete permanently…` (`⇧F8`).
-- **Диалог:** `Delete permanently`: `Permanently delete <names>?`, кнопки `Delete`, `Cancel` (при `ConfirmDelete`).
-- **Поведение:** `workProgress("Deleting permanently")`, `Streaming`; `fsops.Remove(path, o)` → `removeTree`: обход без следования симлинкам, `Attempt("delete")` на каждом элементе (Retry/Skip/Skip all/Cancel), `BeforeDelete` read-only вопрос для файлов, `.DS_Store` при `IgnoreDSStore` не учитывается в прогрессе, но каталог удаляется целиком. Пропуск дочернего элемента сохраняет родительский каталог (`ErrSkipped` вверх по дереву) и продолжает с соседями. При `ENOTEMPTY` каталога (Finder успел дописать `.DS_Store`) — повторное чтение и удаление до 3 попыток, но только если это тот же inode (не следует за подменой каталога симлинком). Большие каталоги (тест на 2200 записей) удаляются потоково батчами по 256.
-- **Код:** `internal/ui/delete.go`, `internal/fsops/progress.go` (`Remove`, `removeTreeStep`), `internal/fsops/remove_large_test.go`.
+- **Invocation:** `Shift+F8`, `Shift+Delete`, menu `Files → Delete permanently…` (`⇧F8`).
+- **Dialog:** `Delete permanently`: `Permanently delete <names>?`, buttons `Delete`, `Cancel` (with `ConfirmDelete`).
+- **Behavior:** `workProgress("Deleting permanently")`, `Streaming`; `fsops.Remove(path, o)` → `removeTree`: a walk without following symlinks, `Attempt("delete")` on each item (Retry/Skip/Skip all/Cancel), the `BeforeDelete` read-only question for files, `.DS_Store` with `IgnoreDSStore` is not counted in the progress, but the directory is removed in full. Skipping a child item keeps the parent directory (`ErrSkipped` propagates up the tree) and continues with the siblings. On `ENOTEMPTY` of a directory (Finder managed to write a `.DS_Store`) — re-read and delete again, up to 3 attempts, but only if it is the same inode (does not follow a directory replaced by a symlink). Large directories (a test with 2200 entries) are removed in a streaming fashion in batches of 256.
+- **Code:** `internal/ui/delete.go`, `internal/fsops/progress.go` (`Remove`, `removeTreeStep`), `internal/fsops/remove_large_test.go`.
 
-#### Удаление на удалённой панели
-- **Вызов:** те же клавиши (`F8`, `Delete`, `Shift+F8`, `Shift+Delete`) — везде одно поведение, Trash нет.
-- **Диалог (всегда, независимо от `ConfirmDelete`):** `Delete remote files permanently`: `Delete N selected item(s) on <label>? No remote Trash is available.`, кнопки `Delete`, `Cancel`.
-- **Поведение:** `workProgress("Deleting remote files")`, `remotefs.RemoveTree`: рекурсивно, глубина ≤ 256 (`remote tree depth exceeds 256`), `Attempt("delete")`, `BeforeDelete` read-only вопрос, `unsafe server filename` для небезопасных имён с сервера; пропуски сохраняют родителя.
-- **Код:** `internal/ui/remote.go` (`remoteDelete`), `internal/remotefs/transfer.go` (`RemoveTree`).
+#### Deletion on a remote panel
+- **Invocation:** the same keys (`F8`, `Delete`, `Shift+F8`, `Shift+Delete`) — the behavior is the same everywhere, there is no Trash.
+- **Dialog (always, regardless of `ConfirmDelete`):** `Delete remote files permanently`: `Delete N selected item(s) on <label>? No remote Trash is available.`, buttons `Delete`, `Cancel`.
+- **Behavior:** `workProgress("Deleting remote files")`, `remotefs.RemoveTree`: recursive, depth ≤ 256 (`remote tree depth exceeds 256`), `Attempt("delete")`, the `BeforeDelete` read-only question, `unsafe server filename` for unsafe names from the server; skips keep the parent.
+- **Code:** `internal/ui/remote.go` (`remoteDelete`), `internal/remotefs/transfer.go` (`RemoveTree`).
 
-## Удалённые панели (FTP/FTPS/SFTP) в файловых операциях
+## Remote Panels (FTP/FTPS/SFTP) in File Operations
 
-#### F5 с участием удалённой панели
-- **Поведение:** тот же диалог `Copy` (флажки и воркеры). Воркеры открывают отдельные соединения. Файл копируется в временное имя `.farshmac-part-<rand>` в каталоге назначения, потом `Rename` (при отмене временный файл удаляется, для remote — отдельной короткой сессией с таймаутом 2 с). Перед публикацией проверяется, что назначение не изменилось (`destination changed during transfer` / `destination appeared during transfer`), `source size changed while copying …`. Симлинки переносятся как ссылки (`Readlink`/`Symlink`); спецфайлы → `unsupported remote special file`. Удалённые каталоги > 100 000 записей → `remote directory exceeds 100000 entries`; имена проверяются `ValidName` (`unsafe filename from server`).
-- **Метаданные (portable):** при `Preserve permissions` — `Chmod` + **всегда** добавляется ошибка `remote transfer cannot preserve owner/group and ACL`; при `Preserve attributes` — `Chtimes(mtime)` + **всегда** `remote transfer cannot preserve xattrs, flags and creation time`; для симлинков — `remote transfer cannot preserve symbolic-link metadata`. Поэтому при включённых флажках для каждого файла задаётся вопрос `Cannot preserve metadata` (`Copy anyway` / `For all` / …); `For all` подавляет дальнейшие вопросы. Чтобы вопросов не было — выключить оба флажка в диалоге.
-- **Коллизии:** тот же диалог (Overwrite/Skip/Rename/Append/Cancel); Append реализован копированием старого назначения в temp и дописыванием (`destination size changed during append`); после Append — `Chmod` в права назначения (с вопросом метаданных при ошибке).
-- **Код:** `internal/remotefs/transfer.go` (`Copy`, `copyFile`, `portableMetadata`).
+#### F5 involving a remote panel
+- **Behavior:** the same `Copy` dialog (checkboxes and workers). Workers open separate connections. A file is copied to a temporary name `.farshmac-part-<rand>` in the destination directory, then `Rename` (on cancellation the temporary file is removed; for remote — by a separate short session with a 2 s timeout). Before publication it is checked that the destination has not changed (`destination changed during transfer` / `destination appeared during transfer`), `source size changed while copying …`. Symlinks are transferred as links (`Readlink`/`Symlink`); special files → `unsupported remote special file`. Remote directories > 100 000 entries → `remote directory exceeds 100000 entries`; names are checked with `ValidName` (`unsafe filename from server`).
+- **Metadata (portable):** with `Preserve permissions` — `Chmod` + the error `remote transfer cannot preserve owner/group and ACL` is **always** added; with `Preserve attributes` — `Chtimes(mtime)` + **always** `remote transfer cannot preserve xattrs, flags and creation time`; for symlinks — `remote transfer cannot preserve symbolic-link metadata`. Therefore, with the checkboxes on, the `Cannot preserve metadata` question is asked for every file (`Copy anyway` / `For all` / …); `For all` suppresses further questions. To avoid the questions — turn off both checkboxes in the dialog.
+- **Collisions:** the same dialog (Overwrite/Skip/Rename/Append/Cancel); Append is implemented by copying the old destination to temp and appending (`destination size changed during append`); after Append — `Chmod` to the destination's permissions (with a metadata question on error).
+- **Code:** `internal/remotefs/transfer.go` (`Copy`, `copyFile`, `portableMetadata`).
 
-#### F6 с удалённой панелью — Remote move / rename
-- **Где доступно:** только если **обе** панели на одном сервере (`Endpoint.Same` по label). Иначе статус `Remote move is available within the same server. Between servers use F5 Copy, then Delete.`
-- **Диалог:** `prompt` `Remote move / rename`, текст `Destination on the same server`, значение как у F6.
-- **Поведение:** `workProgress("Renaming remote files")`; назначение `Lstat`; `destination must be an existing directory` при нескольких элементах; `transferIntoDirectory` как локально; `remotefs.Move`: `destination is inside source`, `Rename` если назначения нет; каталог→каталог — слияние с рекурсией (`delete source folder` после опустошения); файл→файл — коллизия: Skip/Rename/Append (копия+`delete source`)/Replace (проверка `destination changed during move`, затем `Rename`); `cannot replace a file with a directory or a directory with a file`. Сервер, не умеющий переименовывать между томами, вернёт ошибку (деградации в copy+delete нет).
-- **Код:** `internal/ui/remote.go` (`remoteMoveDialog`), `internal/remotefs/move.go`.
+#### F6 with a remote panel — Remote move / rename
+- **Where available:** only if **both** panels are on the same server (`Endpoint.Same` by label). Otherwise status `Remote move is available within the same server. Between servers use F5 Copy, then Delete.`
+- **Dialog:** `prompt` `Remote move / rename`, text `Destination on the same server`, value as for F6.
+- **Behavior:** `workProgress("Renaming remote files")`; the destination is `Lstat`-ed; `destination must be an existing directory` with multiple items; `transferIntoDirectory` as locally; `remotefs.Move`: `destination is inside source`, `Rename` if the destination does not exist; directory→directory — a recursive merge (`delete source folder` after it is emptied); file→file — a collision: Skip/Rename/Append (copy+`delete source`)/Replace (check `destination changed during move`, then `Rename`); `cannot replace a file with a directory or a directory with a file`. A server that cannot rename across volumes returns an error (there is no degradation to copy+delete).
+- **Code:** `internal/ui/remote.go` (`remoteMoveDialog`), `internal/remotefs/move.go`.
 
-#### Команды, недоступные на удалённой панели
-- `Shift+F1/F2/F3` (архивы), `Alt+F7` (поиск), `Alt+F6` (link), `File attributes…`, `Apply command…`, `F2` user menu (запуск), `Shift+F4` new file, `Alt+F10` tree → статус `This command requires a local panel. Use F5 to copy remote files first.`
+#### Commands unavailable on a remote panel
+- `Shift+F1/F2/F3` (archives), `Alt+F7` (search), `Alt+F6` (link), `File attributes…`, `Apply command…`, `F2` user menu (launch), `Shift+F4` new file, `Alt+F10` tree → status `This command requires a local panel. Use F5 to copy remote files first.`
 - `Shift+Enter` → `Copy remote files to a local panel before opening them with macOS`.
-- Quick view на удалённый файл: `Remote file: use F3 to download and view`.
-- **Код:** `internal/ui/remote.go` (`remoteUnsupported`), `launch.go`, `commands.go`.
+- Quick view of a remote file: `Remote file: use F3 to download and view`.
+- **Code:** `internal/ui/remote.go` (`remoteUnsupported`), `launch.go`, `commands.go`.
 
-## Архивы
+## Archives
 
-#### Поддерживаемые форматы (`formats.go`)
-- `ArchiveFormat(name)` по суффиксу (без учёта регистра): `.tar.gz`/`.tgz` → tar.gz; `.tar.bz2`/`.tbz2`/`.tbz` → tar.bz2; `.tar.xz`/`.txz` → tar.xz; `.tar`; `.zip`/`.jar`/`.war` → zip; `.7z`; `.rar`; `.cpio`. Остальное — не архив.
-- Чтение: ZIP — Go `archive/zip` по central directory (должен быть валиден; `archive exceeds 100000 entries`); всё остальное (и ZIP для list/test/нестандартных методов сжатия) — `/usr/bin/tar -c -P -f - --format=pax @<src>` (bsdtar/libarchive macOS) в отдельной process group с `COPYFILE_DISABLE=1`, без `TAR_OPTIONS`; на Esc — `SIGKILL` всей группе. gzip-потоки дополнительно проверяются Go (`gzip integrity: …`, `nonzero data after gzip stream`). RAR/CPIO — только чтение, насколько умеет системный libarchive.
-- Создание: `.zip` — Go; `.tar`, `.tar.gz` (`-z`), `.tar.bz2` (`-j`), `.tar.xz` (`-J`), `.7z` (`--format=7zip`) — Go генерирует PAX-поток, bsdtar упаковывает; иное расширение → `creation supports .zip, .tar, .tar.gz, .tar.bz2, .tar.xz and .7z`.
-- Ошибка декодера: `archive operation failed (damaged, encrypted or unsupported archive): <err>: <stderr до 32 КиБ>`.
-- Лимиты: 100 000 записей (`archiveEntryLimit`), отчёт до 10 000 строк / 4 МиБ.
-- **Код:** `internal/fsops/formats.go`, `archive.go`, `archive_index.go`, `archive_zip_selection.go`.
+#### Supported formats (`formats.go`)
+- `ArchiveFormat(name)` by suffix (case-insensitive): `.tar.gz`/`.tgz` → tar.gz; `.tar.bz2`/`.tbz2`/`.tbz` → tar.bz2; `.tar.xz`/`.txz` → tar.xz; `.tar`; `.zip`/`.jar`/`.war` → zip; `.7z`; `.rar`; `.cpio`. Anything else is not an archive.
+- Reading: ZIP — Go `archive/zip` via the central directory (must be valid; `archive exceeds 100000 entries`); everything else (and ZIP for list/test/non-standard compression methods) — `/usr/bin/tar -c -P -f - --format=pax @<src>` (macOS bsdtar/libarchive) in a separate process group with `COPYFILE_DISABLE=1`, without `TAR_OPTIONS`; on Esc — `SIGKILL` to the whole group. gzip streams are additionally verified by Go (`gzip integrity: …`, `nonzero data after gzip stream`). RAR/CPIO — read only, as far as the system libarchive can.
+- Creation: `.zip` — Go; `.tar`, `.tar.gz` (`-z`), `.tar.bz2` (`-j`), `.tar.xz` (`-J`), `.7z` (`--format=7zip`) — Go generates a PAX stream, bsdtar packs it; any other extension → `creation supports .zip, .tar, .tar.gz, .tar.bz2, .tar.xz and .7z`.
+- Decoder error: `archive operation failed (damaged, encrypted or unsupported archive): <err>: <stderr up to 32 KiB>`.
+- Limits: 100 000 entries (`archiveEntryLimit`), report up to 10 000 lines / 4 MiB.
+- **Code:** `internal/fsops/formats.go`, `archive.go`, `archive_index.go`, `archive_zip_selection.go`.
 
-#### Вход в архив (Enter / Ctrl+PgDn / двойной клик)
-- **Вызов:** `Enter` на файле, для которого `ArchiveFormat != ""` (даже если файл исполняемый — проверка архива идёт раньше ассоциаций и exec-бита); `Ctrl/Cmd+PageDown` — если имя подходит под `isArchiveName` (список `.zip .tar .gz .bz2 .xz .7z .rar .tgz .jar`); двойной клик = Enter.
-- **Поведение:** `backgroundTask("Opening archive")` → `fsops.ReadArchiveIndex` (только метаданные: ZIP — central directory; иначе потоковое чтение через bsdtar с прогрессом `Streaming`). Ограничения индекса: `archive index limit (100,000 entries / 16 MiB names)`, `archive path too long/deep` (> 4096 байт или > 64 `/`), `duplicate/conflicting archive entry`, `archive parent is not a directory`, `unsupported archive entry` (только dir/reg/symlink/hardlink), `unsafe archive path: …` (абсолютные, `..`, `\`, `C:`), `not a regular archive`, `invalid archive root`. По готовности панель переключается в режим архива: `p.Archive = catalog`, `Remote=nil`, вид Tree/Info/Quick → `Full`; загружается корень (или ранее открытый подкаталог при Cmd+R). Info panel для архива: `Archive (read-only)\nF5 extracts selected files/folders\n.. exits the archive`.
-- **Навигация:** Enter на каталоге — вход; `..` в корне архива загружает родительский каталог файла архива (обычная загрузка, `p.Archive = nil`, курсор на архиве). Внутри работают отметки, сортировка, фильтр (`Filter`/`MaskGroups`), скрытие `.`-файлов и `.DS_Store`. `Cmd+R` перечитывает каталог архива (`openArchive`). Если файл архива изменился (`SameFile`/размер/mtime) — `archive changed on disk; leave and reopen it` при любой операции.
-- **Ограничения:** `Ctrl+T` (Tree) на архивной панели → `Tree view is unavailable inside archives`.
-- **Код:** `internal/ui/archive_panel.go` (`openArchive`, `openArchiveAt`, `loadArchiveDirectory`, `enterArchiveMember`), `internal/ui/launch.go` (`enterFile`), `internal/ui/far_keys.go` (`isArchiveName`), `internal/fsops/archive_index.go`.
+#### Entering an archive (Enter / Ctrl+PgDn / double click)
+- **Invocation:** `Enter` on a file for which `ArchiveFormat != ""` (even if the file is executable — the archive check precedes associations and the exec bit); `Ctrl/Cmd+PageDown` — if the name matches `isArchiveName` (the list `.zip .tar .gz .bz2 .xz .7z .rar .tgz .jar`); double click = Enter.
+- **Behavior:** `backgroundTask("Opening archive")` → `fsops.ReadArchiveIndex` (metadata only: ZIP — the central directory; otherwise streaming reading via bsdtar with `Streaming` progress). Index limits: `archive index limit (100,000 entries / 16 MiB names)`, `archive path too long/deep` (> 4096 bytes or > 64 `/`), `duplicate/conflicting archive entry`, `archive parent is not a directory`, `unsupported archive entry` (only dir/reg/symlink/hardlink), `unsafe archive path: …` (absolute, `..`, `\`, `C:`), `not a regular archive`, `invalid archive root`. When ready, the panel switches to archive mode: `p.Archive = catalog`, `Remote=nil`, the Tree/Info/Quick view → `Full`; the root is loaded (or the previously opened subdirectory on Cmd+R). The Info panel for an archive: `Archive (read-only)\nF5 extracts selected files/folders\n.. exits the archive`.
+- **Navigation:** Enter on a directory — enters it; `..` at the archive root loads the parent directory of the archive file (a normal load, `p.Archive = nil`, cursor on the archive). Inside, marks, sorting, filter (`Filter`/`MaskGroups`), hiding of `.`-files and `.DS_Store` all work. `Cmd+R` re-reads the archive directory (`openArchive`). If the archive file has changed (`SameFile`/size/mtime) — `archive changed on disk; leave and reopen it` on any operation.
+- **Limitations:** `Ctrl+T` (Tree) on an archive panel → `Tree view is unavailable inside archives`.
+- **Code:** `internal/ui/archive_panel.go` (`openArchive`, `openArchiveAt`, `loadArchiveDirectory`, `enterArchiveMember`), `internal/ui/launch.go` (`enterFile`), `internal/ui/far_keys.go` (`isArchiveName`), `internal/fsops/archive_index.go`.
 
-#### Просмотр члена архива (F3 / Enter)
-- **Вызов:** `F3`, `Enter` на обычном файле внутри архива (двойной клик).
-- **Поведение:** `Enter` на вложенном архиве → статус `Copy the nested archive out with F5 to open it`; член-симлинк → `Use F5 to copy the archive link`. Иначе `backgroundTask("Opening archive member")`: `ExtractSelection([name], <tmp farshmac-archive-view-*>/content)`, документ открывается внутренним viewer'ом в режиме только чтения (`ReadOnly`, `ArchiveSource`, `Path` = виртуальный путь); временный каталог удаляется при закрытии документа/окна. `F4` в архиве → `Archive is read-only. Use F5 to copy files out.`; `Shift+F4`, `F6`, `F7`, `F8`, `Alt+F6`, `File attributes…`, `Apply command…`, `Shift+F1` — то же сообщение. `F3` на каталоге архива — расчёт размеров (`calculateFolderSizes`).
-- **Код:** `internal/ui/archive_panel.go` (`viewArchiveMember`, `archiveReadOnly`), `internal/ui/document.go` (`finishCloseDocument`).
+#### Viewing an archive member (F3 / Enter)
+- **Invocation:** `F3`, `Enter` on a regular file inside an archive (double click).
+- **Behavior:** `Enter` on a nested archive → status `Copy the nested archive out with F5 to open it`; a symlink member → `Use F5 to copy the archive link`. Otherwise `backgroundTask("Opening archive member")`: `ExtractSelection([name], <tmp farshmac-archive-view-*>/content)`, the document opens in the internal viewer in read-only mode (`ReadOnly`, `ArchiveSource`, `Path` = the virtual path); the temporary directory is removed when the document/window is closed. `F4` in an archive → `Archive is read-only. Use F5 to copy files out.`; `Shift+F4`, `F6`, `F7`, `F8`, `Alt+F6`, `File attributes…`, `Apply command…`, `Shift+F1` — the same message. `F3` on an archive directory — size calculation (`calculateFolderSizes`).
+- **Code:** `internal/ui/archive_panel.go` (`viewArchiveMember`, `archiveReadOnly`), `internal/ui/document.go` (`finishCloseDocument`).
 
-#### F5 из архива — извлечение выбранного
-- **Поведение:** см. F5: `catalog.Relative` каждого пути (`outside archive`), `ExtractSelection(names, tmp)` — извлекаются выбранные поддеревья плюс цели их жёстких ссылок (`missing hard-link target`, `cyclic archive hard link`, `archive entry not found`, `no archive entries selected`); для ZIP (Store/Deflate) читаются только выбранные члены с проверкой CRC, иначе полный проход bsdtar. Затем обычное копирование из temp в назначение (слияние каталогов, коллизии, прогресс, Esc); temp удаляется всегда. Запись в архив невозможна (противоположная панель-архив как назначение → `Choose a regular destination panel; writing into archives is not supported`).
-- **Код:** `internal/ui/transfers.go`, `internal/fsops/archive_index.go` (`ExtractSelection`), `archive_zip_selection.go`.
+#### F5 from an archive — extracting the selection
+- **Behavior:** see F5: `catalog.Relative` of each path (`outside archive`), `ExtractSelection(names, tmp)` — the selected subtrees are extracted plus the targets of their hard links (`missing hard-link target`, `cyclic archive hard link`, `archive entry not found`, `no archive entries selected`); for ZIP (Store/Deflate) only the selected members are read with a CRC check, otherwise a full bsdtar pass. Then a normal copy from temp to the destination (directory merging, collisions, progress, Esc); temp is always removed. Writing into an archive is impossible (an archive opposite panel as the destination → `Choose a regular destination panel; writing into archives is not supported`).
+- **Code:** `internal/ui/transfers.go`, `internal/fsops/archive_index.go` (`ExtractSelection`), `archive_zip_selection.go`.
 
 #### Shift+F1 — Create archive
-- **Вызов:** `Shift+F1`, меню `Files → Create archive…`.
-- **Где доступно:** локальная активная панель и локальная противоположная; внутри архива → `Archive is read-only…`; пустой выбор — ничего.
-- **Диалог:** `prompt` `Create archive`, текст `New filename: .zip / .tar.gz / .tar.bz2 / .tar.xz / .7z`, значение `<путь другой панели>/<basename первого выбранного>.zip`.
-- **Поведение:** `workProgress("Creating archive")` → `Attempt("create archive", <пути через \n>, dst)` → `fsops.CreateArchive(paths, expand(s, <путь активной панели>))`. Проверки: `no files selected`, `archive already exists: <dst>` (никогда не перезаписывает), `duplicate archive root: <name>` (одинаковые basename), `archive destination is inside the source directory`. Сначала `o.Scan(paths)` (итог известен → проценты/ETA), запись во временный файл `.farshmac-zip-*`/`.farshmac-archive-*` рядом, публикация `os.Link` (без замены). Имена в архиве — относительно родителя каждого корня. Симлинки сохраняются как ссылки; спецфайлы → `unsupported special file: <path>`; > 100 000 записей → `archive exceeds 100000 entries`. ZIP: Deflate, каталоги с `/`. Сжатие bsdtar может продолжаться после отправки всех данных — отмена доступна.
-- **Код:** `internal/ui/transfers.go` (`archiveCreate`), `internal/fsops/formats.go` (`CreateArchive`, `checkArchiveDestination`, `writeArchiveSources`), `archive.go` (`CreateZIP`).
+- **Invocation:** `Shift+F1`, menu `Files → Create archive…`.
+- **Where available:** a local active panel and a local opposite panel; inside an archive → `Archive is read-only…`; an empty selection — nothing.
+- **Dialog:** `prompt` `Create archive`, text `New filename: .zip / .tar.gz / .tar.bz2 / .tar.xz / .7z`, value `<other panel path>/<basename of the first selected item>.zip`.
+- **Behavior:** `workProgress("Creating archive")` → `Attempt("create archive", <paths separated by \n>, dst)` → `fsops.CreateArchive(paths, expand(s, <active panel path>))`. Checks: `no files selected`, `archive already exists: <dst>` (never overwrites), `duplicate archive root: <name>` (identical basenames), `archive destination is inside the source directory`. First `o.Scan(paths)` (the total is known → percentages/ETA), writing to a temporary file `.farshmac-zip-*`/`.farshmac-archive-*` next to it, publication via `os.Link` (no replacement). Names in the archive are relative to the parent of each root. Symlinks are stored as links; special files → `unsupported special file: <path>`; > 100 000 entries → `archive exceeds 100000 entries`. ZIP: Deflate, directories with `/`. bsdtar compression may continue after all data has been sent — cancellation is available.
+- **Code:** `internal/ui/transfers.go` (`archiveCreate`), `internal/fsops/formats.go` (`CreateArchive`, `checkArchiveDestination`, `writeArchiveSources`), `archive.go` (`CreateZIP`).
 
 #### Shift+F2 — Extract archive
-- **Вызов:** `Shift+F2`, меню `Files → Extract archive…`, пункт `Extract to folder…` в Shift+F3.
-- **Где доступно:** локальные панели (активная и противоположная не remote). Источник — текущий элемент; внутри архивной панели — сам файл архива. Формат текущего файла **не проверяется** (неархив даст ошибку декодера).
-- **Диалог:** `prompt` `Extract archive`, текст `New destination folder`, значение `<filesystemPath другой панели>/<ArchiveStem(имя)>` (`ArchiveStem` снимает известный суффикс; пустая основа → `archive`).
-- **Поведение:** `workProgress("Extracting archive")` → `Attempt("extract archive")` → `fsops.ExtractArchive`: назначение должно отсутствовать (`destination already exists: <dst>`, слияния нет); staging `.farshmac-extract-*` рядом (0700) через `os.Root`; валидация имён (`unsafe archive path`, `invalid root archive entry`, `duplicate archive entry`, `unsupported archive entry type`, `unsafe archive link`, `hard link target is not a regular file`); файлы создаются `O_EXCL` с правами `mode|0600`, каталоги `mode|0700`, mtime файлов восстанавливается; ссылки создаются после файлов (жёсткие — только на уже извлечённые обычные файлы, символические — относительные внутри корня, потом проверка `Stat`); `.DS_Store` пропускается при `IgnoreDSStore`; публикация `Move(staging, dst)` (RENAME_EXCL). Ошибка/отмена удаляет staging. Прогресс `Streaming` (итог неизвестен).
-- **Код:** `internal/ui/transfers.go` (`archiveExtract`, `archiveExtractPath`), `internal/fsops/formats.go` (`extractArchive`, `safeArchiveName`, `ArchiveStem`).
+- **Invocation:** `Shift+F2`, menu `Files → Extract archive…`, the `Extract to folder…` item in Shift+F3.
+- **Where available:** local panels (the active and the opposite are not remote). The source is the current item; inside an archive panel — the archive file itself. The format of the current file is **not checked** (a non-archive yields a decoder error).
+- **Dialog:** `prompt` `Extract archive`, text `New destination folder`, value `<filesystemPath of the other panel>/<ArchiveStem(name)>` (`ArchiveStem` strips the known suffix; an empty stem → `archive`).
+- **Behavior:** `workProgress("Extracting archive")` → `Attempt("extract archive")` → `fsops.ExtractArchive`: the destination must not exist (`destination already exists: <dst>`, no merging); staging `.farshmac-extract-*` next to it (0700) via `os.Root`; name validation (`unsafe archive path`, `invalid root archive entry`, `duplicate archive entry`, `unsupported archive entry type`, `unsafe archive link`, `hard link target is not a regular file`); files are created with `O_EXCL` with permissions `mode|0600`, directories `mode|0700`, file mtime is restored; links are created after files (hard links — only to already extracted regular files, symbolic — relative within the root, then a `Stat` check); `.DS_Store` is skipped with `IgnoreDSStore`; publication `Move(staging, dst)` (RENAME_EXCL). An error/cancellation removes the staging. `Streaming` progress (the total is unknown).
+- **Code:** `internal/ui/transfers.go` (`archiveExtract`, `archiveExtractPath`), `internal/fsops/formats.go` (`extractArchive`, `safeArchiveName`, `ArchiveStem`).
 
 #### Shift+F3 — Archive commands
-- **Вызов:** `Shift+F3`, меню `Files → Archive commands…`.
-- **Где доступно:** локальная панель; путь = текущий элемент (в архиве — сам архив); пусто — ничего.
-- **Диалог:** список `Archive: <basename>` с пунктами `List contents`, `Test archive`, `Extract to folder…` (кнопки `Select`/`Cancel`).
-- **Поведение:** `List`/`Test` → `backgroundProgress("Reading archive")` → `fsops.ArchiveContents(path, test)` через bsdtar (все члены читаются полностью даже для списка); результат показывается как документ-отчёт с заголовком `Archive: <basename>`: строки `%12d  <имя>` (управляющие символы → `�`, каталоги с `/`, ссылки ` -> "target"`), при усечении `Listing truncated (10,000 rows / 4 MiB); all entries were read.`, при тесте `Archive integrity: OK (all entries decoded; available format checksums verified)`. `Extract to folder…` → Shift+F2.
-- **Код:** `internal/ui/transfers.go` (`archiveCommands`), `internal/ui/commands.go` (`report`), `internal/fsops/formats.go` (`ArchiveContents`). (`ZIPContents`/`ExtractZIP` в `archive.go` из UI не вызываются.)
+- **Invocation:** `Shift+F3`, menu `Files → Archive commands…`.
+- **Where available:** a local panel; the path = the current item (in an archive — the archive itself); empty — nothing.
+- **Dialog:** a list `Archive: <basename>` with the items `List contents`, `Test archive`, `Extract to folder…` (buttons `Select`/`Cancel`).
+- **Behavior:** `List`/`Test` → `backgroundProgress("Reading archive")` → `fsops.ArchiveContents(path, test)` via bsdtar (all members are read in full even for the listing); the result is shown as a report document titled `Archive: <basename>`: lines `%12d  <name>` (control characters → `�`, directories with `/`, links ` -> "target"`), on truncation `Listing truncated (10,000 rows / 4 MiB); all entries were read.`, for the test `Archive integrity: OK (all entries decoded; available format checksums verified)`. `Extract to folder…` → Shift+F2.
+- **Code:** `internal/ui/transfers.go` (`archiveCommands`), `internal/ui/commands.go` (`report`), `internal/fsops/formats.go` (`ArchiveContents`). (`ZIPContents`/`ExtractZIP` in `archive.go` are not called from the UI.)
 
-#### Ограничения архивов
-- Только чтение: нет записи/редактирования/удаления/перемещения членов, записи в архив как назначение.
-- Вложенные архивы не открываются напрямую (скопировать F5).
-- Зашифрованные/многотомные — не поддерживаются (ошибка декодера; скрытый запрос пароля невозможен — нет терминала).
-- `Shift+Enter` на члене → `Use F5 to copy this archive item out before opening it with macOS`.
-- Восстановление сессии после перезапуска не возвращает в архив (см. ARCHIVE_SUPPORT.md; в коде `openArchiveAt` не вызывается при старте).
+#### Archive limitations
+- Read only: no writing/editing/deleting/moving of members, no writing into an archive as a destination.
+- Nested archives are not opened directly (copy out with F5).
+- Encrypted/multi-volume archives are not supported (decoder error; a hidden password prompt is impossible — there is no terminal).
+- `Shift+Enter` on a member → `Use F5 to copy this archive item out before opening it with macOS`.
+- Session restore after a restart does not return into the archive (see ARCHIVE_SUPPORT.md; in the code `openArchiveAt` is not called at startup).
 
-## Запуск и открытие файлов
+## Launching and Opening Files
 
-#### Enter на элементе панели
-- **Вызов:** `Enter` при пустой командной строке, двойной клик, `Ctrl/Cmd+PageDown` (только каталоги/архивы), выбор в fast find.
-- **Поведение (локальная панель, `enterFile`):**
-  1. Каталог, включая `.app` → вход (запуск приложения — Shift+Enter).
-  2. Файл с `ArchiveFormat != ""` → вход в архив.
-  3. Первая ассоциация (`Settings.Associations`) с непустым `Command`, чья маска подходит (`matchesMask`, с группами масок) → команда выполняется в терминале: `{}` заменяется на shell-quoted путь, иначе путь добавляется в конец; командная строка пользователя не затирается (`submitCommand(..., record=false)`), панели сменяются терминалом.
-  4. Обычный файл с битом исполнения (`0111`) → в терминале выполняется `'<path>'` (quoted).
-  5. Иначе → `/usr/bin/open <path>` (ассоциация macOS) в фоне `Opening <name>`; при ошибке статус и диалог `Opening <name> failed` с `<err>: <stdout/stderr>`.
-- **Удалённая панель:** каталог → вход; файл → `openRemoteDocument(false)` (скачивание `Downloading remote file` во временный каталог и внутренний viewer; `viewer requires a regular remote file`).
-- **Архив:** см. выше.
-- **Ошибки:** `os.Stat` ошибка → статус.
-- **Код:** `internal/ui/launch.go` (`enterFile`, `externalPlan`, `launch`, `submitCommand`), `internal/ui/app.go` (`execute`: `Shell unavailable`, `Shell is busy; ⌘O to return to it`).
+#### Enter on a panel item
+- **Invocation:** `Enter` with an empty command line, double click, `Ctrl/Cmd+PageDown` (directories/archives only), selection in fast find.
+- **Behavior (local panel, `enterFile`):**
+  1. A directory, including `.app` → enter it (launching the application — Shift+Enter).
+  2. A file with `ArchiveFormat != ""` → enter the archive.
+  3. The first association (`Settings.Associations`) with a non-empty `Command` whose mask matches (`matchesMask`, with mask groups) → the command runs in the terminal: `{}` is replaced with the shell-quoted path, otherwise the path is appended at the end; the user's command line is not overwritten (`submitCommand(..., record=false)`), the panels are replaced by the terminal.
+  4. A regular file with the execute bit (`0111`) → `'<path>'` (quoted) is executed in the terminal.
+  5. Otherwise → `/usr/bin/open <path>` (macOS association) in the background `Opening <name>`; on error a status and the dialog `Opening <name> failed` with `<err>: <stdout/stderr>`.
+- **Remote panel:** a directory → enter; a file → `openRemoteDocument(false)` (download `Downloading remote file` into a temporary directory and the internal viewer; `viewer requires a regular remote file`).
+- **Archive:** see above.
+- **Errors:** an `os.Stat` error → status.
+- **Code:** `internal/ui/launch.go` (`enterFile`, `externalPlan`, `launch`, `submitCommand`), `internal/ui/app.go` (`execute`: `Shell unavailable`, `Shell is busy; ⌘O to return to it`).
 
 #### Shift+Enter — Open with macOS
-- **Вызов:** `Shift+Enter`, меню `Files → Open with macOS` (`⇧Enter`).
-- **Поведение:** всегда `/usr/bin/open <абсолютный путь>` одним аргументом (без shell; ассоциации, exec-бит, viewer-настройки и командная строка игнорируются; черновик команды сохраняется). Каталог открывается в Finder, `.app` запускается, `..` открывает родителя. Выполняется как `workProgress("Opening <name>")` с отменой по Esc; ошибка → статус + диалог `Opening <name> failed` `[OK]` (тест: `No application is registered`).
-- **Ограничения:** удалённая панель → `Copy remote files to a local panel before opening them with macOS`; член архива → `Use F5 to copy this archive item out before opening it with macOS`; пустая панель — ничего.
-- **Код:** `internal/ui/launch.go` (`openSystemSelected`), `system_open_test.go`.
+- **Invocation:** `Shift+Enter`, menu `Files → Open with macOS` (`⇧Enter`).
+- **Behavior:** always `/usr/bin/open <absolute path>` as a single argument (no shell; associations, the exec bit, viewer settings and the command line are ignored; the command draft is preserved). A directory opens in Finder, an `.app` is launched, `..` opens the parent. Runs as `workProgress("Opening <name>")` with cancellation on Esc; error → status + dialog `Opening <name> failed` `[OK]` (test: `No application is registered`).
+- **Limitations:** a remote panel → `Copy remote files to a local panel before opening them with macOS`; an archive member → `Use F5 to copy this archive item out before opening it with macOS`; an empty panel — nothing.
+- **Code:** `internal/ui/launch.go` (`openSystemSelected`), `system_open_test.go`.
 
-#### F3 на картинке / PDF — графический просмотр
-- **Вызов:** F3 (и Alt+F3 / ⌘⇧F3, когда план — внутренний просмотрщик) на обычном локальном файле с расширением из `preview.Supported` (`.jpg .jpeg .png .gif .tif .tiff .bmp .heic .heif .webp .pdf`).
-- **Поведение:** `App.Image = imageView{Path}`; декодирование в sandbox-helper (`preview.RunSized`, до 2048 px по длинной стороне; фото уходят как JPEG, PNG/GIF/PDF — как PNG; лимит 12 МБ в helper, 20 МБ на чтение, таймаут 8 с). Пока грузится — чёрный экран с подписью `Loading <name>…` по центру; затем `Update.Preview{Full: true, X:0, Y:0, W: Cols, H: Rows}` и рендерер кладёт картинку поверх всей сетки (`#quick-preview.full`, `#panels.image` — чёрный фон, `object-fit: contain`). Заголовок окна — имя файла, `PanelKeys = false`, `Document = true`. Клавиши: Esc, F3, F10, Enter закрывают; остальные игнорируются; мышь игнорируется. Ошибка декодирования: подпись `<name>: cannot be shown (unsupported, damaged or too large)` и тот же текст в статусе; файла нет — `<name>: <reason>`. Quick view на это время не обновляется. Удалённые файлы и члены архивов по-прежнему идут через скачивание/извлечение в текстовый просмотрщик.
-- **Код:** `image_view.go: openImage, closeImage, imageKey, drawImage`, `image_preview.go: imagePreview`, `launch.go: openConfigured`.
+#### F3 on an image / PDF — graphical preview
+- **Invocation:** F3 (and Alt+F3 / ⌘⇧F3, when the plan is the internal viewer) on a regular local file with an extension from `preview.Supported` (`.jpg .jpeg .png .gif .tif .tiff .bmp .heic .heif .webp .pdf`).
+- **Behavior:** `App.Image = imageView{Path}`; decoding in the sandbox helper (`preview.RunSized`, up to 2048 px on the long side; photos are sent as JPEG, PNG/GIF/PDF — as PNG; a 12 MB limit in the helper, 20 MB for reading, 8 s timeout). While loading — a black screen with the caption `Loading <name>…` centered; then `Update.Preview{Full: true, X:0, Y:0, W: Cols, H: Rows}` and the renderer places the image over the whole grid (`#quick-preview.full`, `#panels.image` — black background, `object-fit: contain`). The window title is the file name, `PanelKeys = false`, `Document = true`. Keys: Esc, F3, F10, Enter close it; the rest are ignored; the mouse is ignored. Decoding error: the caption `<name>: cannot be shown (unsupported, damaged or too large)` and the same text in the status; file missing — `<name>: <reason>`. Quick view is not updated during this time. Remote files and archive members still go through download/extraction into the text viewer.
+- **Code:** `image_view.go: openImage, closeImage, imageKey, drawImage`, `image_preview.go: imagePreview`, `launch.go: openConfigured`.
 
-#### F3 / F4 — просмотр / правка (выбор внутреннего или внешнего)
-- **Вызов:** `F3`/`F4`, `Cmd+3`/`Cmd+4`, `Numpad5` (=F3), меню `Files → View / folder size`, `Files → Edit`; `Alt+F3`/`Alt+F4` — инвертировать выбор внутренний/внешний; `Cmd/Ctrl+Shift+F3`/`F4` — принудительно внутренний.
-- **Поведение (`openConfigured`):**
-  - Каталог под курсором: F3 → расчёт размера папки (`calculateFolderSizes(false)`); F4 → диалог `File attributes` (см. ниже).
-  - Удалённая панель → скачивание и внутренний документ (F4 — редактирование с последующей отправкой; детали у агента remote).
-  - Архив → F3 просмотр члена; F4 → read-only сообщение.
-  - Файл: `viewPlan`: базово `Settings.ExternalViewerDefault`/`ExternalViewer` (Viewer settings: `External by default`, `Command (blank=system)`) или `ExternalEditorDefault`/`ExternalEditor` (Editor settings). Первая подходящая ассоциация с непустым `Viewer`/`Editor` переопределяет команду и делает запуск внешним. `Alt` инвертирует результат. Внешний запуск: пустая команда → `/usr/bin/open <path>` (viewer) или `/usr/bin/open -t <path>` (editor, TextEdit/дефолтный текстовый редактор); иначе команда выполняется в терминале (`{}` или добавление quoted-пути). Внутренний → `openDocument(path, edit)`.
-- **Код:** `internal/ui/launch.go` (`openConfigured`, `viewPlan`, `externalPlan`), `internal/ui/settings.go`.
+#### F3 / F4 — view / edit (choosing internal or external)
+- **Invocation:** `F3`/`F4`, `Cmd+3`/`Cmd+4`, `Numpad5` (=F3), menu `Files → View / folder size`, `Files → Edit`; `Alt+F3`/`Alt+F4` — invert the internal/external choice; `Cmd/Ctrl+Shift+F3`/`F4` — force internal.
+- **Behavior (`openConfigured`):**
+  - A directory under the cursor: F3 → folder size calculation (`calculateFolderSizes(false)`); F4 → the `File attributes` dialog (see below).
+  - A remote panel → download and an internal document (F4 — editing with a subsequent upload; details with the remote agent).
+  - An archive → F3 views the member; F4 → the read-only message.
+  - A file: `viewPlan`: the base is `Settings.ExternalViewerDefault`/`ExternalViewer` (Viewer settings: `External by default`, `Command (blank=system)`) or `ExternalEditorDefault`/`ExternalEditor` (Editor settings). The first matching association with a non-empty `Viewer`/`Editor` overrides the command and makes the launch external. `Alt` inverts the result. External launch: an empty command → `/usr/bin/open <path>` (viewer) or `/usr/bin/open -t <path>` (editor, TextEdit/the default text editor); otherwise the command runs in the terminal (`{}` or appending the quoted path). Internal → `openDocument(path, edit)`.
+- **Code:** `internal/ui/launch.go` (`openConfigured`, `viewPlan`, `externalPlan`), `internal/ui/settings.go`.
 
-#### File associations… (меню Commands)
-- **Диалог:** список `File associations`: `Add association…`, `Open current file with macOS default app`, далее `<mask> → <command>` для каждой. Второй пункт запускает `/usr/bin/open <текущий путь>` (`workProgress("Opening")`).
-- **Форма** `File association — {} inserts filename`: поля `Masks`, `Run command`, `Viewer command`, `Editor command`; маски валидируются (`validateMasks`, ошибка в статус); пустая маска или все три команды пустые — ассоциация удаляется; сохраняется `saveSetup()`.
-- **Код:** `internal/ui/commands.go` (`fileAssociations`).
+#### File associations… (Commands menu)
+- **Dialog:** the list `File associations`: `Add association…`, `Open current file with macOS default app`, then `<mask> → <command>` for each one. The second item runs `/usr/bin/open <current path>` (`workProgress("Opening")`).
+- **Form** `File association — {} inserts filename`: fields `Masks`, `Run command`, `Viewer command`, `Editor command`; the masks are validated (`validateMasks`, error in the status); an empty mask or all three commands empty — the association is removed; saved with `saveSetup()`.
+- **Code:** `internal/ui/commands.go` (`fileAssociations`).
 
 #### F2 — User menu
-- **Вызов:** `F2`, `Cmd+2`, меню `Commands → User menu`.
-- **Поведение:** если `Settings.UserMenu` пуст — сразу открывается редактор меню. Иначе список `User menu` с именами команд; выбор → `runUserCommand`: на удалённой панели → `This command requires a local panel…`; `{}` заменяется на shell-quoted путь текущего элемента (если `{}` нет — путь **не** добавляется), команда записывается в `a.Command`, выполняется `execute()` (попадает в историю команд, открывается терминал).
-- **Редактирование (`Commands → Edit user menu…`):** список `Edit user menu`: `Add command…` + существующие; форма `User command — {} inserts filename` с полями `Label`, `Command (empty deletes)`; пустое имя или команда удаляет запись; `saveSetup()`.
-- **Код:** `internal/ui/commands.go` (`userMenu`, `editUserMenu`, `runUserCommand`).
+- **Invocation:** `F2`, `Cmd+2`, menu `Commands → User menu`.
+- **Behavior:** if `Settings.UserMenu` is empty — the menu editor opens immediately. Otherwise the list `User menu` with the command names; selection → `runUserCommand`: on a remote panel → `This command requires a local panel…`; `{}` is replaced with the shell-quoted path of the current item (if there is no `{}`, the path is **not** appended), the command is written into `a.Command` and `execute()` runs (it goes into the command history, the terminal opens).
+- **Editing (`Commands → Edit user menu…`):** the list `Edit user menu`: `Add command…` + existing ones; the form `User command — {} inserts filename` with the fields `Label`, `Command (empty deletes)`; an empty name or command removes the entry; `saveSetup()`.
+- **Code:** `internal/ui/commands.go` (`userMenu`, `editUserMenu`, `runUserCommand`).
 
-#### Apply command… (меню Files)
-- **Где доступно:** локальная панель, не архив, есть выбор.
-- **Диалог:** `prompt` `Apply command`, текст `Use {} for a shell-quoted filename`, пусто.
-- **Поведение:** для каждого выбранного пути формируется команда (`{}` → quoted путь, иначе ` <quoted путь>` в конец); все команды объединяются через `\n` в `a.Command` и выполняются одной отправкой в терминал.
-- **Код:** `internal/ui/commands.go` (`applyCommand`).
+#### Apply command… (Files menu)
+- **Where available:** a local panel, not an archive, with a selection.
+- **Dialog:** `prompt` `Apply command`, text `Use {} for a shell-quoted filename`, empty.
+- **Behavior:** for each selected path a command is built (`{}` → the quoted path, otherwise ` <quoted path>` appended at the end); all commands are joined with `\n` into `a.Command` and executed as a single submission to the terminal.
+- **Code:** `internal/ui/commands.go` (`applyCommand`).
 
-## Поиск и истории
+## Search and Histories
 
 #### Alt+F7 — Find file / Find folder
-- **Вызов:** `Alt+F7`, меню `Commands → Find file…` (`AltF7`); `Commands → Find folder…` (без клавиши).
-- **Где доступно:** локальная панель (remote → `This command requires a local panel…`); корень поиска — путь активной панели (в архиве — виртуальный путь, поиск по нему завершится ошибкой `Lstat`).
-- **Диалог (форма `Find file` / `Find folder`):** `Name masks:` (`*`), `Containing text:` (пусто), `[x] Search subfolders`, `[ ] Case sensitive text` (флажки в 2 колонки), кнопки `{ Find }` `[ Cancel ]`. Маски валидируются (`validateMasks`, ошибка в статус).
-- **Поведение:** `backgroundProgress("Searching <root>")`, `fsops.WalkDir` (без следования симлинкам, батчи по 256, отменяемо): нечитаемые пути считаются `skipped`; без `Search subfolders` обходится только корень; совпадение маски (для Find folder — только каталоги); текст ищется в обычных файлах блоками 64 КиБ с хвостом (`len(needle)*4+4`), без учёта регистра — через `ToLower`; лимит 10 000 результатов (`fs.SkipAll`, пометка `(limit)`).
-- **Результат:** пусто → статус `No matches (N unreadable paths)`; иначе список `<title> — N found, M unreadable[ (limit)]` с относительными путями. Enter/`Select` → `revealPath`: каталог — вход в него; файл — загрузка его каталога и курсор на нём (или статус `File is hidden by the current panel filter`). Отдельных действий F3/F4 в списке результатов нет (это обычный список выбора).
-- **Код:** `internal/ui/commands.go` (`findFiles`, `fileContains`, `revealPath`).
+- **Invocation:** `Alt+F7`, menu `Commands → Find file…` (`AltF7`); `Commands → Find folder…` (no key).
+- **Where available:** a local panel (remote → `This command requires a local panel…`); the search root is the active panel path (in an archive — the virtual path, searching it fails with an `Lstat` error).
+- **Dialog (form `Find file` / `Find folder`):** `Name masks:` (`*`), `Containing text:` (empty), `[x] Search subfolders`, `[ ] Case sensitive text` (checkboxes in 2 columns), buttons `{ Find }` `[ Cancel ]`. The masks are validated (`validateMasks`, error in the status).
+- **Behavior:** `backgroundProgress("Searching <root>")`, `fsops.WalkDir` (without following symlinks, batches of 256, cancellable): unreadable paths are counted as `skipped`; without `Search subfolders` only the root is walked; mask matching (for Find folder — directories only); text is searched in regular files in 64 KiB blocks with a tail (`len(needle)*4+4`), case-insensitively — via `ToLower`; a limit of 10 000 results (`fs.SkipAll`, the `(limit)` mark).
+- **Result:** empty → status `No matches (N unreadable paths)`; otherwise the list `<title> — N found, M unreadable[ (limit)]` with relative paths. Enter/`Select` → `revealPath`: a directory — enter it; a file — load its directory and put the cursor on it (or status `File is hidden by the current panel filter`). There are no separate F3/F4 actions in the result list (it is an ordinary selection list).
+- **Code:** `internal/ui/commands.go` (`findFiles`, `fileContains`, `revealPath`).
 
 #### Alt+F8 — Command history
-- **Вызов:** `Alt+F8`, `Commands → Command history` (`AltF8`).
-- **Поведение:** список `Command history` (новые сверху) из `a.history` (команды, выполненные из командной строки панелей, лимит `HistoryLimit`, default 200, сохраняется в setup.json); выбор помещает команду в командную строку (**не** выполняет). Пусто → статус `Command history is empty`. Также `Cmd/Ctrl+↑/↓`, `Ctrl+E/X` листают историю в строке.
-- **Код:** `internal/ui/commands.go` (`historyMenu("Commands")`).
+- **Invocation:** `Alt+F8`, `Commands → Command history` (`AltF8`).
+- **Behavior:** the list `Command history` (newest on top) from `a.history` (commands executed from the panels' command line, limit `HistoryLimit`, default 200, saved in setup.json); selection places the command into the command line (does **not** execute it). Empty → status `Command history is empty`. Also `Cmd/Ctrl+↑/↓`, `Ctrl+E/X` scroll the history in the line.
+- **Code:** `internal/ui/commands.go` (`historyMenu("Commands")`).
 
 #### Alt+F11 — View/edit history
-- **Вызов:** `Alt+F11`, `Commands → File view/edit history`.
-- **Поведение:** список `View/edit history` (новые сверху), элементы `View <path>` / `Edit <path>`; выбор → `openDocument(path, edit)` внутренним viewer/editor. Пусто → `View/edit history is empty`.
-- **Код:** `commands.go` (`historyMenu("Files")`).
+- **Invocation:** `Alt+F11`, `Commands → File view/edit history`.
+- **Behavior:** the list `View/edit history` (newest on top), items `View <path>` / `Edit <path>`; selection → `openDocument(path, edit)` with the internal viewer/editor. Empty → `View/edit history is empty`.
+- **Code:** `commands.go` (`historyMenu("Files")`).
 
 #### Alt+F12 — Folder history
-- **Вызов:** `Alt+F12`, `Commands → Folder history`.
-- **Поведение:** объединяет `a.folderHistory` с `History` обеих панелей (`appendUnique`, лимит `HistoryLimit`), список `Folder history` (новые сверху); выбор → `Load` в активной панели (ошибка в статус). Если пусто — статус `Folder history: empty`.
-- **Код:** `commands.go` (`historyMenu("Folders")`, `appendUnique`).
+- **Invocation:** `Alt+F12`, `Commands → Folder history`.
+- **Behavior:** merges `a.folderHistory` with the `History` of both panels (`appendUnique`, limit `HistoryLimit`), the list `Folder history` (newest on top); selection → `Load` in the active panel (error in the status). If empty — status `Folder history: empty`.
+- **Code:** `commands.go` (`historyMenu("Folders")`, `appendUnique`).
 
-## Прочие команды из `commands.go`
+## Other Commands from `commands.go`
 
-#### Task list (меню Commands → Task list)
-- **Поведение:** `backgroundProgress("Reading processes")` → `/bin/ps -axo pid,ppid,%cpu,%mem,comm`; вывод показывается как документ-отчёт `Processes` (только просмотр; завершать процессы нельзя).
-- **Код:** `commands.go` (`taskList`).
+#### Task list (menu Commands → Task list)
+- **Behavior:** `backgroundProgress("Reading processes")` → `/bin/ps -axo pid,ppid,%cpu,%mem,comm`; the output is shown as the report document `Processes` (view only; processes cannot be terminated).
+- **Code:** `commands.go` (`taskList`).
 
 #### Compare folders (Commands → Compare folders)
-- **Поведение:** без диалога; в обеих панелях отмечаются файлы (не каталоги), которых нет в другой панели, которые там каталог, отличаются размером или новее по mtime; предыдущие отметки сохраняются в `RestoreMarked`. Статус: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
-- **Код:** `commands.go` (`compareFolders`).
+- **Behavior:** no dialog; in both panels, files (not directories) are marked that are missing in the other panel, are a directory there, differ in size or are newer by mtime; the previous marks are saved in `RestoreMarked`. Status: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
+- **Code:** `commands.go` (`compareFolders`).
 
-#### File attributes… (Files → File attributes…, F4 на каталоге)
-- **Где доступно:** локальная панель, не архив, есть выбор.
-- **Диалог:** форма `File attributes`: `Permissions (octal):` (`%03o` первого выбранного), `Modified (local):` (`2006-01-02 15:04:05`).
-- **Поведение:** валидация: `Permissions must be 000–777` (статус), ошибка разбора даты → статус; `workProgress("Updating attributes")` для всех выбранных: `Chmod` + `Chtimes(atime=mtime=stamp)`; симлинк → ошибка `attributes of symlinks are not changed: <path>` (операция прерывается).
-- **Код:** `commands.go` (`fileAttributes`).
+#### File attributes… (Files → File attributes…, F4 on a directory)
+- **Where available:** a local panel, not an archive, with a selection.
+- **Dialog:** the form `File attributes`: `Permissions (octal):` (`%03o` of the first selected item), `Modified (local):` (`2006-01-02 15:04:05`).
+- **Behavior:** validation: `Permissions must be 000–777` (status), a date parse error → status; `workProgress("Updating attributes")` for all selected items: `Chmod` + `Chtimes(atime=mtime=stamp)`; a symlink → error `attributes of symlinks are not changed: <path>` (the operation is aborted).
+- **Code:** `commands.go` (`fileAttributes`).
 
 #### Alt+F6 / Files → Link… — Create link
-- **Диалог:** форма `Create link`: `Link name:` (`<другая панель>/<имя текущего>`), `[x] Symbolic link`.
-- **Поведение:** `os.Symlink(src, target)` или `os.Link` (жёсткая); ошибка в статус; refresh. Путь раскрывается относительно активной панели.
-- **Код:** `commands.go` (`createLink`), `far_keys.go`.
+- **Dialog:** the form `Create link`: `Link name:` (`<other panel>/<current name>`), `[x] Symbolic link`.
+- **Behavior:** `os.Symlink(src, target)` or `os.Link` (hard); error in the status; refresh. The path is expanded relative to the active panel.
+- **Code:** `commands.go` (`createLink`), `far_keys.go`.
 
 #### Alt+F10 — Folder tree
-- **Поведение:** `backgroundProgress("Reading folder tree")`, сканирование дерева (`scanTree`, `TreeDepth`), список `Folder tree` (`(partial)` при лимите/пропусках); выбор → переход в активной панели. Remote — недоступно.
-- **Код:** `commands.go` (`treeMenu`), `tree.go`.
+- **Behavior:** `backgroundProgress("Reading folder tree")`, tree scanning (`scanTree`, `TreeDepth`), the list `Folder tree` (`(partial)` on limit/skips); selection → navigation in the active panel. Remote — unavailable.
+- **Code:** `commands.go` (`treeMenu`), `tree.go`.
 
 #### Quick view (`updatePreview`)
-- **Поведение:** для панели в режиме `Quick view` при смене текущего элемента в другой панели: каталог — список до 100 записей (`Directory (preview, up to 100 entries)`); изображения/PDF — через helper (`Preview unavailable (unsupported, damaged or limit exceeded)`, `PDF · page 1 of N`, `<fmt> · W × H pixels`); обычный файл — первые 16 КиБ текста; remote → `Remote file: use F3 to download and view`. Не выполняется, пока `Busy`/открыт документ/терминал.
-- **Код:** `commands.go` (`updatePreview`).
+- **Behavior:** for a panel in `Quick view` mode when the current item changes in the other panel: a directory — a listing of up to 100 entries (`Directory (preview, up to 100 entries)`); images/PDF — via the helper (`Preview unavailable (unsupported, damaged or limit exceeded)`, `PDF · page 1 of N`, `<fmt> · W × H pixels`); a regular file — the first 16 KiB of text; remote → `Remote file: use F3 to download and view`. Not performed while `Busy`/a document is open/the terminal is active.
+- **Code:** `commands.go` (`updatePreview`).
 
-## Расхождения между документацией и кодом
+## Discrepancies Between Documentation and Code
 
-> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+> **Closed on the `backlog-fixes` branch:** the decisions on each item are in the "Decisions on discrepancies" section of `docs/IMPLEMENTATION_BACKLOG.md`.
 
-1. **Help (F1) в `app.go`:** «Cross-volume move is refused. Copy, verify, then delete explicitly.» — в коде `moveAcrossVolumes` выполняет копирование с полным сохранением метаданных и удаление источника (с диалогом `Cannot preserve metadata` при потерях). `docs/FILE_OPERATIONS.md` описывает это верно. Комментарий в `move_darwin.go` («Cross-volume moves are refused») тоже устарел.
-2. **Help:** «Copies preserve permissions, timestamps and links, not ACLs/xattrs» — код при включённых флажках сохраняет ACL (`COPYFILE_ACL`), xattr (`COPYFILE_XATTR`), флаги и creation time, а диалог F5 прямо предлагает «Preserve permissions (mode, owner, group, ACL)» / «Preserve attributes (xattrs, flags, timestamps)».
-3. **Help:** «F5 / F6 Copy / move or rename (no overwriting)» — перезапись существует через диалог коллизии (`Overwrite`/`Append`/`Rename`).
-4. **Help:** «Shift+Enter Open selected item with macOS (folders in Finder)» и README — соответствует; но Help перечисляет `Alt+F11/F12`, а не `Alt+F7/F8` (поиск/история команд) — они есть в коде и в меню, в справке отсутствуют.
-5. **ARCHIVE_SUPPORT.md:** «Enter opens an archive as a file panel, even when the archive has its executable bit set» — верно; однако `Ctrl+PgDn` использует отдельный список `isArchiveName` (`.zip .tar .gz .bz2 .xz .7z .rar .tgz .jar`), который не совпадает с `ArchiveFormat`: `.war`, `.cpio`, `.tbz`, `.tbz2`, `.txz` через Ctrl+PgDn не открываются, а одиночные `.gz/.bz2/.xz` проходят проверку, но `enterFile` их архивом не считает (откроет через macOS/ассоциацию).
-6. **ARCHIVE_SUPPORT.md:** «F9 → Files → Archive commands also provides …» — верно, но Shift+F2 (Extract archive) в коде не проверяет, что текущий элемент — архив; неархив даёт ошибку декодера `archive operation failed (damaged, encrypted or unsupported archive)`. В документации это не описано.
-7. **docs/FILE_OPERATIONS.md:** «Esc cancels a pending decision» — в коде Esc в диалоге-вопросе во время `Busy` отменяет **всю операцию** (`cancelOperation`), а не только текущее решение; результат тот же (`Cancel`), но формулировка неточна.
-8. **docs/FILE_OPERATIONS.md:** «Read-only confirmation uses POSIX mode bits» — верно; но документ не упоминает, что для удалённых копий с включёнными флажками метаданных вопрос «Cannot preserve metadata» задаётся **на каждый файл** (ошибки `remote transfer cannot preserve owner/group and ACL` / `xattrs, flags and creation time` добавляются безусловно), пока не выбран `For all`.
-9. **README:** «Cmd+Shift+H Shell command history: Enter to run, F4 to edit» относится к терминальной истории; история команд панелей (`Alt+F8`) только подставляет команду, не выполняет. README не упоминает Alt+F7/F8/F11/F12 и Shift+F1/F2/F3.
-10. **ARCHIVE_SUPPORT.md:** «Restart restores the containing directory and selects the archive» — в коде восстановление сессии не рассматривалось в рамках этой области; подтвердить не удалось (нет вызовов `openArchiveAt` при старте — согласуется).
-11. **ARCHIVE_SUPPORT.md:** таблица обещает «List / test / extract» для ZIP через общий интерфейс — в коде функции `ZIPContents`/`ExtractZIP` (Go-реализация для ZIP) существуют в `archive.go`, но UI их не использует: список/тест/полное извлечение всегда идут через bsdtar (`ArchiveContents`/`extractArchive`), а Go-ZIP используется только для индекса и выборочного извлечения (F5/F3) и для создания.
-12. **Help:** «F7 New directory» — заголовок диалога в коде `Make folder`; «F8 / Delete Move selected items to Trash» — верно; `Cmd+8` тоже Trash (не документировано нигде, кроме общего «Cmd+1 … Cmd+9»).
-13. **docs/FILE_OPERATIONS.md:** «Rename asks for a destination path» — в коде форма называется `Rename` с полем `New name`, кандидат `<stem> (copy)<ext>`; документ не описывает формат кандидата.
+1. **Help (F1) in `app.go`:** "Cross-volume move is refused. Copy, verify, then delete explicitly." — in the code `moveAcrossVolumes` performs a copy with full metadata preservation and removal of the source (with the `Cannot preserve metadata` dialog on losses). `docs/FILE_OPERATIONS.md` describes this correctly. The comment in `move_darwin.go` ("Cross-volume moves are refused") is also outdated.
+2. **Help:** "Copies preserve permissions, timestamps and links, not ACLs/xattrs" — with the checkboxes on, the code preserves ACL (`COPYFILE_ACL`), xattr (`COPYFILE_XATTR`), flags and creation time, and the F5 dialog explicitly offers "Preserve permissions (mode, owner, group, ACL)" / "Preserve attributes (xattrs, flags, timestamps)".
+3. **Help:** "F5 / F6 Copy / move or rename (no overwriting)" — overwriting exists via the collision dialog (`Overwrite`/`Append`/`Rename`).
+4. **Help:** "Shift+Enter Open selected item with macOS (folders in Finder)" and README — matches; but Help lists `Alt+F11/F12` and not `Alt+F7/F8` (search/command history) — they exist in the code and in the menu but are absent from the help.
+5. **ARCHIVE_SUPPORT.md:** "Enter opens an archive as a file panel, even when the archive has its executable bit set" — correct; however `Ctrl+PgDn` uses a separate list `isArchiveName` (`.zip .tar .gz .bz2 .xz .7z .rar .tgz .jar`) that does not match `ArchiveFormat`: `.war`, `.cpio`, `.tbz`, `.tbz2`, `.txz` do not open via Ctrl+PgDn, while single `.gz/.bz2/.xz` pass the check but `enterFile` does not treat them as archives (it opens them via macOS/an association).
+6. **ARCHIVE_SUPPORT.md:** "F9 → Files → Archive commands also provides …" — correct, but Shift+F2 (Extract archive) in the code does not check that the current item is an archive; a non-archive yields the decoder error `archive operation failed (damaged, encrypted or unsupported archive)`. This is not described in the documentation.
+7. **docs/FILE_OPERATIONS.md:** "Esc cancels a pending decision" — in the code, Esc in a question dialog while `Busy` cancels the **whole operation** (`cancelOperation`), not just the current decision; the result is the same (`Cancel`), but the wording is imprecise.
+8. **docs/FILE_OPERATIONS.md:** "Read-only confirmation uses POSIX mode bits" — correct; but the document does not mention that for remote copies with the metadata checkboxes on, the "Cannot preserve metadata" question is asked **for every file** (the errors `remote transfer cannot preserve owner/group and ACL` / `xattrs, flags and creation time` are added unconditionally) until `For all` is chosen.
+9. **README:** "Cmd+Shift+H Shell command history: Enter to run, F4 to edit" refers to the terminal history; the panels' command history (`Alt+F8`) only inserts the command, it does not execute it. README does not mention Alt+F7/F8/F11/F12 and Shift+F1/F2/F3.
+10. **ARCHIVE_SUPPORT.md:** "Restart restores the containing directory and selects the archive" — session restore was not examined in the code within the scope of this area; could not be confirmed (there are no `openArchiveAt` calls at startup — consistent).
+11. **ARCHIVE_SUPPORT.md:** the table promises "List / test / extract" for ZIP via the common interface — in the code the functions `ZIPContents`/`ExtractZIP` (the Go implementation for ZIP) exist in `archive.go`, but the UI does not use them: list/test/full extraction always go through bsdtar (`ArchiveContents`/`extractArchive`), and Go-ZIP is used only for the index and selective extraction (F5/F3) and for creation.
+12. **Help:** "F7 New directory" — the dialog title in the code is `Make folder`; "F8 / Delete Move selected items to Trash" — correct; `Cmd+8` is also Trash (not documented anywhere except the general "Cmd+1 … Cmd+9").
+13. **docs/FILE_OPERATIONS.md:** "Rename asks for a destination path" — in the code the form is called `Rename` with the field `New name`, the candidate is `<stem> (copy)<ext>`; the document does not describe the candidate format.
 
 
-<a id="часть-3"></a>
-# Часть 3. Внутренний просмотрщик и редактор
+<a id="part-3"></a>
+# Part 3. Internal Viewer and Editor
 
-Источник истины — код в `internal/ui/document*.go`, `internal/ui/remote_document.go`, `internal/ui/launch.go`, `internal/textfile/*.go`, `internal/highlight/*.go` на момент коммита `b91313a`. Строки интерфейса приведены дословно (английский). Все пути — относительно корня репозитория `/Users/ikim/src/remote-codex/farshmac`.
+The source of truth is the code in `internal/ui/document*.go`, `internal/ui/remote_document.go`, `internal/ui/launch.go`, `internal/textfile/*.go`, `internal/highlight/*.go` as of commit `b91313a`. Interface strings are given verbatim (English). All paths are relative to the repository root `/Users/ikim/src/remote-codex/farshmac`.
 
-## 0. Модель данных и общие правила
+## 0. Data model and general rules
 
-- Документ описан структурой `Document` (`internal/ui/document.go`). Ключевые поля:
-  - `*textfile.Buffer` — текст (`Text`, всегда с `\n`-окончаниями после `Normalize`), `Cursor`/`Anchor` (байтовые смещения UTF-8), `Rect` (прямоугольное выделение), `Overwrite`, `ReadOnly`, стеки `UndoStack`/`RedoStack`.
-  - `Path` — локальный путь (для удалённых — путь временного файла-кэша; для архивов — «виртуальный» путь элемента внутри архива); `displayPath()` даёт отображаемое имя (`Remote.Label()+RemotePath` для удалённых).
-  - `Edit` (редактор/просмотрщик), `Dirty`, `Mode` (`"text"`, `"hex"`, `"dump"`), `Wrap`, `WordWrap`, `Codepage`, `EOL` (`"LF"`, `"CRLF"`, `"CR"`), `BOM`.
-  - `Raw` — исходные байты (только для файлов ≤ 64 MiB), `SavedRaw` — байты последней загруженной/сохранённой версии, `File *os.File` — открытый дескриптор для постраничного чтения больших файлов (в память не загружаются), `Size`, `ByteOffset` (позиция в hex/dump), `BytesPerLine`.
-  - `Offset` (номер первой видимой строки), `Column` (горизонтальная прокрутка), `ViewStart` (байтовое смещение первой видимой визуальной строки — используется в режиме переноса).
-  - `HideKeys`, `HideStatus`, `Scrollbar` (по умолчанию `true`), `Bookmarks map[int]docPosition`, `Positions []docPosition` (история позиций, ≤100), `Search textfile.Search`, `HexQuery []byte`, `MatchStart/MatchEnd` (подсветка hex-совпадения), `Help` (документ справки), `ScreenID`, `Remote/RemotePath/RemoteInfo`, `ArchiveSource`, `TempDir`, `TabSize`, `ManualScroll`.
-- `Dirty` пересчитывается в `Document.modified()`: `Text != SavedText || Codepage != SavedCP || EOL != SavedEOL || BOM != SavedBOM`. Т.е. смена кодировки/EOL/BOM в редакторе тоже делает документ «грязным».
-- `markSaved()` фиксирует `SavedRaw/SavedText/SavedCP/SavedEOL/SavedBOM`, сбрасывает `Dirty`.
-- Константа `maxTextBytes = 64 * 1024 * 1024` (64 MiB) — предел загрузки текста в память.
-- В `App` открытый документ — `a.Doc`; остальные открытые — стек `a.Documents []*Document`. Пока `a.Doc != nil`, все клавиши идут в `documentKey` (кроме глобальных: Cmd+N, Cmd+Q, Ctrl+Tab/Cmd+Shift+[ ] — переключение экранов, Cmd+O — терминал; при открытой форме/диалоге — в них).
-- Режим `a.Async` (боевой режим приложения, `NewAsync`): открытие, сохранение, поиск, замена всех, смена кодировки и F6 выполняются как фоновые задачи `backgroundTask` на клоне документа (`cloneDocument`), результат применяется на engine queue (`*d = *copy`). Пока задача идёт, приложение `Busy`, показан прогресс с кнопкой `Cancel`, Esc отменяет. В тестах (`New`) всё синхронно.
-- Статусные сообщения (`a.Status`) показываются в документе в правом верхнем углу (см. §3.1).
-
----
-
-## 1. Открытие документов
-
-### 1.1 Открытие из панели
-
-#### F3 / F4 — просмотр / редактирование текущего файла
-- **Вызов:** F3 / F4; Cmd+3 / Cmd+4; клик по key bar `3View` / `4Edit`; меню Files → `View / folder size` (F3), `Edit` (F4).
-- **Где доступно:** панели (локальная, удалённая, архивная).
-- **Поведение (`App.openConfigured(edit, alternate=false, forceInternal=false)`, `internal/ui/launch.go`):**
-  1. F3 на папке → подсчёт размера папки (`folderSize`), документ не открывается. F4 на папке (локальной) → диалог атрибутов файла (`fileAttributes`).
-  2. Удалённая панель → `openRemoteDocument(edit)` (§1.4); настройки внешних программ игнорируются.
-  3. Архивная панель → F3: `viewArchiveMember()` (§1.5); F4: `archiveReadOnly()` → статус `Archive is read-only. Use F5 to copy files out.`
-  4. Локальная панель: `os.Stat(path)`; ошибка → статус с текстом ошибки. Далее `viewPlan` (§2) решает — внутренний документ (`openDocument(path, edit)`) или внешняя программа.
-- **Код:** `launch.go: openConfigured, viewPlan, launch`; `app.go: function(3/4)`, обработка `F3`/`F4` в `key`.
-
-#### Alt+F3 / Alt+F4 — «альтернативный» просмотр/редактирование
-- **Вызов:** Alt+F3 / Alt+F4 в панелях.
-- **Поведение:** `openConfigured(edit, alternate=true, false)` — результат выбора «внутренний/внешний» инвертируется: если по настройкам/ассоциациям должен был открыться внешний — откроется внутренний, и наоборот (§2).
-- **Код:** `app.go` (ветка `if m.Alt { case "F3","F4": ... }`), `launch.go: viewPlan`.
-
-#### Cmd+Shift+F3 / Cmd+Shift+F4 (также Ctrl+Shift) — принудительно внутренний
-- **Вызов:** F3/F4 с Shift и Meta или Ctrl.
-- **Поведение:** `openConfigured(edit, false, forceInternal=true)` — всегда внутренний просмотрщик/редактор, независимо от настроек и ассоциаций.
-- **Код:** `app.go` (`if (m.Key == "F3" || m.Key == "F4") && m.Shift && (m.Meta || m.Ctrl)`).
-
-#### Shift+F4 — новый файл / открыть по имени
-- **Вызов:** Shift+F4 в панелях или в редакторе; меню Files → `New file…` (`ShiftF4`).
-- **Где доступно:** только локальная панель. Удалённая → статус `This command requires a local panel. Use F5 to copy remote files first.`; архив → `Archive is read-only. Use F5 to copy files out.`
-- **Диалог:** prompt, заголовок `Edit file`, подпись `Existing file or new file name`, значение по умолчанию пустое (если включено `RememberDialogValues` — последнее введённое значение для этого заголовка).
-- **Поведение:** пустая строка — ничего. Путь разворачивается относительно пути активной панели (`expand`). Если файл существует — `openDocument(path, true)`; если не существует — создаётся пустой документ в памяти (`newDocument(path, "")`, `Edit=true`, `Codepage = Settings.DefaultCodepage`, EOL `LF`), файл на диске создаётся только при сохранении (через `fsops.Create`, права 0644). Другая ошибка `os.Stat` → статус.
-- **Код:** `document.go: newFile`; `settings.go` (`Code pages` → `Default encoding for new files`).
-
-#### Enter на файле (не вьюер)
-- Enter в панели не открывает внутренний просмотрщик: архивы открываются как папки, ассоциации с `Command` запускаются, исполняемые файлы (`0111`) запускаются в терминале, остальное — `/usr/bin/open` (системное приложение). Shift+Enter → всегда macOS-приложение (`openSystemSelected`); для удалённой панели статус `Copy remote files to a local panel before opening them with macOS`, для элемента архива — `Use F5 to copy this archive item out before opening it with macOS`.
-- **Код:** `launch.go: enterFile, openSystemSelected`.
-
-#### Alt+F11 — история просмотра/редактирования
-- **Вызов:** Alt+F11 в панелях; меню Commands → `File view/edit history` (в меню без указанной клавиши).
-- **Поведение:** список `View/edit history` (choose-форма), элементы `View <path>` / `Edit <path>`, новые сверху. Выбор → `openDocument(path, edit)` напрямую (внутренний документ, минуя настройки внешних программ и удалённые/архивные панели). Пустая история → статус `View/edit history is empty`.
-- **История:** `a.viewHistory []viewRecord{Path, Edit}` пополняется при каждом открытии (`openDocument`/`openDocumentAsync`), обрезается до `Settings.HistoryLimit` (по умолчанию 200, 1–10000), сохраняется в setup (`savedSetup.Viewed`).
-- **Код:** `commands.go: historyMenu("Files")`, `far_keys.go` (Alt+F11), `document.go: openDocument`, `document_tasks.go: openDocumentAsync`, `settings.go`.
-
-### 1.2 Загрузка локального файла (`openDocument`)
-
-#### Алгоритм открытия
-- **Поведение (`App.openDocument(path, edit)`, `document.go`):**
-  1. В Async-режиме → `openDocumentAsync` (фоновая задача `Opening file`; рабочая копия `App` с теми же `Settings` выполняет синхронный `openDocument`; если документ не открылся, текст `worker.Status` становится ошибкой задачи; `ScreenID` выделяется в окне-владельце).
-  2. `filepath.EvalSymlinks(path)` — документ открывается по разрешённому пути. Ошибка → статус.
-  3. `os.Open`, `Stat`; не обычный файл → статус `Choose a regular file`.
-  4. Создаётся `newDocument(resolved, "")`: `Codepage "UTF-8"`, `EOL "LF"`, `Mode "text"`, `Scrollbar true`. `d.Wrap = Settings.ViewerWrap` (настройка `Wrap lines` в `Viewer settings`). Запись в `viewHistory`.
-  5. **Размер > 64 MiB:**
-     - редактор (`edit=true`) → статус `Editor limit is 64 MiB. Large files open in paged hex/dump viewer.`, документ не открывается;
-     - просмотрщик → `d.File = f` (дескриптор остаётся открытым), `Mode = "hex"`, `Raw` пустой; данные читаются постранично `ReadAt` (`dataAt`). Текстовый режим для таких файлов недоступен.
-  6. **Размер ≤ 64 MiB:** читается целиком через `io.LimitReader(f, maxTextBytes+1)` с учётом прогресса/отмены операции. Если прочитано больше лимита (файл вырос) → `File grew while opening; reopen it`.
-  7. `Codepage = textfile.Detect(raw)` (§7.1); `Decode` — ошибка → статус (`invalid UTF-8; choose another codepage` и т.п.) и документ не открывается.
-  8. `binary := strings.ContainsRune(decoded, 0)` (есть NUL).
-  9. Для редактора: проверка обратимости — `Encode(decoded, cp, bom)` должен побайтно совпасть с `raw`, иначе статус `Encoding is not lossless; inspect in viewer and choose a codepage before editing`. Для бинарного файла → `Binary data: open with F3 in hex/dump mode`.
-  10. `BOM`, `EOL = DetectEOL(decoded)`, `Buffer = textfile.New(decoded)` (CRLF/CR нормализуются в `\n`), бинарный файл в просмотрщике → `Mode = "hex"`. `markSaved()`, строится индекс строк, `showDocument(d)`.
-- **Показ (`showDocument`):** выделяет `ScreenID` (счётчик `a.nextScreenID`), текущий `a.Doc` (если другой) кладётся в стек `a.Documents`, закрывает меню.
-- **Особые случаи:** открытие по ссылке → реальный путь; при повторном открытии того же файла создаётся отдельный экран (дубликаты не объединяются).
-- **Код:** `document.go: openDocument, newDocument, showDocument`; `document_tasks.go: openDocumentAsync`.
-
-### 1.3 Внешние просмотрщик и редактор — см. §2.
-
-### 1.4 Открытие из удалённой панели (FTP/FTPS/SFTP)
-
-#### Скачивание во временный файл
-- **Вызов:** F3/F4 (и Alt/Cmd+Shift-варианты — все ведут сюда), Enter на файле удалённой панели (просмотр).
-- **Поведение (`remote_document.go: openRemoteDocument(edit)`):** фоновая задача `Downloading remote file`:
-  1. `config.Dial`, `Lstat(remotePath)`; не обычный файл → ошибка `viewer requires a regular remote file`.
-  2. `os.MkdirTemp("", "farshmac-remote-view-*")`, файл `<tmp>/<basename>` создаётся `O_CREATE|O_EXCL`, права 0600.
-  3. Копирование с прогрессом (буфер 256 KiB); если скопировано не `info.Size()` байт → `remote file changed during download`.
-  4. Рабочий `App` выполняет `openDocument(local, edit)` — все проверки §1.2 (лимит 64 MiB, кодировка, бинарность) применяются; текст статуса рабочего `App` становится ошибкой задачи.
-  5. `doc.Remote = &config`, `RemotePath`, `RemoteInfo = info` (используется при сохранении), `TempDir = dir`.
-  6. Применение: `showDocument(doc)`, статус `<label><remotePath>` (`config.Label()+remotePath`).
-- **Очистка:** при отмене/ошибке временный каталог удаляется; при закрытии документа `finishCloseDocument` удаляет `TempDir`.
-- **Ограничения:** редактирование разрешено (F4), сохранение — см. §9.9; F3 с Alt не переключает на внешнюю программу.
-- **Код:** `remote_document.go: openRemoteDocument`, `launch.go: openConfigured, enterFile`.
-
-### 1.5 Открытие из архива — только просмотр
-
-#### Просмотр элемента архива
-- **Вызов:** F3 в архивной панели; Enter на файле внутри архива (`enterArchiveMember`).
-- **Поведение (`archive_panel.go: viewArchiveMember`):**
-  - Папка/пустая панель → ничего. Символическая ссылка внутри архива → статус `Use F5 to copy the archive link`. Enter на вложенном архиве → `Copy the nested archive out with F5 to open it` (F3 на вложенном архиве просматривает его как файл).
-  - Фоновая задача `Opening archive member`: `MkdirTemp("", "farshmac-archive-view-*")`, `catalog.ExtractSelection([name], <tmp>/content)`, `openDocument(<tmp>/content/<name>, false)`.
-  - `doc.Path = <виртуальный путь элемента>`, `doc.ReadOnly = true`, `doc.ArchiveSource = true`, `doc.TempDir = temp`.
-- **Ограничения для архивных документов:** F4 в панели → `Archive is read-only. Use F5 to copy files out.`; F6 в документе → `Copy the file out with F5 before editing`; `+`/`-` → `Return to the archive panel to choose another file`.
-- **Код:** `archive_panel.go: viewArchiveMember, enterArchiveMember, archiveReadOnly`; `document.go: documentKey` (первая проверка), `document_keys.go: adjacentFile`.
+- A document is described by the `Document` struct (`internal/ui/document.go`). Key fields:
+  - `*textfile.Buffer` — the text (`Text`, always with `\n` line endings after `Normalize`), `Cursor`/`Anchor` (UTF-8 byte offsets), `Rect` (rectangular selection), `Overwrite`, `ReadOnly`, the `UndoStack`/`RedoStack` stacks.
+  - `Path` — local path (for remote documents — the path of the temporary cache file; for archives — the "virtual" path of the item inside the archive); `displayPath()` gives the displayed name (`Remote.Label()+RemotePath` for remote documents).
+  - `Edit` (editor/viewer), `Dirty`, `Mode` (`"text"`, `"hex"`, `"dump"`), `Wrap`, `WordWrap`, `Codepage`, `EOL` (`"LF"`, `"CRLF"`, `"CR"`), `BOM`.
+  - `Raw` — the original bytes (only for files ≤ 64 MiB), `SavedRaw` — the bytes of the last loaded/saved version, `File *os.File` — an open descriptor for paged reading of large files (they are not loaded into memory), `Size`, `ByteOffset` (position in hex/dump), `BytesPerLine`.
+  - `Offset` (number of the first visible line), `Column` (horizontal scroll), `ViewStart` (byte offset of the first visible visual line — used in wrap mode).
+  - `HideKeys`, `HideStatus`, `Scrollbar` (`true` by default), `Bookmarks map[int]docPosition`, `Positions []docPosition` (position history, ≤100), `Search textfile.Search`, `HexQuery []byte`, `MatchStart/MatchEnd` (highlight of the hex match), `Help` (help document), `ScreenID`, `Remote/RemotePath/RemoteInfo`, `ArchiveSource`, `TempDir`, `TabSize`, `ManualScroll`.
+- `Dirty` is recomputed in `Document.modified()`: `Text != SavedText || Codepage != SavedCP || EOL != SavedEOL || BOM != SavedBOM`. That is, changing the codepage/EOL/BOM in the editor also makes the document "dirty".
+- `markSaved()` records `SavedRaw/SavedText/SavedCP/SavedEOL/SavedBOM` and clears `Dirty`.
+- The constant `maxTextBytes = 64 * 1024 * 1024` (64 MiB) is the limit for loading text into memory.
+- In `App`, the open document is `a.Doc`; the other open ones are the stack `a.Documents []*Document`. While `a.Doc != nil`, all keys go to `documentKey` (except the global ones: Cmd+N, Cmd+Q, Ctrl+Tab/Cmd+Shift+[ ] — screen switching, Cmd+O — terminal; when a form/dialog is open — to them).
+- The `a.Async` mode (the production mode of the application, `NewAsync`): opening, saving, searching, replace all, codepage change and F6 run as `backgroundTask` background tasks on a clone of the document (`cloneDocument`), and the result is applied on the engine queue (`*d = *copy`). While a task is running, the application is `Busy`, a progress with a `Cancel` button is shown, and Esc cancels. In tests (`New`) everything is synchronous.
+- Status messages (`a.Status`) are shown in the document in the top right corner (see §3.1).
 
 ---
 
-## 2. Внешние просмотрщик/редактор и ассоциации
+## 1. Opening documents
 
-#### Настройки внешних программ
-- **Вызов:** F9 → Options → `Viewer settings…` / `Editor settings…`.
-- **Диалоги:**
+### 1.1 Opening from a panel
+
+#### F3 / F4 — view / edit the current file
+- **Invocation:** F3 / F4; Cmd+3 / Cmd+4; click on the key bar `3View` / `4Edit`; menu Files → `View / folder size` (F3), `Edit` (F4).
+- **Where available:** panels (local, remote, archive).
+- **Behavior (`App.openConfigured(edit, alternate=false, forceInternal=false)`, `internal/ui/launch.go`):**
+  1. F3 on a folder → folder size calculation (`folderSize`), no document is opened. F4 on a (local) folder → the file attributes dialog (`fileAttributes`).
+  2. Remote panel → `openRemoteDocument(edit)` (§1.4); external program settings are ignored.
+  3. Archive panel → F3: `viewArchiveMember()` (§1.5); F4: `archiveReadOnly()` → status `Archive is read-only. Use F5 to copy files out.`
+  4. Local panel: `os.Stat(path)`; on error → a status with the error text. Then `viewPlan` (§2) decides — internal document (`openDocument(path, edit)`) or external program.
+- **Code:** `launch.go: openConfigured, viewPlan, launch`; `app.go: function(3/4)`, handling of `F3`/`F4` in `key`.
+
+#### Alt+F3 / Alt+F4 — "alternate" view/edit
+- **Invocation:** Alt+F3 / Alt+F4 in the panels.
+- **Behavior:** `openConfigured(edit, alternate=true, false)` — the result of the "internal/external" choice is inverted: if, according to the settings/associations, an external program would have opened, the internal one opens, and vice versa (§2).
+- **Code:** `app.go` (branch `if m.Alt { case "F3","F4": ... }`), `launch.go: viewPlan`.
+
+#### Cmd+Shift+F3 / Cmd+Shift+F4 (also Ctrl+Shift) — force internal
+- **Invocation:** F3/F4 with Shift and Meta or Ctrl.
+- **Behavior:** `openConfigured(edit, false, forceInternal=true)` — always the internal viewer/editor, regardless of settings and associations.
+- **Code:** `app.go` (`if (m.Key == "F3" || m.Key == "F4") && m.Shift && (m.Meta || m.Ctrl)`).
+
+#### Shift+F4 — new file / open by name
+- **Invocation:** Shift+F4 in the panels or in the editor; menu Files → `New file…` (`ShiftF4`).
+- **Where available:** local panel only. Remote → status `This command requires a local panel. Use F5 to copy remote files first.`; archive → `Archive is read-only. Use F5 to copy files out.`
+- **Dialog:** prompt, title `Edit file`, label `Existing file or new file name`, default value empty (if `RememberDialogValues` is enabled — the last value entered for this title).
+- **Behavior:** an empty string — nothing. The path is expanded relative to the active panel's path (`expand`). If the file exists — `openDocument(path, true)`; if it does not exist — an empty in-memory document is created (`newDocument(path, "")`, `Edit=true`, `Codepage = Settings.DefaultCodepage`, EOL `LF`), and the file on disk is created only on save (via `fsops.Create`, permissions 0644). Any other `os.Stat` error → status.
+- **Code:** `document.go: newFile`; `settings.go` (`Code pages` → `Default encoding for new files`).
+
+#### Enter on a file (not the viewer)
+- Enter in a panel does not open the internal viewer: archives open as folders, associations with a `Command` are run, executable files (`0111`) are run in the terminal, everything else — `/usr/bin/open` (the system application). Shift+Enter → always the macOS application (`openSystemSelected`); for a remote panel the status is `Copy remote files to a local panel before opening them with macOS`, for an archive item — `Use F5 to copy this archive item out before opening it with macOS`.
+- **Code:** `launch.go: enterFile, openSystemSelected`.
+
+#### Alt+F11 — view/edit history
+- **Invocation:** Alt+F11 in the panels; menu Commands → `File view/edit history` (in the menu without a key shown).
+- **Behavior:** the `View/edit history` list (choose form), items `View <path>` / `Edit <path>`, newest on top. Selecting → `openDocument(path, edit)` directly (internal document, bypassing external program settings and remote/archive panels). Empty history → status `View/edit history is empty`.
+- **History:** `a.viewHistory []viewRecord{Path, Edit}` is appended on every open (`openDocument`/`openDocumentAsync`), trimmed to `Settings.HistoryLimit` (default 200, 1–10000), saved in the setup (`savedSetup.Viewed`).
+- **Code:** `commands.go: historyMenu("Files")`, `far_keys.go` (Alt+F11), `document.go: openDocument`, `document_tasks.go: openDocumentAsync`, `settings.go`.
+
+### 1.2 Loading a local file (`openDocument`)
+
+#### Opening algorithm
+- **Behavior (`App.openDocument(path, edit)`, `document.go`):**
+  1. In Async mode → `openDocumentAsync` (background task `Opening file`; a worker copy of `App` with the same `Settings` performs a synchronous `openDocument`; if the document did not open, the `worker.Status` text becomes the task's error; `ScreenID` is allocated in the owning window).
+  2. `filepath.EvalSymlinks(path)` — the document is opened by the resolved path. Error → status.
+  3. `os.Open`, `Stat`; not a regular file → status `Choose a regular file`.
+  4. `newDocument(resolved, "")` is created: `Codepage "UTF-8"`, `EOL "LF"`, `Mode "text"`, `Scrollbar true`. `d.Wrap = Settings.ViewerWrap` (the `Wrap lines` setting in `Viewer settings`). A record is written to `viewHistory`.
+  5. **Size > 64 MiB:**
+     - editor (`edit=true`) → status `Editor limit is 64 MiB. Large files open in paged hex/dump viewer.`, the document is not opened;
+     - viewer → `d.File = f` (the descriptor stays open), `Mode = "hex"`, `Raw` empty; data is read page by page via `ReadAt` (`dataAt`). Text mode is unavailable for such files.
+  6. **Size ≤ 64 MiB:** read entirely via `io.LimitReader(f, maxTextBytes+1)`, honoring the operation's progress/cancellation. If more than the limit was read (the file grew) → `File grew while opening; reopen it`.
+  7. `Codepage = textfile.Detect(raw)` (§7.1); `Decode` — on error → status (`invalid UTF-8; choose another codepage` etc.) and the document is not opened.
+  8. `binary := strings.ContainsRune(decoded, 0)` (there is a NUL).
+  9. For the editor: a reversibility check — `Encode(decoded, cp, bom)` must match `raw` byte for byte, otherwise status `Encoding is not lossless; inspect in viewer and choose a codepage before editing`. For a binary file → `Binary data: open with F3 in hex/dump mode`.
+  10. `BOM`, `EOL = DetectEOL(decoded)`, `Buffer = textfile.New(decoded)` (CRLF/CR are normalized to `\n`), a binary file in the viewer → `Mode = "hex"`. `markSaved()`, the line index is built, `showDocument(d)`.
+- **Display (`showDocument`):** allocates a `ScreenID` (counter `a.nextScreenID`), the current `a.Doc` (if different) is pushed onto the `a.Documents` stack, closes the menu.
+- **Special cases:** opening via a symlink → the real path; reopening the same file creates a separate screen (duplicates are not merged).
+- **Code:** `document.go: openDocument, newDocument, showDocument`; `document_tasks.go: openDocumentAsync`.
+
+### 1.3 External viewer and editor — see §2.
+
+### 1.4 Opening from a remote panel (FTP/FTPS/SFTP)
+
+#### Download to a temporary file
+- **Invocation:** F3/F4 (and the Alt/Cmd+Shift variants — all lead here), Enter on a file in a remote panel (view).
+- **Behavior (`remote_document.go: openRemoteDocument(edit)`):** background task `Downloading remote file`:
+  1. `config.Dial`, `Lstat(remotePath)`; not a regular file → error `viewer requires a regular remote file`.
+  2. `os.MkdirTemp("", "farshmac-remote-view-*")`, the file `<tmp>/<basename>` is created with `O_CREATE|O_EXCL`, permissions 0600.
+  3. Copy with progress (256 KiB buffer); if not `info.Size()` bytes were copied → `remote file changed during download`.
+  4. The worker `App` performs `openDocument(local, edit)` — all the checks of §1.2 (64 MiB limit, encoding, binary detection) apply; the status text of the worker `App` becomes the task's error.
+  5. `doc.Remote = &config`, `RemotePath`, `RemoteInfo = info` (used when saving), `TempDir = dir`.
+  6. Apply: `showDocument(doc)`, status `<label><remotePath>` (`config.Label()+remotePath`).
+- **Cleanup:** on cancellation/error the temporary directory is deleted; when the document is closed, `finishCloseDocument` deletes `TempDir`.
+- **Limitations:** editing is allowed (F4), saving — see §9.9; F3 with Alt does not switch to an external program.
+- **Code:** `remote_document.go: openRemoteDocument`, `launch.go: openConfigured, enterFile`.
+
+### 1.5 Opening from an archive — view only
+
+#### Viewing an archive member
+- **Invocation:** F3 in an archive panel; Enter on a file inside an archive (`enterArchiveMember`).
+- **Behavior (`archive_panel.go: viewArchiveMember`):**
+  - Folder/empty panel → nothing. A symbolic link inside the archive → status `Use F5 to copy the archive link`. Enter on a nested archive → `Copy the nested archive out with F5 to open it` (F3 on a nested archive views it as a file).
+  - Background task `Opening archive member`: `MkdirTemp("", "farshmac-archive-view-*")`, `catalog.ExtractSelection([name], <tmp>/content)`, `openDocument(<tmp>/content/<name>, false)`.
+  - `doc.Path = <virtual path of the item>`, `doc.ReadOnly = true`, `doc.ArchiveSource = true`, `doc.TempDir = temp`.
+- **Limitations for archive documents:** F4 in the panel → `Archive is read-only. Use F5 to copy files out.`; F6 in the document → `Copy the file out with F5 before editing`; `+`/`-` → `Return to the archive panel to choose another file`.
+- **Code:** `archive_panel.go: viewArchiveMember, enterArchiveMember, archiveReadOnly`; `document.go: documentKey` (first check), `document_keys.go: adjacentFile`.
+
+---
+
+## 2. External viewer/editor and associations
+
+#### External program settings
+- **Invocation:** F9 → Options → `Viewer settings…` / `Editor settings…`.
+- **Dialogs:**
   - `Viewer settings`: `Wrap lines` (toggle, `Settings.ViewerWrap`), `External by default` (toggle, `ExternalViewerDefault`), `Command (blank=system)` (`ExternalViewer`).
-  - `Editor settings`: `Auto indent` (toggle), `Syntax highlighting (Chroma)` (toggle), `Tab width (1–16)`, `Expand tabs to spaces` (toggle), `External by default` (`ExternalEditorDefault`), `Command (blank=system)` (`ExternalEditor`). Ошибка валидации → `Tab width must be 1–16`.
-  - Options → `Code pages` → choose `Default encoding for new files` (список `textfile.Codepages`).
-- **Значения по умолчанию:** `EditorAutoIndent true`, `EditorSyntax true`, `EditorTabSize 4`, `EditorExpandTabs false`, `ViewerWrap false`, внешние — выключены, команды пустые, `DefaultCodepage "UTF-8"`.
-- **Код:** `settings.go` (формы), `menu.go` (Options).
+  - `Editor settings`: `Auto indent` (toggle), `Syntax highlighting (Chroma)` (toggle), `Tab width (1–16)`, `Expand tabs to spaces` (toggle), `External by default` (`ExternalEditorDefault`), `Command (blank=system)` (`ExternalEditor`). Validation error → `Tab width must be 1–16`.
+  - Options → `Code pages` → choose `Default encoding for new files` (the `textfile.Codepages` list).
+- **Defaults:** `EditorAutoIndent true`, `EditorSyntax true`, `EditorTabSize 4`, `EditorExpandTabs false`, `ViewerWrap false`, external — off, commands empty, `DefaultCodepage "UTF-8"`.
+- **Code:** `settings.go` (forms), `menu.go` (Options).
 
-#### Выбор внутренний/внешний (`viewPlan`)
-- **Поведение (`launch.go: viewPlan(path, edit, alternate, forceInternal)`):**
-  1. `forceInternal` → внутренний.
-  2. Базовая пара: для просмотра `ExternalViewerDefault`/`ExternalViewer`, для редактирования `ExternalEditorDefault`/`ExternalEditor`.
-  3. Ассоциации (`Settings.Associations`, Commands → `File associations…`): первая запись, чья маска (`matchesMask`, с группами `MaskGroups`) совпадает с именем файла; если у неё непустой `Viewer` (для F3) / `Editor` (для F4) — эта команда используется и файл считается «ассоциированным» (`useExternal = true`).
-  4. `useExternal = external || associated`; `alternate` инвертирует.
-  5. Внутренний → `LaunchPlan{Internal: true}`; иначе `externalPlan(path, command, edit)`.
-- **Запуск внешней программы (`externalPlan`, `launch`):**
-  - Пустая команда: просмотр → `/usr/bin/open <path>`; редактирование → `/usr/bin/open -t <path>`. Выполняется как фоновая операция `Opening <basename>` (`workProgress`), ожидается завершение процесса `open` (он возвращается сразу после передачи файла приложению), ошибка → `<err>: <вывод>`.
-  - Непустая команда: путь экранируется (`terminal.Quote`); если в команде есть `{}` — подставляется вместо каждого `{}`, иначе добавляется через пробел. Команда выполняется в встроенном терминале через `submitCommand(cmd, record=false)` → `execute()` (панели сменяются терминалом, команда не попадает в историю командной строки). Ожидания завершения нет — это обычная shell-команда.
-- **Код:** `launch.go: viewPlan, externalPlan, launch, submitCommand`.
-
----
-
-## 3. Экран документа
-
-### 3.1 Статусная строка (верхняя)
-- **Где:** строка 0, чёрный текст на `Cyan`; скрывается `HideStatus` (тогда текст начинается со строки 0).
-- **Текст (text-режим и редактор):** `" %s  %s  %s %s  Ln %d Col %d"` = `tail(displayPath, 32)` (длинные пути обрезаются слева с `…`), режим, кодировка, EOL, номер строки и колонки (1-based; колонка — в рунах, табуляция считается одним символом).
-  - Режим: просмотрщик — `TEXT` / `HEX` / `DUMP`; редактор — `EDIT INS` или `EDIT OVR`; добавляется ` RO` при `ReadOnly` и ` *` при `Dirty`.
-  - Если включена подсветка и для документа есть статус подсветки — добавляется `  [<status>]`, где status — имя языка Chroma (например `[Go]`), `syntax off: >1 MiB` или `syntax paused (limit/error)`.
-- **Текст (hex/dump в просмотрщике):** `" %s  %s  Offset %d / %d"` — путь, режим, `ByteOffset`, `Size`.
-- **Сообщения `a.Status`:** рисуются поверх правого края строки 0 жёлтым (`Yellow`) на `Blue`, обрезаются до `min(32, W/3)` символов слева с `…`. Не показываются при `HideStatus`.
-- **Код:** `document_draw.go: drawDoc`, `grid.go: tail`.
-
-### 3.2 Key bar (нижняя строка)
-- **Где:** строка `H-1`; скрывается `HideKeys`. 10 ячеек шириной `W/10`, номер серым на чёрном, подпись чёрным на `Cyan`.
-- **Подписи просмотрщика:** `1Help 2Wrap 3Close 4Hex 5 6Edit 7Search 8Codepg 9Options 10Close`.
-- **Подписи редактора:** `1Help 2Save 3 4Close 5 6View 7Search 8Codepg 9Options 10Close`.
-- **Мышь:** клик по строке key bar → `documentKey(F<n>)`, `n = min(10, X*10/Cols+1)` (без модификаторов).
-- **Код:** `document_draw.go: drawDoc, documentClick`.
-
-#### Cmd+B / Cmd+Shift+B — скрыть key bar / статус
-- **Вызов:** Cmd+B (или Ctrl+B) переключает `HideKeys`; Cmd+Shift+B — `HideStatus`.
-- **Где:** оба режима. Настройка — на документ, не сохраняется.
-- **Код:** `document.go: documentKey` (`case "b"`).
-
-### 3.3 Полоса прокрутки
-- **Где:** правая колонка (`W-1`), только в text-режиме/редакторе, если `Scrollbar` и число строк > высоты. Трек `░` (`Cyan`), ползунок `█` (`LightCyan`) на `top + Offset*(height-1)/(lines-1)`.
-- **Переключение:** Cmd+S в просмотрщике (в редакторе Cmd+S — сохранить); F9 → `Scrollbar`. По умолчанию включена.
-- **Перетаскивание:** клик/drag по колонке `W-1` → `Offset = (Y-top)*(lines-1)/(Rows-top-2)`, `ViewStart = At(Offset,0)`, `ManualScroll = true`; флаг `documentScrollbarDrag` держит X на полосе до `mouseUp`.
-- **Код:** `document_draw.go: drawDoc, documentClick`; `app.go: Handle("mouseUp")`; `mouse.go: dragMouse`.
-
-### 3.4 Отрисовка текста
-- Фон всего экрана `LightCyan` на `Blue`. Ширина области текста `W-1` (колонка под полосу прокрутки).
-- Табуляция расширяется до следующей позиции `tabWidth()` (1–16, по умолчанию 4; берётся из `Settings.EditorTabSize` при каждой отрисовке и для просмотрщика тоже). Управляющие символы рисуются как `·` шириной 1. Широкие (CJK) символы занимают 2 колонки; символы нулевой ширины приклеиваются к предыдущей ячейке.
-- Курсор редактора — ячейка `Blue` на `Gray`. Выделение — `Black` на `Cyan` (поверх цветов подсветки синтаксиса).
-- **Автопрокрутка редактора:** если не `ManualScroll`, `Offset` подтягивается так, чтобы строка курсора была видна; `Column` подтягивается, чтобы курсор был в `[Column, Column+W-1)` (`Column = col-W+2` при выходе вправо). `ManualScroll` ставится колесом/полосой прокрутки и сбрасывается при любой клавише.
-- В редакторе перенос строк (`Wrap`) не применяется — при отрисовке временно отключается.
-- **Код:** `document_draw.go: drawDoc, visualRows, displayWidthTabs`.
-
-### 3.5 Темы
-- `Settings.ColorTheme`: пусто/классика — цвета как есть; `"Dark"` — `Blue→0x151b24`, `LightCyan→0xc7d7e9`, `Cyan→0x486987`; `"Light"` — `Blue→0xf1f3f5`, `LightCyan→0x182b49`, `White→0x000000`, `Yellow→0x885000`, `Cyan→0x80b8dd`. Подмена выполняется по всей сетке после отрисовки (включая документ, диалоги). Цвета подсветки синтаксиса, совпадающие с константами (`0xffffff` keyword/operator, `0xffff55` strings), тоже подменяются; остальные (`0x55ff55`, `0xaaaaaa`, `0xff88ff`, `0xff8888`) остаются.
-- **Код:** `draw.go: Draw` (конец), `grid.go` (константы).
+#### Internal/external choice (`viewPlan`)
+- **Behavior (`launch.go: viewPlan(path, edit, alternate, forceInternal)`):**
+  1. `forceInternal` → internal.
+  2. Base pair: for viewing `ExternalViewerDefault`/`ExternalViewer`, for editing `ExternalEditorDefault`/`ExternalEditor`.
+  3. Associations (`Settings.Associations`, Commands → `File associations…`): the first entry whose mask (`matchesMask`, with `MaskGroups` groups) matches the file name; if it has a non-empty `Viewer` (for F3) / `Editor` (for F4) — that command is used and the file is considered "associated" (`useExternal = true`).
+  4. `useExternal = external || associated`; `alternate` inverts it.
+  5. Internal → `LaunchPlan{Internal: true}`; otherwise `externalPlan(path, command, edit)`.
+- **Launching the external program (`externalPlan`, `launch`):**
+  - Empty command: viewing → `/usr/bin/open <path>`; editing → `/usr/bin/open -t <path>`. Executed as the background operation `Opening <basename>` (`workProgress`), waits for the `open` process to finish (it returns immediately after handing the file to the application), error → `<err>: <output>`.
+  - Non-empty command: the path is quoted (`terminal.Quote`); if the command contains `{}` — it is substituted for every `{}`, otherwise appended with a space. The command is executed in the built-in terminal via `submitCommand(cmd, record=false)` → `execute()` (the panels are replaced by the terminal, the command is not added to the command-line history). There is no waiting for completion — it is an ordinary shell command.
+- **Code:** `launch.go: viewPlan, externalPlan, launch, submitCommand`.
 
 ---
 
-## 4. Режимы просмотра
+## 3. Document screen
 
-#### F4 — Text / Hex; Shift+F4 — выбор режима
-- **Вызов:** F4 (просмотрщик). Shift+F4 → choose `View mode` со списком `Text`, `Hex`, `Dump`.
-- **Где:** просмотрщик. (В редакторе F4 закрывает документ, Shift+F4 — новый файл.)
-- **Поведение:** F4: `text → hex`; из hex/dump → `text`, но для постраничного файла (`File != nil`) → `dump`. Shift+F4 для постраничного файла при выборе `Text` → статус `Large files currently support paged hex/dump only`.
-- **Код:** `document_keys.go: viewerKey`.
+### 3.1 Status line (top)
+- **Where:** row 0, black text on `Cyan`; hidden by `HideStatus` (then the text starts at row 0).
+- **Text (text mode and editor):** `" %s  %s  %s %s  Ln %d Col %d"` = `tail(displayPath, 32)` (long paths are truncated on the left with `…`), mode, codepage, EOL, line and column number (1-based; the column is in runes, a tab counts as one character).
+  - Mode: viewer — `TEXT` / `HEX` / `DUMP`; editor — `EDIT INS` or `EDIT OVR`; ` RO` is appended when `ReadOnly` and ` *` when `Dirty`.
+  - If highlighting is enabled and the document has a highlighting status — `  [<status>]` is appended, where status is the Chroma language name (for example `[Go]`), `syntax off: >1 MiB` or `syntax paused (limit/error)`.
+- **Text (hex/dump in the viewer):** `" %s  %s  Offset %d / %d"` — path, mode, `ByteOffset`, `Size`.
+- **`a.Status` messages:** drawn over the right edge of row 0 in yellow (`Yellow`) on `Blue`, truncated to `min(32, W/3)` characters on the left with `…`. Not shown when `HideStatus`.
+- **Code:** `document_draw.go: drawDoc`, `grid.go: tail`.
 
-#### Hex-режим (вид)
-- Строка: `"%010X: "` (смещение, серым, 12 колонок) + байты `"%02X "` (по 3 колонки с позиции 12) + ASCII-колонка с позиции `13+width*3` (байты <32 и >126 → `·`).
-- Ширина строки `binaryWidth()`: если `BytesPerLine>0` — `min(BytesPerLine, (Cols-14)/4)`; иначе `min(16, (Cols-14)/4)`, минимум 1.
-- Подсветка совпадения hex-поиска `[MatchStart, MatchEnd)` — `Black` на `Cyan`.
-- Данные: `dataAt(ByteOffset, width*height)` — из `Raw` или `File.ReadAt`.
-- **Код:** `document_draw.go: drawBinary, binaryWidth`.
+### 3.2 Key bar (bottom line)
+- **Where:** row `H-1`; hidden by `HideKeys`. 10 cells of width `W/10`, the number in gray on black, the label in black on `Cyan`.
+- **Viewer labels:** `1Help 2Wrap 3Close 4Hex 5 6Edit 7Search 8Codepg 9Options 10Close`.
+- **Editor labels:** `1Help 2Save 3 4Close 5 6View 7Search 8Codepg 9Options 10Close`.
+- **Mouse:** a click on the key bar row → `documentKey(F<n>)`, `n = min(10, X*10/Cols+1)` (no modifiers).
+- **Code:** `document_draw.go: drawDoc, documentClick`.
 
-#### Dump-режим (вид)
-- Строка: смещение + по одному символу на байт. Каждый байт декодируется отдельно через `textfile.Decode([]byte{b}, Codepage)`: для однобайтовых кодировок — символ кодировки; для UTF-8 байты >126 (не валидны поодиночке) → `·`; для UTF-16 (нечётная длина → ошибка) байты >126 → `·`. Байты <32 и 127 → `·`.
-- Ширина: `Cols-14` (если `BytesPerLine` не задан; иначе действует hex-ограничение `min(BytesPerLine,(Cols-14)/4)` — побочный эффект Alt+Left/Right).
-- **Код:** `document_draw.go: drawBinary`.
+#### Cmd+B / Cmd+Shift+B — hide the key bar / status
+- **Invocation:** Cmd+B (or Ctrl+B) toggles `HideKeys`; Cmd+Shift+B — `HideStatus`.
+- **Where:** both modes. The setting is per document and is not saved.
+- **Code:** `document.go: documentKey` (`case "b"`).
 
-#### Alt+Left / Alt+Right — байт на строку
-- **Вызов:** Alt+← / Alt+→ в hex/dump.
-- **Поведение:** `BytesPerLine = max(1, width-1)` / `min(64, width+1)`, где `width` — текущая `binaryWidth()`. Фактическая ширина всегда ограничена `(Cols-14)/4`.
-- **Код:** `document_keys.go: viewerKey`.
+### 3.3 Scrollbar
+- **Where:** the right column (`W-1`), only in text mode/editor, if `Scrollbar` and the number of lines > the height. Track `░` (`Cyan`), thumb `█` (`LightCyan`) at `top + Offset*(height-1)/(lines-1)`.
+- **Toggle:** Cmd+S in the viewer (in the editor Cmd+S is save); F9 → `Scrollbar`. Enabled by default.
+- **Dragging:** click/drag on column `W-1` → `Offset = (Y-top)*(lines-1)/(Rows-top-2)`, `ViewStart = At(Offset,0)`, `ManualScroll = true`; the `documentScrollbarDrag` flag keeps X on the bar until `mouseUp`.
+- **Code:** `document_draw.go: drawDoc, documentClick`; `app.go: Handle("mouseUp")`; `mouse.go: dragMouse`.
 
-#### F2 — перенос строк; Shift+F2 — перенос по словам
-- **Вызов:** F2 / Shift+F2 (просмотрщик).
-- **Поведение:**
-  - Если документ в hex/dump: F2 (с любым Shift) возвращает в `text` (для постраничного — в `dump` и статус `Large files currently support paged hex/dump only`), перенос не меняется.
-  - F2: `Wrap = !Wrap`. Shift+F2: `WordWrap = !WordWrap` и `Wrap = true`.
-  - После переключения `ViewStart = At(Offset, 0)`.
-  - Исходное значение `Wrap` берётся из `Settings.ViewerWrap`; `WordWrap` по умолчанию false (перенос по символам).
-- **Алгоритм переноса (`visualRows(width, count)`):** строка режется, когда суммарная ширина колонок превысит `width = Cols-1`; при `WordWrap` разрез переносится к последнему пробельному символу строки-отрезка (если он есть после начала отрезка). Табуляции учитываются по `tabWidth()`.
-- **Код:** `document_keys.go: viewerKey`, `document_draw.go: visualRows, previousVisualStart`.
+### 3.4 Text rendering
+- The background of the whole screen is `LightCyan` on `Blue`. The width of the text area is `W-1` (a column for the scrollbar).
+- A tab expands to the next `tabWidth()` position (1–16, default 4; taken from `Settings.EditorTabSize` on every draw and for the viewer too). Control characters are drawn as `·` with width 1. Wide (CJK) characters take 2 columns; zero-width characters are glued to the previous cell.
+- The editor cursor is a `Blue` cell on `Gray`. Selection is `Black` on `Cyan` (over the syntax highlighting colors).
+- **Editor auto-scroll:** if not `ManualScroll`, `Offset` is pulled so that the cursor line is visible; `Column` is pulled so that the cursor is within `[Column, Column+W-1)` (`Column = col-W+2` when going out to the right). `ManualScroll` is set by the wheel/scrollbar and cleared on any key.
+- In the editor, line wrapping (`Wrap`) is not applied — it is temporarily disabled during drawing.
+- **Code:** `document_draw.go: drawDoc, visualRows, displayWidthTabs`.
 
-#### Большие файлы (> 64 MiB)
-- Только просмотр, только hex/dump, постраничное чтение `ReadAt`. Поиск недоступен (`Search in paged files larger than 64 MiB is not implemented yet`). F6 → `Editor limit is 64 MiB`. F8 — молча игнорируется; Shift+F8 меняет только `Codepage` (влияет на dump). Подсветка синтаксиса отключена. Дескриптор закрывается при закрытии документа / переходе на соседний файл.
-- **Код:** `document.go: openDocument, dataAt, finishCloseDocument`.
+### 3.5 Themes
+- `Settings.ColorTheme`: empty/classic — the colors as is; `"Dark"` — `Blue→0x151b24`, `LightCyan→0xc7d7e9`, `Cyan→0x486987`; `"Light"` — `Blue→0xf1f3f5`, `LightCyan→0x182b49`, `White→0x000000`, `Yellow→0x885000`, `Cyan→0x80b8dd`. The substitution is performed over the whole grid after drawing (including the document and dialogs). Syntax highlighting colors that match the constants (`0xffffff` keyword/operator, `0xffff55` strings) are also substituted; the others (`0x55ff55`, `0xaaaaaa`, `0xff88ff`, `0xff8888`) remain.
+- **Code:** `draw.go: Draw` (end), `grid.go` (constants).
 
 ---
 
-## 5. Навигация в просмотрщике
+## 4. View modes
 
-#### Текстовый режим без переноса
-- **Клавиши (`viewerKey`):** ↓/↑ — `Offset ±1`; PgDn/PgUp — `±(Rows-2)`; Home — `Offset=0, Column=0`; End — `Offset = max(0, lines-Rows+2)` (последняя страница); ←/→ — `Column ∓1`, с Cmd/Ctrl — на 20 колонок; `Column` не ограничен сверху. `Offset` зажимается в `[0, lines-1]`, `ViewStart = At(Offset,0)`.
-- **Код:** `document_keys.go: viewerKey`.
+#### F4 — Text / Hex; Shift+F4 — mode selection
+- **Invocation:** F4 (viewer). Shift+F4 → choose `View mode` with the list `Text`, `Hex`, `Dump`.
+- **Where:** viewer. (In the editor F4 closes the document, Shift+F4 — new file.)
+- **Behavior:** F4: `text → hex`; from hex/dump → `text`, but for a paged file (`File != nil`) → `dump`. Shift+F4 for a paged file when choosing `Text` → status `Large files currently support paged hex/dump only`.
+- **Code:** `document_keys.go: viewerKey`.
 
-#### Текстовый режим с переносом
-- ↓/↑ — на одну визуальную строку (`visualRows(...,2)[1].Start` / `previousVisualStart`); PgDn/PgUp — `Rows-2` визуальных строк; Home — `ViewStart=0`; End — начало последней логической строки. ←/→ не действуют. `Offset = Pos(ViewStart).Row`.
-- **Код:** `document_keys.go: viewerKey`, `document_draw.go: previousVisualStart`.
+#### Hex mode (appearance)
+- Line: `"%010X: "` (offset, gray, 12 columns) + bytes `"%02X "` (3 columns each starting at position 12) + an ASCII column starting at position `13+width*3` (bytes <32 and >126 → `·`).
+- Line width `binaryWidth()`: if `BytesPerLine>0` — `min(BytesPerLine, (Cols-14)/4)`; otherwise `min(16, (Cols-14)/4)`, minimum 1.
+- Highlight of the hex search match `[MatchStart, MatchEnd)` — `Black` on `Cyan`.
+- Data: `dataAt(ByteOffset, width*height)` — from `Raw` or `File.ReadAt`.
+- **Code:** `document_draw.go: drawBinary, binaryWidth`.
+
+#### Dump mode (appearance)
+- Line: offset + one character per byte. Each byte is decoded separately via `textfile.Decode([]byte{b}, Codepage)`: for single-byte encodings — the encoding's character; for UTF-8, bytes >126 (not valid on their own) → `·`; for UTF-16 (odd length → error) bytes >126 → `·`. Bytes <32 and 127 → `·`.
+- Width: `Cols-14` (if `BytesPerLine` is not set; otherwise the hex limit `min(BytesPerLine,(Cols-14)/4)` applies — a side effect of Alt+Left/Right).
+- **Code:** `document_draw.go: drawBinary`.
+
+#### Alt+Left / Alt+Right — bytes per line
+- **Invocation:** Alt+← / Alt+→ in hex/dump.
+- **Behavior:** `BytesPerLine = max(1, width-1)` / `min(64, width+1)`, where `width` is the current `binaryWidth()`. The actual width is always limited by `(Cols-14)/4`.
+- **Code:** `document_keys.go: viewerKey`.
+
+#### F2 — line wrap; Shift+F2 — word wrap
+- **Invocation:** F2 / Shift+F2 (viewer).
+- **Behavior:**
+  - If the document is in hex/dump: F2 (with any Shift) returns to `text` (for a paged file — to `dump` and status `Large files currently support paged hex/dump only`), wrapping is not changed.
+  - F2: `Wrap = !Wrap`. Shift+F2: `WordWrap = !WordWrap` and `Wrap = true`.
+  - After toggling, `ViewStart = At(Offset, 0)`.
+  - The initial value of `Wrap` is taken from `Settings.ViewerWrap`; `WordWrap` is false by default (wrap by characters).
+- **Wrap algorithm (`visualRows(width, count)`):** the line is cut when the total column width exceeds `width = Cols-1`; with `WordWrap` the cut is moved to the last whitespace character of the line segment (if there is one after the segment start). Tabs are counted per `tabWidth()`.
+- **Code:** `document_keys.go: viewerKey`, `document_draw.go: visualRows, previousVisualStart`.
+
+#### Large files (> 64 MiB)
+- View only, hex/dump only, paged reading via `ReadAt`. Search is unavailable (`Search in paged files larger than 64 MiB is not implemented yet`). F6 → `Editor limit is 64 MiB`. F8 — silently ignored; Shift+F8 changes only `Codepage` (affects dump). Syntax highlighting is disabled. The descriptor is closed when the document is closed / when moving to an adjacent file.
+- **Code:** `document.go: openDocument, dataAt, finishCloseDocument`.
+
+---
+
+## 5. Navigation in the viewer
+
+#### Text mode without wrapping
+- **Keys (`viewerKey`):** ↓/↑ — `Offset ±1`; PgDn/PgUp — `±(Rows-2)`; Home — `Offset=0, Column=0`; End — `Offset = max(0, lines-Rows+2)` (the last page); ←/→ — `Column ∓1`, with Cmd/Ctrl — by 20 columns; `Column` has no upper bound. `Offset` is clamped to `[0, lines-1]`, `ViewStart = At(Offset,0)`.
+- **Code:** `document_keys.go: viewerKey`.
+
+#### Text mode with wrapping
+- ↓/↑ — by one visual line (`visualRows(...,2)[1].Start` / `previousVisualStart`); PgDn/PgUp — `Rows-2` visual lines; Home — `ViewStart=0`; End — the start of the last logical line. ←/→ have no effect. `Offset = Pos(ViewStart).Row`.
+- **Code:** `document_keys.go: viewerKey`, `document_draw.go: previousVisualStart`.
 
 #### Hex/dump
-- ↑/↓ — `±width` байт; PgUp/PgDn — `±width*(Rows-2)`; Home — 0; End — `max(0, Size-page)`; ←/→ — `∓1` байт (Alt — см. §4). `ByteOffset` зажимается в `[0, Size-1]`.
-- **Код:** `document_keys.go: viewerKey`.
+- ↑/↓ — `±width` bytes; PgUp/PgDn — `±width*(Rows-2)`; Home — 0; End — `max(0, Size-page)`; ←/→ — `∓1` byte (Alt — see §4). `ByteOffset` is clamped to `[0, Size-1]`.
+- **Code:** `document_keys.go: viewerKey`.
 
-#### Колесо мыши / трекпад
-- **Сообщения:** `wheel` (Delta) и `scroll` (Delta = Y*3); `delta` зажимается в `[-12, 12]`.
-- **Поведение (`scrollMouse`):** hex/dump — `ByteOffset += delta*width` (в `[0, Size-1]`); text с переносом (просмотрщик) — по визуальным строкам; иначе `Offset += delta` в `[0, lines-1]`. Ставит `ManualScroll = true` (в редакторе курсор не возвращает экран обратно до следующей клавиши). Не работает при открытом диалоге/занятости; при открытой форме/меню прокручивает их.
-- **Код:** `mouse.go: scrollMouse`.
+#### Mouse wheel / trackpad
+- **Messages:** `wheel` (Delta) and `scroll` (Delta = Y*3); `delta` is clamped to `[-12, 12]`.
+- **Behavior (`scrollMouse`):** hex/dump — `ByteOffset += delta*width` (within `[0, Size-1]`); text with wrapping (viewer) — by visual lines; otherwise `Offset += delta` within `[0, lines-1]`. Sets `ManualScroll = true` (in the editor the cursor does not bring the screen back until the next key). Does not work while a dialog is open/busy; when a form/menu is open it scrolls them.
+- **Code:** `mouse.go: scrollMouse`.
 
-#### Клик и перетаскивание в тексте
-- **Поведение (`documentClick(m, drag)`):** в hex/dump клики (кроме key bar) игнорируются. Иначе вычисляется позиция по строке `Y-top` среди `visualRows` и колонке `X+Column` (при переносе — `X`), с учётом табуляций и широких символов; `d.Move(target, selecting = drag || Shift, rect = Alt)` — т.е. клик ставит курсор, Shift+клик/перетаскивание выделяют, Alt — прямоугольно. В просмотрщике курсор/выделение тоже существуют (видны как выделение; используются для Cmd+C и как стартовая точка поиска).
-- **Двойной клик:** выделяет «слово» — непрерывный ряд символов одного класса (буквы/цифры/`_`; пробелы; прочее), в пределах строки.
-- **Тройной клик:** выделяет строку целиком вместе с `\n`.
-- **Автопрокрутка при drag** за верх/низ области — на 1 строку за событие (`dragMouse`).
-- **Код:** `document_draw.go: documentClick`, `mouse.go: dragMouse`, `app.go: click`.
+#### Click and drag in the text
+- **Behavior (`documentClick(m, drag)`):** in hex/dump, clicks (except the key bar) are ignored. Otherwise the position is computed from row `Y-top` among `visualRows` and column `X+Column` (with wrapping — `X`), taking tabs and wide characters into account; `d.Move(target, selecting = drag || Shift, rect = Alt)` — i.e. a click places the cursor, Shift+click/drag select, Alt — rectangular. In the viewer the cursor/selection also exist (visible as a selection; used for Cmd+C and as the starting point of a search).
+- **Double click:** selects a "word" — a contiguous run of characters of one class (letters/digits/`_`; whitespace; other), within the line.
+- **Triple click:** selects the whole line together with `\n`.
+- **Auto-scroll while dragging** past the top/bottom of the area — by 1 line per event (`dragMouse`).
+- **Code:** `document_draw.go: documentClick`, `mouse.go: dragMouse`, `app.go: click`.
 
-#### `+` / `-` — следующий / предыдущий файл панели
-- **Вызов:** клавиши `+` / `-` в просмотрщике (в редакторе это обычный ввод).
-- **Поведение (`adjacentFile`):** архивный документ → `Return to the archive panel to choose another file`. Ищется ближайшая не-папка в активной панели вперёд/назад от курсора. Если текущий документ `Dirty` → confirm `Save changes` / `Save changes before viewing the next file?` / кнопки `Save`, `Discard`, `Cancel`. Далее курсор панели переставляется и файл открывается **во внутреннем просмотрщике** (`open(false)` → `openDocument`, минуя внешние настройки). `adjacentFile` вызывается только из `viewerKey`: в редакторе `+`/`-` — обычный ввод (Dirty-просмотрщик возможен после F6); старый документ заменяется (его `File` закрывается). Если открыть не удалось — остаётся старый документ и курсор панели. Нет файла → `No next file` / `No previous file`.
-- **Код:** `document_keys.go: adjacentFile`.
+#### `+` / `-` — next / previous file of the panel
+- **Invocation:** the `+` / `-` keys in the viewer (in the editor these are ordinary input).
+- **Behavior (`adjacentFile`):** archive document → `Return to the archive panel to choose another file`. The nearest non-folder in the active panel forward/backward from the cursor is looked up. If the current document is `Dirty` → confirm `Save changes` / `Save changes before viewing the next file?` / buttons `Save`, `Discard`, `Cancel`. Then the panel cursor is moved and the file is opened **in the internal viewer** (`open(false)` → `openDocument`, bypassing external settings). `adjacentFile` is called only from `viewerKey`: in the editor `+`/`-` are ordinary input (a Dirty viewer is possible after F6); the old document is replaced (its `File` is closed). If opening failed — the old document and panel cursor remain. No file → `No next file` / `No previous file`.
+- **Code:** `document_keys.go: adjacentFile`.
 
-#### Alt+F8 / Cmd+G — переход (Go to)
-- **Вызов:** Alt+F8, Cmd+G (Ctrl+G).
-- **Диалог:** prompt `Go to`; подпись `Line:column (1-based), or percentage e.g. 50%` (text/редактор) или `Byte offset (decimal / 0xHEX) or percentage` (hex/dump в просмотрщике); значение пустое.
-- **Поведение:** позиция запоминается (`remember()` → Cmd+Z в просмотрщике вернёт). `NN%`: 0–100, иначе `Enter a percentage from 0 to 100`; в hex → `ByteOffset = (Size-1)*v/100`; в тексте → строка `(lines-1)*v/100`, курсор в её начало, `Offset`/`ViewStart` на неё. Hex: число (десятичное или `0x…`), вне `[0, Size)` → `Offset outside file`. Текст: `row[:col]`, 1-based; ошибка/выход за число строк → `Invalid line / column` (колонка > длины строки — не ошибка, курсор в конец строки); выделение снимается, `Offset = row-1`.
-- **Код:** `document.go: gotoDocument`.
+#### Alt+F8 / Cmd+G — Go to
+- **Invocation:** Alt+F8, Cmd+G (Ctrl+G).
+- **Dialog:** prompt `Go to`; label `Line:column (1-based), or percentage e.g. 50%` (text/editor) or `Byte offset (decimal / 0xHEX) or percentage` (hex/dump in the viewer); value empty.
+- **Behavior:** the position is remembered (`remember()` → Cmd+Z in the viewer returns to it). `NN%`: 0–100, otherwise `Enter a percentage from 0 to 100`; in hex → `ByteOffset = (Size-1)*v/100`; in text → line `(lines-1)*v/100`, cursor at its start, `Offset`/`ViewStart` on it. Hex: a number (decimal or `0x…`), outside `[0, Size)` → `Offset outside file`. Text: `row[:col]`, 1-based; error/beyond the number of lines → `Invalid line / column` (a column > the line length is not an error, the cursor goes to the end of the line); the selection is cleared, `Offset = row-1`.
+- **Code:** `document.go: gotoDocument`.
 
-#### Cmd+0..9 / Cmd+Option+0..9 — закладки
-- **Вызов:** Cmd (или Ctrl) + цифра 0–9: восстановить; Cmd+Option+цифра (или Ctrl+Shift+цифра) — сохранить. Цифра берётся из `m.Code` (`DigitN`), поэтому раскладка и Option не мешают. Cmd+Shift+цифра закладку не ставит: macOS забирает Cmd+Shift+3/4/5 под скриншоты.
-- **Поведение:** сохраняет `bookmark{Kind: document, Path, Edit, Help, ScreenID, Row, Col, View: docPosition}` в `App.Bookmarks[n]` — те же десять слотов окна, что и закладки папок (раздел 9). Статус `Bookmark %d saved`. Переход (из панелей или любого экрана документа): если экран закладки (`ScreenID`) или другой экран с тем же файлом открыт — фокус на него, текущая позиция в `Positions`, затем `restoreBookmark`; иначе файл открывается заново в том же режиме (viewer/editor) и позиция восстанавливается. Закладка папки из документа → панели (см. раздел 9). ⌘0 сбрасывает размер шрифта только в терминале. Если текст в точке закладки не изменился — восстанавливается точный вид; иначе курсор ставится на запомненные строку и колонку, а если файл укоротился ниже этой строки — в конец файла. Файла нет или это не обычный файл — статус `Bookmark %d: <path>: <reason>`, ничего не открывается. Нет закладки — `Bookmark %d is empty`; закладка в закрытой справке — `Bookmark %d: help is closed`. Закладки в памяти, не сохраняются.
-- **Код:** `bookmarks.go: documentBookmarkKey, saveDocumentBookmark, goDocumentBookmark, restoreBookmark`.
+#### Cmd+0..9 / Cmd+Option+0..9 — bookmarks
+- **Invocation:** Cmd (or Ctrl) + digit 0–9: restore; Cmd+Option+digit (or Ctrl+Shift+digit) — save. The digit is taken from `m.Code` (`DigitN`), so the keyboard layout and Option do not interfere. Cmd+Shift+digit does not set a bookmark: macOS takes Cmd+Shift+3/4/5 for screenshots.
+- **Behavior:** saves `bookmark{Kind: document, Path, Edit, Help, ScreenID, Row, Col, View: docPosition}` into `App.Bookmarks[n]` — the same ten window slots as folder bookmarks (section 9). Status `Bookmark %d saved`. Jumping (from the panels or from any document screen): if the bookmark's screen (`ScreenID`) or another screen with the same file is open — focus goes to it, the current position goes into `Positions`, then `restoreBookmark`; otherwise the file is reopened in the same mode (viewer/editor) and the position is restored. A folder bookmark from a document → the panels (see section 9). ⌘0 resets the font size only in the terminal. If the text at the bookmark point has not changed — the exact view is restored; otherwise the cursor is placed at the remembered line and column, and if the file has shrunk below that line — at the end of the file. If the file does not exist or is not a regular file — status `Bookmark %d: <path>: <reason>`, nothing is opened. No bookmark — `Bookmark %d is empty`; a bookmark in closed help — `Bookmark %d: help is closed`. Bookmarks are in memory and are not saved.
+- **Code:** `bookmarks.go: documentBookmarkKey, saveDocumentBookmark, goDocumentBookmark, restoreBookmark`.
 
-#### Cmd+Z в просмотрщике — предыдущая позиция
-- **Поведение:** `Positions` (стек до 100) пополняется перед поиском (`findDocument`), Go to и переходом к закладке. Cmd+Z в просмотрщике снимает последнюю и восстанавливает. В редакторе Cmd+Z — undo (§9.5).
-- **Код:** `document.go: remember, documentKey` (`case "z"`).
-
----
-
-## 6. Поиск и замена
-
-#### F7 / Cmd+F — поиск
-- **Вызов:** F7; Cmd+F (Ctrl+F) — в обоих режимах всегда простой поиск. Cmd+F7 — в редакторе замена (§ниже), в просмотрщике простой поиск.
-- **Где:** файлы ≤ 64 MiB. Постраничный → `Search in paged files larger than 64 MiB is not implemented yet`.
-- **Диалог:** форма `Search`, поля: `Search` (значение — последний запрос `d.Search.Query`), toggle `Case sensitive`, `Whole words`, `Regex (Go/RE2)` (помнят прошлые значения), `Backwards` (всегда выкл.), `Hex bytes` (включён по умолчанию, если просмотрщик в hex-режиме). Esc — отмена, Enter — выполнить; Alt+буква — мнемоники полей/кнопок; Tab/стрелки — навигация.
-- **Поведение текстового поиска (`findDocument` / `Buffer.Find`):**
-  - Регулярное выражение компилируется как `(?m)` + (`(?i)` если не Case) + (QuoteMeta если не Regex). Пустой запрос → ошибка `enter search text`. Ошибка компиляции → её текст в статусе.
-  - Все совпадения ищутся `FindAllStringIndex` по всему тексту; `Whole words` отбрасывает совпадения, у которых сосед — буква/цифра/`_`.
-  - Старт: в просмотрщике без выделения курсор ставится в начало первой видимой строки (`At(Offset,0)`); при выделении старт = конец выделения (вперёд) или начало (назад); для пустого выделения вперёд — следующий символ. Вперёд — первое совпадение с `start >= старт`, иначе **первое в файле (циклически)**; назад — последнее с `start < старт`, иначе последнее в файле.
-  - Найденное выделяется (`Anchor=start`, `Cursor=end`). `Offset` = строка совпадения, `Column = max(0, col-5)`, `ViewStart = Anchor`; в просмотрщике режим переключается в `text`. Статус `Match found`; нет совпадений → `Not found`. Поиск отменяем (`Operation.Check`), в Async — фоновая задача `Searching document` на клоне документа.
-- **Hex-поиск (`Hex bytes`):** строка разбирается как hex-пары (пробелы игнорируются); ошибка/пусто → `Enter pairs of hex digits, e.g. 48 65 6c 6c 6f`. Ищется в `d.Raw` (исходные байты): вперёд от `ByteOffset` (или от `MatchEnd` предыдущего совпадения), с переходом на начало; назад — `LastIndex` до `MatchStart`, с переходом на конец. Найдено → `MatchStart/End`, `ByteOffset = hit`, `Mode = "hex"`. `Not found`. С `Replace` → `Hex replacement is not available in text editor`.
-- **Код:** `document.go: searchDocument, findDocument`, `document_tasks.go: findDocumentThen`, `textfile/buffer.go: Search, Find, Matches`.
-
-#### Shift+F7 / Alt+F7 / Space — следующее / предыдущее совпадение
-- **Вызов:** Shift+F7 — вперёд; Alt+F7 — назад; Space в просмотрщике — вперёд.
-- **Поведение:** `findDocument(backward)` с сохранённым `d.Search` или `HexQuery` (если последний поиск был hex — продолжается hex-поиск). Без предыдущего запроса → `enter search text`.
-- **Код:** `document.go: documentKey`, `document_keys.go: viewerKey`.
-
-#### Cmd+F7 / Cmd+H — поиск и замена
-- **Вызов:** Cmd+F7 (Ctrl+F7) или Cmd+H (Ctrl+H) в редакторе. В просмотрщике Cmd+H ничего не делает.
-- **Диалог:** форма `Search` с теми же 6 полями плюс `Replace with` (пусто) и toggle `Replace all` (выкл.).
-- **Поведение:**
-  - Без `Replace all`: ищется первое совпадение, затем confirm `Replace` / `Replace this match?` / кнопки `Replace`, `Skip`, `Cancel`. `Replace` заменяет выделенное совпадение (для Regex — `re.ReplaceAllString(matchText, replacement)`, т.е. поддерживаются `$1`, `${name}`), затем ищется следующее и диалог повторяется; `Skip` — следующее без замены; `Cancel`/Esc — стоп. Каждая замена — отдельная запись undo.
-  - `Replace all`: `Buffer.ReplaceAll` — все совпадения за один `Replace(0, len)` (одна запись undo; для Regex — `ExpandString` с группами); статус `Replaced %d matches` (в т.ч. `Replaced 0 matches`); в Async — фоновая задача `Replacing matches`. При `ReadOnly` → ошибка `editor is read-only`.
-- **Код:** `document.go: searchDocument, confirmReplacement`, `document_tasks.go: replaceAllAsync`, `textfile/buffer.go: ReplaceAll`.
+#### Cmd+Z in the viewer — previous position
+- **Behavior:** `Positions` (a stack of up to 100) is appended before a search (`findDocument`), Go to and jumping to a bookmark. Cmd+Z in the viewer pops the last one and restores it. In the editor Cmd+Z is undo (§9.5).
+- **Code:** `document.go: remember, documentKey` (`case "z"`).
 
 ---
 
-## 7. Кодировки, BOM, окончания строк
+## 6. Search and replace
 
-### 7.1 Определение при открытии
-- `textfile.Detect(raw)`: префикс `FF FE` → `UTF-16LE`; `FE FF` → `UTF-16BE`; валидный UTF-8 → `UTF-8`; иначе `Windows-1251` (эвристика по умолчанию для «не UTF-8»).
-- `Decode(raw, cp)`: снимает BOM (`EF BB BF` для UTF-8, 2 байта для UTF-16; флаг `BOM=true`); ошибки: `invalid UTF-8; choose another codepage`, `incomplete UTF-16 code unit`, `unsupported codepage %s`. Для однобайтовых кодировок BOM не распознаётся.
-- `DetectEOL`: есть `\r\n` → `CRLF`; иначе есть `\r` → `CR`; иначе `LF`. Внутри буфера все окончания нормализуются в `\n` (`Normalize`).
-- Поддерживаемые кодировки (`textfile.Codepages`, в порядке списка): `UTF-8`, `UTF-16LE`, `UTF-16BE`, `Windows-1251`, `CP866`, `Windows-1252`, `ISO-8859-1`, `KOI8-R`.
-- **Код:** `textfile/encoding.go`.
+#### F7 / Cmd+F — search
+- **Invocation:** F7; Cmd+F (Ctrl+F) — in both modes always a plain search. Cmd+F7 — replace in the editor (§below), a plain search in the viewer.
+- **Where:** files ≤ 64 MiB. Paged → `Search in paged files larger than 64 MiB is not implemented yet`.
+- **Dialog:** form `Search`, fields: `Search` (value — the last query `d.Search.Query`), toggles `Case sensitive`, `Whole words`, `Regex (Go/RE2)` (remember previous values), `Backwards` (always off), `Hex bytes` (on by default if the viewer is in hex mode). Esc — cancel, Enter — execute; Alt+letter — field/button mnemonics; Tab/arrows — navigation.
+- **Text search behavior (`findDocument` / `Buffer.Find`):**
+  - The regular expression is compiled as `(?m)` + (`(?i)` if not Case) + (QuoteMeta if not Regex). An empty query → error `enter search text`. A compilation error → its text in the status.
+  - All matches are found with `FindAllStringIndex` over the whole text; `Whole words` discards matches whose neighbor is a letter/digit/`_`.
+  - Start: in the viewer without a selection the cursor is placed at the start of the first visible line (`At(Offset,0)`); with a selection the start = the end of the selection (forward) or the start (backward); for an empty selection forward — the next character. Forward — the first match with `start >= start position`, otherwise **the first in the file (cyclically)**; backward — the last with `start < start position`, otherwise the last in the file.
+  - The match found is selected (`Anchor=start`, `Cursor=end`). `Offset` = the line of the match, `Column = max(0, col-5)`, `ViewStart = Anchor`; in the viewer the mode switches to `text`. Status `Match found`; no matches → `Not found`. The search is cancellable (`Operation.Check`); in Async — background task `Searching document` on a clone of the document.
+- **Hex search (`Hex bytes`):** the string is parsed as hex pairs (spaces are ignored); error/empty → `Enter pairs of hex digits, e.g. 48 65 6c 6c 6f`. The search runs in `d.Raw` (the original bytes): forward from `ByteOffset` (or from `MatchEnd` of the previous match), wrapping to the start; backward — `LastIndex` up to `MatchStart`, wrapping to the end. Found → `MatchStart/End`, `ByteOffset = hit`, `Mode = "hex"`. `Not found`. With `Replace` → `Hex replacement is not available in text editor`.
+- **Code:** `document.go: searchDocument, findDocument`, `document_tasks.go: findDocumentThen`, `textfile/buffer.go: Search, Find, Matches`.
 
-### 7.2 Кодирование при сохранении
-- `Encode(Endings(Text, EOL), Codepage, BOM)`: BOM пишется только для UTF-8/UTF-16; для однобайтовых кодировок непредставимый символ → ошибка `text cannot be represented in %s: …` (сохранение не выполняется, файл не трогается). Если текст/кодировка/EOL/BOM не менялись — на диск пишутся ровно `SavedRaw` (сохранение побайтно, смешанные окончания не нормализуются).
-- **Код:** `textfile/encoding.go: Encode, Endings`, `document.go: saveDocument`.
+#### Shift+F7 / Alt+F7 / Space — next / previous match
+- **Invocation:** Shift+F7 — forward; Alt+F7 — backward; Space in the viewer — forward.
+- **Behavior:** `findDocument(backward)` with the saved `d.Search` or `HexQuery` (if the last search was hex — the hex search continues). Without a previous query → `enter search text`.
+- **Code:** `document.go: documentKey`, `document_keys.go: viewerKey`.
 
-#### F8 — переключение CP866 / Windows-1251
-- **Вызов:** F8 (без Alt/Shift).
-- **Поведение:** целевая `cp = "CP866"`, а если текущая уже `CP866` — `Windows-1251` (из UTF-8 первое нажатие даёт CP866).
-  - Редактор: проверка `Encode(d.Text, cp, BOM)`; ошибка → статус; иначе `Codepage = cp`, `modified()` (документ становится Dirty — изменится выходная кодировка).
-  - Просмотрщик: только если файл не постраничный и не Dirty: байты `Raw` перекодируются заново (`Decode`), `Buffer` пересоздаётся, `Offset=0`, `markSaved()`. Ошибка → статус. Постраничный/грязный — молча ничего.
-  - В Async — фоновая задача `Converting document`.
-- **Код:** `document.go: documentKey` (`key == "F8"`).
-
-#### Shift+F8 — выбор кодировки
-- **Вызов:** Shift+F8.
-- **Диалог:** choose `Code page` — список из 8 кодировок.
-- **Поведение:** редактор — как F8 (проверка кодируемости с учётом EOL, `modified()`). Просмотрщик: Dirty → `Save edited text before reinterpreting bytes`; постраничный → меняется только `Codepage` (влияет на dump); иначе перекодирование `Raw`, обновление `BOM`, `EOL`, `Buffer`, `Offset=0`, `markSaved()`. В Async — задача `Converting code page`.
-- **Код:** `document.go: chooseCodepage`.
-
-#### F9 — параметры документа (Options)
-- **Вызов:** F9 в документе (в панелях F9 — главное меню).
-- **Диалог:** форма `Viewer / editor options`: `Line endings` (текст, текущий EOL), `Write BOM` (toggle), `Read only` (toggle), `Scrollbar` (toggle), `Syntax highlighting (Chroma)` (toggle, глобальная настройка), `Auto indent` (toggle, глобальная), `Tab width (1–16)` (текст, глобальная), `Expand tabs to spaces` (toggle, глобальная).
-- **Поведение:** валидация: `Tab width must be 1–16`; `Line endings must be LF, CRLF or CR` (регистр не важен). `EOL`/`BOM` применяются только в редакторе (с `modified()`); `ReadOnly`, `Scrollbar` — на документ; остальные четыре — в `a.Settings` (действуют на все документы; сохраняются с настройками при `AutoSave`/`Save setup`).
-- **Код:** `document.go: documentSettings`.
+#### Cmd+F7 / Cmd+H — search and replace
+- **Invocation:** Cmd+F7 (Ctrl+F7) or Cmd+H (Ctrl+H) in the editor. In the viewer Cmd+H does nothing.
+- **Dialog:** form `Search` with the same 6 fields plus `Replace with` (empty) and toggle `Replace all` (off).
+- **Behavior:**
+  - Without `Replace all`: the first match is found, then confirm `Replace` / `Replace this match?` / buttons `Replace`, `Skip`, `Cancel`. `Replace` replaces the selected match (for Regex — `re.ReplaceAllString(matchText, replacement)`, i.e. `$1`, `${name}` are supported), then the next one is found and the dialog repeats; `Skip` — next without replacing; `Cancel`/Esc — stop. Each replacement is a separate undo record.
+  - `Replace all`: `Buffer.ReplaceAll` — all matches in a single `Replace(0, len)` (one undo record; for Regex — `ExpandString` with groups); status `Replaced %d matches` (including `Replaced 0 matches`); in Async — background task `Replacing matches`. When `ReadOnly` → error `editor is read-only`.
+- **Code:** `document.go: searchDocument, confirmReplacement`, `document_tasks.go: replaceAllAsync`, `textfile/buffer.go: ReplaceAll`.
 
 ---
 
-## 8. Переключение просмотрщик ↔ редактор
+## 7. Codepages, BOM, line endings
+
+### 7.1 Detection on open
+- `textfile.Detect(raw)`: prefix `FF FE` → `UTF-16LE`; `FE FF` → `UTF-16BE`; valid UTF-8 → `UTF-8`; otherwise `Windows-1251` (the default heuristic for "not UTF-8").
+- `Decode(raw, cp)`: strips the BOM (`EF BB BF` for UTF-8, 2 bytes for UTF-16; flag `BOM=true`); errors: `invalid UTF-8; choose another codepage`, `incomplete UTF-16 code unit`, `unsupported codepage %s`. For single-byte encodings a BOM is not recognized.
+- `DetectEOL`: has `\r\n` → `CRLF`; otherwise has `\r` → `CR`; otherwise `LF`. Inside the buffer all line endings are normalized to `\n` (`Normalize`).
+- Supported codepages (`textfile.Codepages`, in list order): `UTF-8`, `UTF-16LE`, `UTF-16BE`, `Windows-1251`, `CP866`, `Windows-1252`, `ISO-8859-1`, `KOI8-R`.
+- **Code:** `textfile/encoding.go`.
+
+### 7.2 Encoding on save
+- `Encode(Endings(Text, EOL), Codepage, BOM)`: the BOM is written only for UTF-8/UTF-16; for single-byte encodings an unrepresentable character → error `text cannot be represented in %s: …` (the save is not performed, the file is not touched). If the text/codepage/EOL/BOM have not changed — exactly `SavedRaw` is written to disk (byte-for-byte save, mixed line endings are not normalized).
+- **Code:** `textfile/encoding.go: Encode, Endings`, `document.go: saveDocument`.
+
+#### F8 — toggle CP866 / Windows-1251
+- **Invocation:** F8 (without Alt/Shift).
+- **Behavior:** the target `cp = "CP866"`, and if the current one is already `CP866` — `Windows-1251` (from UTF-8 the first press gives CP866).
+  - Editor: check `Encode(d.Text, cp, BOM)`; error → status; otherwise `Codepage = cp`, `modified()` (the document becomes Dirty — the output encoding will change).
+  - Viewer: only if the file is not paged and not Dirty: the `Raw` bytes are decoded anew (`Decode`), `Buffer` is recreated, `Offset=0`, `markSaved()`. Error → status. Paged/dirty — silently nothing.
+  - In Async — background task `Converting document`.
+- **Code:** `document.go: documentKey` (`key == "F8"`).
+
+#### Shift+F8 — choose codepage
+- **Invocation:** Shift+F8.
+- **Dialog:** choose `Code page` — a list of 8 codepages.
+- **Behavior:** editor — as F8 (encodability check taking EOL into account, `modified()`). Viewer: Dirty → `Save edited text before reinterpreting bytes`; paged → only `Codepage` changes (affects dump); otherwise `Raw` is re-decoded, `BOM`, `EOL`, `Buffer` are updated, `Offset=0`, `markSaved()`. In Async — task `Converting code page`.
+- **Code:** `document.go: chooseCodepage`.
+
+#### F9 — document options (Options)
+- **Invocation:** F9 in a document (in the panels F9 is the main menu).
+- **Dialog:** form `Viewer / editor options`: `Line endings` (text, the current EOL), `Write BOM` (toggle), `Read only` (toggle), `Scrollbar` (toggle), `Syntax highlighting (Chroma)` (toggle, global setting), `Auto indent` (toggle, global), `Tab width (1–16)` (text, global), `Expand tabs to spaces` (toggle, global).
+- **Behavior:** validation: `Tab width must be 1–16`; `Line endings must be LF, CRLF or CR` (case-insensitive). `EOL`/`BOM` are applied only in the editor (with `modified()`); `ReadOnly`, `Scrollbar` — per document; the remaining four — in `a.Settings` (apply to all documents; saved with the settings on `AutoSave`/`Save setup`).
+- **Code:** `document.go: documentSettings`.
+
+---
+
+## 8. Switching viewer ↔ editor
 
 #### F6
-- **Вызов:** F6 (key bar `6Edit` / `6View`).
-- **Поведение (`documentKey`):**
-  1. Архивный документ → `Copy the file out with F5 before editing`. Документ справки → ничего.
-  2. Постраничный → `Editor limit is 64 MiB`.
-  3. Просмотрщик → редактор: текст с NUL → `Binary data cannot be edited as text`; если не Dirty — проверка обратимости (`Decode(Raw)` → `Encode` == `Raw`), иначе `Encoding is not lossless; choose a codepage before editing`.
-  4. Редактор → просмотрщик: текущий текст кодируется (`Encode(Endings(Text,EOL), Codepage, BOM)`) и становится `Raw`/`Size` (чтобы hex показывал актуальные байты); если не Dirty — берётся `SavedRaw`. Ошибка кодирования → статус, переключения нет.
-  5. `Edit = !Edit`; при переходе в просмотрщик `Offset` = строка курсора, `ViewStart = Cursor`. Текст, курсор, Dirty, undo-история сохраняются.
-  6. В Async — фоновая задача `Converting document`.
-- **Код:** `document.go: documentKey` (`key == "F6"`).
+- **Invocation:** F6 (key bar `6Edit` / `6View`).
+- **Behavior (`documentKey`):**
+  1. Archive document → `Copy the file out with F5 before editing`. Help document → nothing.
+  2. Paged → `Editor limit is 64 MiB`.
+  3. Viewer → editor: text with NUL → `Binary data cannot be edited as text`; if not Dirty — a reversibility check (`Decode(Raw)` → `Encode` == `Raw`), otherwise `Encoding is not lossless; choose a codepage before editing`.
+  4. Editor → viewer: the current text is encoded (`Encode(Endings(Text,EOL), Codepage, BOM)`) and becomes `Raw`/`Size` (so that hex shows the current bytes); if not Dirty — `SavedRaw` is taken. Encoding error → status, no switch.
+  5. `Edit = !Edit`; when switching to the viewer `Offset` = the cursor line, `ViewStart = Cursor`. Text, cursor, Dirty and the undo history are preserved.
+  6. In Async — background task `Converting document`.
+- **Code:** `document.go: documentKey` (`key == "F6"`).
 
 ---
 
-## 9. Редактор
+## 9. Editor
 
-### 9.1 Ввод текста
-- Любой одиночный символ (`utf8.RuneCountInString(m.Key) == 1`, без Cmd/Ctrl/Alt) вставляется `Buffer.Insert`. При выделении — заменяет его. В режиме `Overwrite` (Insert) вставка затирает символы до конца строки (не через `\n`). При прямоугольном выделении — вставка во все строки блока в колонку `left` с заменой диапазона колонок (строки короче дополняются пробелами).
-- `Insert` переключает `Overwrite` (`EDIT INS`/`EDIT OVR` в статусе). Проверка модификаторов отсутствует: Ctrl+Insert/Shift+Insert, дошедшие до `editorKey`, тоже переключают (Shift+Insert перехватывается рендерером как paste и до Go-ключа не доходит).
-- При `ReadOnly` любая правка → статус `Read-only mode (⌘L to unlock)` (навигация, F2, Insert, Shift+F4 работают).
-- **Код:** `document_keys.go: editorKey`, `textfile/buffer.go: Insert, Replace`.
+### 9.1 Text input
+- Any single character (`utf8.RuneCountInString(m.Key) == 1`, without Cmd/Ctrl/Alt) is inserted via `Buffer.Insert`. With a selection — replaces it. In `Overwrite` mode (Insert) the insertion overwrites characters up to the end of the line (not across `\n`). With a rectangular selection — the insertion goes into all lines of the block at column `left`, replacing the column range (shorter lines are padded with spaces).
+- `Insert` toggles `Overwrite` (`EDIT INS`/`EDIT OVR` in the status). There is no modifier check: Ctrl+Insert/Shift+Insert that reach `editorKey` also toggle (Shift+Insert is intercepted by the renderer as paste and does not reach the Go key handler).
+- When `ReadOnly`, any edit → status `Read-only mode (⌘L to unlock)` (navigation, F2, Insert, Shift+F4 work).
+- **Code:** `document_keys.go: editorKey`, `textfile/buffer.go: Insert, Replace`.
 
-### 9.2 Навигация в редакторе
-- ←/→ — символ (Cmd/Ctrl — слово: `Word(at, dir)`, слово = буквы/цифры/`_`); ↑/↓ — строка с сохранением колонки в рунах (`At(row±1, col)`); PgUp/PgDn — `Rows-2` строк (Cmd — начало/конец файла); Home/End — начало/конец строки (Cmd — файла). Shift — расширение выделения, Alt (с Shift) — прямоугольное (`Move(target, Shift, Alt)`).
-- **Код:** `document_keys.go: editorKey`, `textfile/buffer.go: Move, Word, At`.
+### 9.2 Navigation in the editor
+- ←/→ — character (Cmd/Ctrl — word: `Word(at, dir)`, a word = letters/digits/`_`); ↑/↓ — line, keeping the column in runes (`At(row±1, col)`); PgUp/PgDn — `Rows-2` lines (Cmd — start/end of file); Home/End — start/end of line (Cmd — of file). Shift — extends the selection, Alt (with Shift) — rectangular (`Move(target, Shift, Alt)`).
+- **Code:** `document_keys.go: editorKey`, `textfile/buffer.go: Move, Word, At`.
 
-### 9.3 Выделение
-- Shift+стрелки/PgUp/PgDn/Home/End — потоковое; Alt+Shift+… — прямоугольное (`Rect`; колонки в рунах, табуляция = 1). Cmd+A (и меню Edit → Select All, сообщение `selectAll`) — всё (`Anchor=0, Cursor=len`, `Rect=false`). Cmd+U — снять выделение. Мышь — §5. `Selected()` прямоугольного блока — строки, соединённые `\n`.
-- **Код:** `document.go: documentKey` (`a`, `u`), `app.go: Handle("selectAll")`, `textfile/buffer.go: Selected`.
+### 9.3 Selection
+- Shift+arrows/PgUp/PgDn/Home/End — stream; Alt+Shift+… — rectangular (`Rect`; columns in runes, tab = 1). Cmd+A (and menu Edit → Select All, message `selectAll`) — everything (`Anchor=0, Cursor=len`, `Rect=false`). Cmd+U — clear the selection. Mouse — §5. `Selected()` of a rectangular block — the lines joined with `\n`.
+- **Code:** `document.go: documentKey` (`a`, `u`), `app.go: Handle("selectAll")`, `textfile/buffer.go: Selected`.
 
-### 9.4 Буфер обмена
-- **Вызов:** Cmd+C / Cmd+X (Ctrl+C / Ctrl+X) → `copyDocument(cut)`; меню Edit → Copy/Cut (JS `farshmacCopy/farshmacCut` → сообщения `copy`/`cut`); Cmd+V, Shift+Insert, меню Edit → Paste → `pasteRequest` → сообщение `paste` с текстом системного буфера.
-- **Поведение `copyDocument`:** если открыта форма — копируется/вырезается значение поля в фокусе (toggle — ничего); если диалог — его `Input`; иначе документ: берётся `Selected()`; если выделения нет — в редакторе копируется текущая строка целиком вместе с `\n` (при cut — удаляется), в просмотрщике без выделения ничего не происходит. Cut в просмотрщике = copy. Текст уходит в систему через `Update.Clipboard`.
-- **Paste:** в редакторе `Insert(text)` + `modified()` (многострочный текст — как есть, окончания нормализуются); в просмотрщике игнорируется; при открытой форме — в поле формы; в диалоге — в поле ввода.
-- Shift+Delete в редакторе — **не** вырезание, а обычное удаление (см. 9.6).
-- **Код:** `document.go: copyDocument`, `app.go: Handle` (`copy`, `cut`, `paste`, `selectAll`), `internal/native/assets/app.js`, `window_darwin.m` (меню Edit).
+### 9.4 Clipboard
+- **Invocation:** Cmd+C / Cmd+X (Ctrl+C / Ctrl+X) → `copyDocument(cut)`; menu Edit → Copy/Cut (JS `farshmacCopy/farshmacCut` → messages `copy`/`cut`); Cmd+V, Shift+Insert, menu Edit → Paste → `pasteRequest` → message `paste` with the text of the system clipboard.
+- **`copyDocument` behavior:** if a form is open — the value of the focused field is copied/cut (toggle — nothing); if a dialog — its `Input`; otherwise the document: `Selected()` is taken; if there is no selection — in the editor the whole current line is copied together with `\n` (on cut — deleted), in the viewer without a selection nothing happens. Cut in the viewer = copy. The text goes to the system via `Update.Clipboard`.
+- **Paste:** in the editor `Insert(text)` + `modified()` (multi-line text — as is, line endings are normalized); in the viewer ignored; when a form is open — into the form field; in a dialog — into the input field.
+- Shift+Delete in the editor is **not** cut, but ordinary deletion (see 9.6).
+- **Code:** `document.go: copyDocument`, `app.go: Handle` (`copy`, `cut`, `paste`, `selectAll`), `internal/native/assets/app.js`, `window_darwin.m` (Edit menu).
 
 ### 9.5 Undo / Redo
-- **Вызов:** Cmd+Z / Cmd+Shift+Z (Ctrl тоже) в редакторе.
-- **Поведение:** каждая `Replace` — запись (`At, Old, New, Before/After cursor, Anchor`). Undo восстанавливает текст, курсор и `Anchor` (выделение); Redo — снимает выделение. Новая правка после undo очищает redo. Лимиты: `MaxUndoBytes = 32 MiB` суммарно и 10 000 записей (старые выбрасываются); одиночная правка дороже 32 MiB очищает всю историю и сама не откатывается. При `ReadOnly` undo/redo не работают. После undo/redo `modified()` — если текст совпал с сохранённым, Dirty снимается.
-- **Код:** `textfile/buffer.go: Replace, Undo, Redo`.
+- **Invocation:** Cmd+Z / Cmd+Shift+Z (Ctrl too) in the editor.
+- **Behavior:** every `Replace` is a record (`At, Old, New, Before/After cursor, Anchor`). Undo restores the text, cursor and `Anchor` (selection); Redo — clears the selection. A new edit after undo clears redo. Limits: `MaxUndoBytes = 32 MiB` in total and 10 000 records (old ones are dropped); a single edit larger than 32 MiB clears the whole history and is itself not undoable. When `ReadOnly`, undo/redo do not work. After undo/redo `modified()` — if the text matches the saved one, Dirty is cleared.
+- **Code:** `textfile/buffer.go: Replace, Undo, Redo`.
 
-### 9.6 Удаление
-- Backspace — выделение или предыдущий символ; Delete — выделение или следующий символ. Cmd+Backspace / Cmd+Delete — слово назад/вперёд. Cmd+Y — вся текущая строка вместе с `\n`. Cmd+K — от курсора до конца строки. Cmd+D — удалить выделение (`Insert("")`).
-- **Код:** `document_keys.go: editorKey`.
+### 9.6 Deletion
+- Backspace — the selection or the previous character; Delete — the selection or the next character. Cmd+Backspace / Cmd+Delete — word backward/forward. Cmd+Y — the whole current line together with `\n`. Cmd+K — from the cursor to the end of the line. Cmd+D — delete the selection (`Insert("")`).
+- **Code:** `document_keys.go: editorKey`.
 
-### 9.7 Enter, табуляция, отступы
-- **Enter:** `Newline(auto)` — заменяет выделение на `\n` + (при `Auto indent`) ведущие пробелы/табы текущей строки, но только те, что находятся до курсора/начала выделения. Shift+Enter — вставляет имя (basename) текущего файла активной панели.
-- **Tab:** с выделением (курсор ≠ якорь) — отступ блока; `Expand tabs to spaces` → пробелы до следующей позиции табуляции (по отображаемой ширине строки до курсора); иначе `\t`. Shift+Tab — снятие отступа.
-- **Alt+I / Alt+U** — отступ / снятие отступа (`IndentWithOptions(reverse, width, spaces)`): строки от первой до последней строки выделения (последняя исключается, если выделение заканчивается в её колонке 0); отступ — `\t` или `width` пробелов; снятие — один ведущий `\t` или до `width` пробелов. Курсор и якорь пересчитываются, прямоугольность сохраняется; одна запись undo.
-- **Код:** `document_keys.go: editorKey`, `textfile/buffer.go: Newline, IndentWithOptions`.
+### 9.7 Enter, tab, indentation
+- **Enter:** `Newline(auto)` — replaces the selection with `\n` + (with `Auto indent`) the leading spaces/tabs of the current line, but only those before the cursor/start of the selection. Shift+Enter — inserts the name (basename) of the current file of the active panel.
+- **Tab:** with a selection (cursor ≠ anchor) — indents the block; `Expand tabs to spaces` → spaces up to the next tab stop (by the displayed width of the line before the cursor); otherwise `\t`. Shift+Tab — unindent.
+- **Alt+I / Alt+U** — indent / unindent (`IndentWithOptions(reverse, width, spaces)`): the lines from the first to the last line of the selection (the last one is excluded if the selection ends at its column 0); indent — `\t` or `width` spaces; unindent — one leading `\t` or up to `width` spaces. The cursor and anchor are recomputed, rectangularity is preserved; one undo record.
+- **Code:** `document_keys.go: editorKey`, `textfile/buffer.go: Newline, IndentWithOptions`.
 
-### 9.8 Только чтение
-- Cmd+L (Ctrl+L) переключает `ReadOnly` в обоих режимах; F9 → `Read only`. Архивные документы — `ReadOnly` изначально. Индикатор ` RO` в статусе. Сохранение при `ReadOnly` → ошибка `editor is read-only`.
-- **Код:** `document.go: documentKey` (`l`), `saveDocument`.
+### 9.8 Read only
+- Cmd+L (Ctrl+L) toggles `ReadOnly` in both modes; F9 → `Read only`. Archive documents are `ReadOnly` initially. Indicator ` RO` in the status. Saving when `ReadOnly` → error `editor is read-only`.
+- **Code:** `document.go: documentKey` (`l`), `saveDocument`.
 
-### 9.9 Сохранение
+### 9.9 Saving
 
-#### F2 / Cmd+S — сохранить
-- **Вызов:** F2, Cmd+S (Ctrl+S), сообщение `save`; key bar `2Save`. Только в редакторе (в просмотрщике Cmd+S — полоса прокрутки, F2 — перенос).
-- **Поведение (`saveDocumentThen(d, d.Path, false, nil)` → `saveDocument`):**
+#### F2 / Cmd+S — save
+- **Invocation:** F2, Cmd+S (Ctrl+S), message `save`; key bar `2Save`. Editor only (in the viewer Cmd+S is the scrollbar, F2 is wrap).
+- **Behavior (`saveDocumentThen(d, d.Path, false, nil)` → `saveDocument`):**
   1. `ReadOnly` → `editor is read-only`.
-  2. Кодирование (§7.2); если ничего не менялось — `SavedRaw`.
-  3. Путь совпадает с `d.Path` и есть `Info` (файл существовал) → `fsops.Save(path, data, Info)`: проверка, что файл на диске не менялся (`SameFile` по inode, размер, mtime) иначе ошибка `file changed on disk; reopen it before saving`; запись во временный `.farshmac-save-*` в том же каталоге, `chmod` по правам оригинала, `fsync`, `rename` (атомарная замена; ACL/xattr/hardlink-топология не сохраняются).
-  4. Нового файла (`Info == nil`, создан через Shift+F4) → `fsops.Create` (временный `.farshmac-new-*`, права 0644, `os.Link` — ошибка, если путь уже занят).
-  5. После успеха: `Path`, `Info = Stat`, `Raw = data`, `Size`, `markSaved()`, статус `Saved`.
-  6. Ошибка записи → статус с её текстом; файл на диске не меняется.
-  - В Async: сохраняется клон (`Saving file`), по завершении `*d = *copy`, `Saved`; `done` (закрытие) выполняется только если операция не отменена.
-  - Удалённый документ при `path == d.Path` → `saveRemoteDocument` (ниже).
-- **Код:** `document.go: save, saveDocument`, `document_tasks.go: saveDocumentThen`, `fsops/files.go: Save, Create`.
+  2. Encoding (§7.2); if nothing changed — `SavedRaw`.
+  3. The path equals `d.Path` and there is `Info` (the file existed) → `fsops.Save(path, data, Info)`: a check that the file on disk has not changed (`SameFile` by inode, size, mtime), otherwise error `file changed on disk; reopen it before saving`; write to a temporary `.farshmac-save-*` in the same directory, `chmod` to the original's permissions, `fsync`, `rename` (atomic replacement; ACL/xattr/hardlink topology are not preserved).
+  4. A new file (`Info == nil`, created via Shift+F4) → `fsops.Create` (temporary `.farshmac-new-*`, permissions 0644, `os.Link` — error if the path is already taken).
+  5. After success: `Path`, `Info = Stat`, `Raw = data`, `Size`, `markSaved()`, status `Saved`.
+  6. Write error → a status with its text; the file on disk is not changed.
+  - In Async: a clone is saved (`Saving file`), on completion `*d = *copy`, `Saved`; `done` (closing) runs only if the operation was not cancelled.
+  - A remote document with `path == d.Path` → `saveRemoteDocument` (below).
+- **Code:** `document.go: save, saveDocument`, `document_tasks.go: saveDocumentThen`, `fsops/files.go: Save, Create`.
 
 #### Shift+F2 / Cmd+Shift+S — Save as
-- **Диалог:** prompt `Save as`, подпись `Local file name`, значение — `d.Path`; для удалённого документа — `<путь активной панели>/<basename удалённого файла>`. Относительный путь разворачивается от пути активной панели.
-- **Поведение:** тот же путь → обычное сохранение. Существующий файл → confirm `Overwrite` / `<basename> already exists. Replace it?` / кнопки `Overwrite`, `Cancel`; при подтверждении `fsops.Save` с `Lstat` цели (перезапись с сохранением её прав). Несуществующий → `fsops.Create`. После успешного Save as удалённого документа в локальный файл документ становится локальным (`Remote/RemoteInfo/RemotePath` очищаются; временный кэш удалится при закрытии).
-- **Код:** `document.go: saveAs`, `document_tasks.go: saveDocumentThen`.
+- **Dialog:** prompt `Save as`, label `Local file name`, value — `d.Path`; for a remote document — `<active panel path>/<basename of the remote file>`. A relative path is expanded from the active panel's path.
+- **Behavior:** the same path → an ordinary save. An existing file → confirm `Overwrite` / `<basename> already exists. Replace it?` / buttons `Overwrite`, `Cancel`; on confirmation `fsops.Save` with `Lstat` of the target (overwrite preserving its permissions). Non-existent → `fsops.Create`. After a successful Save as of a remote document into a local file the document becomes local (`Remote/RemoteInfo/RemotePath` are cleared; the temporary cache is deleted on close).
+- **Code:** `document.go: saveAs`, `document_tasks.go: saveDocumentThen`.
 
-#### Сохранение на удалённый сервер
-- **Вызов:** F2/Cmd+S, Shift+F10, `Save` в диалогах закрытия для документа с `Remote != nil`.
-- **Поведение (`remote_document.go: saveRemoteDocument`), фоновая задача `Saving remote file`:**
-  1. Клон документа; staged-файл `<TempDir>/save-<random>`.
-  2. `Dial`, `Lstat(RemotePath)`; `sameRemoteInfo(current, RemoteInfo)` — совпадение размера, mtime и mode с моментом открытия/последнего сохранения; иначе ошибка `remote file changed; reopen before saving`.
-  3. Локальное сохранение клона в staged (вложенная операция `Preparing upload`, отменяется вместе с основной) — здесь же проверки кодировки/ReadOnly.
-  4. `metadataQuestions`, затем `remotefs.Copy` (1 worker, права = права текущего удалённого файла, `ExpectedDestination = current`, конфликт → перезапись).
-  5. Повторный `Lstat` → новый `RemoteInfo`.
-  6. Применение: `*d = *copy` (локальный `Path` документа теперь — staged-файл), удаляется старый кэш-файл, статус `Remote file saved`, затем `done`.
-- **Код:** `remote_document.go: saveRemoteDocument, sameRemoteInfo`.
+#### Saving to a remote server
+- **Invocation:** F2/Cmd+S, Shift+F10, `Save` in the close dialogs for a document with `Remote != nil`.
+- **Behavior (`remote_document.go: saveRemoteDocument`), background task `Saving remote file`:**
+  1. A clone of the document; staged file `<TempDir>/save-<random>`.
+  2. `Dial`, `Lstat(RemotePath)`; `sameRemoteInfo(current, RemoteInfo)` — size, mtime and mode must match the moment of opening/last save; otherwise error `remote file changed; reopen before saving`.
+  3. Local save of the clone into the staged file (nested operation `Preparing upload`, cancelled together with the main one) — the encoding/ReadOnly checks happen here.
+  4. `metadataQuestions`, then `remotefs.Copy` (1 worker, permissions = the permissions of the current remote file, `ExpectedDestination = current`, conflict → overwrite).
+  5. A repeated `Lstat` → new `RemoteInfo`.
+  6. Apply: `*d = *copy` (the document's local `Path` is now the staged file), the old cache file is deleted, status `Remote file saved`, then `done`.
+- **Code:** `remote_document.go: saveRemoteDocument, sameRemoteInfo`.
 
-#### Shift+F10 — сохранить и закрыть
-- В редакторе: `saveDocumentThen(d, d.Path, false, finishCloseDocument)` — при ошибке сохранения документ остаётся открытым. В просмотрщике Shift+F10 = обычное закрытие (§10).
-- **Код:** `document.go: documentKey`.
+#### Shift+F10 — save and close
+- In the editor: `saveDocumentThen(d, d.Path, false, finishCloseDocument)` — on a save error the document stays open. In the viewer Shift+F10 = an ordinary close (§10).
+- **Code:** `document.go: documentKey`.
 
 ---
 
-## 10. Закрытие, несколько документов, справка, терминал
+## 10. Closing, multiple documents, help, terminal
 
-#### Esc / F10 / F3 (просмотрщик) / F4 (редактор) — закрыть
-- **Вызов:** Esc, F10, key bar `3Close`/`10Close` (просмотрщик) или `4Close`/`10Close` (редактор). Esc дополнительно отменяет запущенную задачу подсветки.
-- **Поведение (`closeDocument`):** если `Dirty` → confirm `Save changes` / `<basename displayPath> has changed. Save it?` / кнопки `Save`, `Discard`, `Cancel` (Esc = Cancel). `Save` → сохранение по `d.Path` (локально или удалённо), затем закрытие; при ошибке сохранения документ остаётся.
-- **`finishCloseDocument`:** удаляет `TempDir` (удалённые/архивные кэши), останавливает подсветку, закрывает `File`, восстанавливает предыдущий документ из стека `Documents` (LIFO) или панели; `refresh()` панелей.
-- **Код:** `document.go: closeDocument, finishCloseDocument, documentKey`.
+#### Esc / F10 / F3 (viewer) / F4 (editor) — close
+- **Invocation:** Esc, F10, key bar `3Close`/`10Close` (viewer) or `4Close`/`10Close` (editor). Esc additionally cancels a running highlighting task.
+- **Behavior (`closeDocument`):** if `Dirty` → confirm `Save changes` / `<basename displayPath> has changed. Save it?` / buttons `Save`, `Discard`, `Cancel` (Esc = Cancel). `Save` → save to `d.Path` (locally or remotely), then close; on a save error the document remains.
+- **`finishCloseDocument`:** deletes `TempDir` (remote/archive caches), stops highlighting, closes `File`, restores the previous document from the `Documents` stack (LIFO) or the panels; `refresh()` of the panels.
+- **Code:** `document.go: closeDocument, finishCloseDocument, documentKey`.
 
-#### Cmd+Q — выход с проверкой всех документов
-- **Поведение (`RequestQuit`):** `Busy` → `Wait for the file operation to finish`. Если любой открытый документ (включая скрытые в стеке) Dirty → confirm `Save changes` / `Save changes in open documents before quitting?` / `Save all`, `Discard`, `Cancel`. `Save all` сохраняет по очереди (`saveAllThen`; ошибка прерывает выход). Далее при выполняющейся команде в терминале — confirm `Quit` / `A command is running. Close the application?` / `Yes`, `No`. В нескольких окнах `WindowGroup` обходит окна по очереди; в других окнах статус `Finish the quit dialog in the other window`.
-- **Код:** `app.go: RequestQuit, confirmQuitShell`, `document_tasks.go: saveAllThen`, `windows.go`.
+#### Cmd+Q — quit with a check of all documents
+- **Behavior (`RequestQuit`):** `Busy` → `Wait for the file operation to finish`. If any open document (including those hidden in the stack) is Dirty → confirm `Save changes` / `Save changes in open documents before quitting?` / `Save all`, `Discard`, `Cancel`. `Save all` saves them one by one (`saveAllThen`; an error aborts the quit). Then, if a command is running in the terminal — confirm `Quit` / `A command is running. Close the application?` / `Yes`, `No`. With several windows `WindowGroup` walks the windows one by one; in the other windows the status is `Finish the quit dialog in the other window`.
+- **Code:** `app.go: RequestQuit, confirmQuitShell`, `document_tasks.go: saveAllThen`, `windows.go`.
 
-#### F12 — список экранов
-- **Вызов:** F12 в документе и в панелях.
-- **Диалог:** choose `Screens`: `Panels`, затем для каждого документа (по `ScreenID`) `View ` или `Edit `, `* ` если Dirty, basename `displayPath`. Фокус — на текущем документе.
-- **Поведение:** выбор делает документ текущим (`selectScreen`), остальные — в стек; `Panels` → все документы в стек, `Doc = nil`; терминал скрывается.
-- **Код:** `document.go: screenMenu, screenDocuments, selectScreen`.
+#### F12 — screen list
+- **Invocation:** F12 in a document and in the panels.
+- **Dialog:** choose `Screens`: `Panels`, then for each document (by `ScreenID`) `View ` or `Edit `, `* ` if Dirty, the basename of `displayPath`. Focus is on the current document.
+- **Behavior:** selecting makes the document current (`selectScreen`), the rest go onto the stack; `Panels` → all documents onto the stack, `Doc = nil`; the terminal is hidden.
+- **Code:** `document.go: screenMenu, screenDocuments, selectScreen`.
 
-#### Ctrl+Tab / Ctrl+Shift+Tab, Cmd+Shift+] / Cmd+Shift+[ — циклическое переключение экранов
-- Работает везде (кроме открытых форм/диалогов): порядок — панели, затем документы по `ScreenID`; `]`/Tab — вперёд, `[`/Shift+Tab — назад, по кругу.
-- **Код:** `app.go: key`, `document.go: cycleScreen`.
+#### Ctrl+Tab / Ctrl+Shift+Tab, Cmd+Shift+] / Cmd+Shift+[ — cyclic screen switching
+- Works everywhere (except open forms/dialogs): the order is the panels, then the documents by `ScreenID`; `]`/Tab — forward, `[`/Shift+Tab — backward, cyclically.
+- **Code:** `app.go: key`, `document.go: cycleScreen`.
 
-#### F1 — справка
-- В документе: открывает новый экран-просмотрщик `Viewer / editor help` с текстом `documentHelp` (`Help=true`); внутри справки F1 и F6 не действуют, подсветка отключена. В панелях F1 открывает `FarshMac — Help` с общим текстом `help` (тот же просмотрщик).
-- **Текст `documentHelp` (дословно):**
+#### F1 — help
+- In a document: opens a new viewer screen `Viewer / editor help` with the `documentHelp` text (`Help=true`); inside the help F1 and F6 have no effect, highlighting is disabled. In the panels F1 opens `FarshMac — Help` with the general `help` text (the same viewer).
+- **The `documentHelp` text (verbatim):**
 
 ```
 FarshMac viewer / editor
@@ -1440,593 +1436,592 @@ replacement, plugin APIs, macros or persistent bookmarks yet. Text editing
 and text decoding are limited to 64 MiB; larger files use paged hex/dump.
 Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 ```
-- **Код:** `document.go: documentKey, documentHelp`, `app.go: function(1), help`.
+- **Code:** `document.go: documentKey, documentHelp`, `app.go: function(1), help`.
 
-#### Cmd+O — терминал поверх документа
-- Cmd+O (Ctrl+O) без Shift/Alt при закрытых формах переключает `TermVisible`. Документ остаётся открытым; пока терминал виден, клавиши и клики идут в терминал. Возврат Cmd+O показывает документ.
-- **Код:** `app.go: key, showTerminal`.
-
----
-
-## 11. Подсветка синтаксиса (Chroma)
-
-#### Планировщик
-- **Условия:** `Settings.EditorSyntax` включён, документ не справка, не постраничный, `Mode == "text"` (работает и в просмотрщике, и в редакторе).
-- **Поведение (`pollSyntax`, вызывается из `Poll`):** при смене документа/текста/пути — отмена старой задачи, сброс результата, дебаунс 200 мс. Текст > `highlight.MaxBytes` (1 MiB) — не отправляется, статус `syntax off: >1 MiB`. Иначе запускается `highlight.Run(ctx, displayPath, text)` в горутине; по завершении результат применяется только если поколение не изменилось (устаревшие результаты отбрасываются). Успех → статус = имя языка (`Result.Language`); ошибка/лимит → `syntax paused (limit/error)`. Esc в документе отменяет текущую задачу; закрытие документа/окна — `stopSyntax`.
-- **`highlight.Run`:** глобально не более 2 одновременных helper-процессов (на все окна); таймаут 2 с; запуск `<исполняемый файл> --syntax-helper <basename>` с текстом на stdin; вывод ограничен 8 MiB; проверка валидности смещений; `MaxSpans = 100000`.
-- **Helper (`HelperMain`/`Parse`):** лимит памяти Go 64 MiB; лексер — `lexers.Match(basename)` (для удалённых файлов — basename удалённого пути), иначе `lexers.Analyse(первые 8192 байт)`; нет лексера → пустой результат (без статуса). Ошибки: `syntax size limit`, `syntax token limit` (> 400 000 токенов), `lexer changed input`, `syntax span limit`, `incomplete lexer output`, паника лексера → `lexer: …`.
-- **Цвета (`tokenColor`):** Comment `0xaaaaaa`; Keyword `0xffffff`; LiteralString `0xffff55`; LiteralNumber `0x55ff55`; NameFunction/NameClass/NameBuiltin `0x55ff55`; NameTag/NameAttribute `0xff88ff`; Operator `0xffffff`; Error `0xff8888`; остальное — `Plain = 0x55ffff` (не записывается в spans). Выделение рисуется поверх подсветки.
-- **Отрисовка:** `documentSyntax(d)` возвращает результат только если он относится к текущему тексту и пути (иначе — без цветов), поэтому во время редактирования до пересчёта подсветка пропадает.
-- **Код:** `document_syntax.go`, `highlight/highlight.go`, `cmd/farshmac/main.go` (диспетчеризация `--syntax-helper`).
+#### Cmd+O — terminal over the document
+- Cmd+O (Ctrl+O) without Shift/Alt with forms closed toggles `TermVisible`. The document stays open; while the terminal is visible, keys and clicks go to the terminal. Cmd+O again shows the document.
+- **Code:** `app.go: key, showTerminal`.
 
 ---
 
-## 12. Сводка сообщений статуса (документ)
+## 11. Syntax highlighting (Chroma)
+
+#### Scheduler
+- **Conditions:** `Settings.EditorSyntax` is enabled, the document is not help, not paged, `Mode == "text"` (works in both the viewer and the editor).
+- **Behavior (`pollSyntax`, called from `Poll`):** on a change of document/text/path — the old task is cancelled, the result is reset, 200 ms debounce. Text > `highlight.MaxBytes` (1 MiB) is not sent, status `syntax off: >1 MiB`. Otherwise `highlight.Run(ctx, displayPath, text)` is started in a goroutine; on completion the result is applied only if the generation has not changed (stale results are discarded). Success → status = the language name (`Result.Language`); error/limit → `syntax paused (limit/error)`. Esc in the document cancels the current task; closing the document/window — `stopSyntax`.
+- **`highlight.Run`:** globally no more than 2 concurrent helper processes (across all windows); timeout 2 s; runs `<executable> --syntax-helper <basename>` with the text on stdin; output is limited to 8 MiB; offsets are validated; `MaxSpans = 100000`.
+- **Helper (`HelperMain`/`Parse`):** Go memory limit 64 MiB; lexer — `lexers.Match(basename)` (for remote files — the basename of the remote path), otherwise `lexers.Analyse(first 8192 bytes)`; no lexer → an empty result (no status). Errors: `syntax size limit`, `syntax token limit` (> 400 000 tokens), `lexer changed input`, `syntax span limit`, `incomplete lexer output`, a lexer panic → `lexer: …`.
+- **Colors (`tokenColor`):** Comment `0xaaaaaa`; Keyword `0xffffff`; LiteralString `0xffff55`; LiteralNumber `0x55ff55`; NameFunction/NameClass/NameBuiltin `0x55ff55`; NameTag/NameAttribute `0xff88ff`; Operator `0xffffff`; Error `0xff8888`; everything else — `Plain = 0x55ffff` (not written into spans). The selection is drawn over the highlighting.
+- **Rendering:** `documentSyntax(d)` returns the result only if it belongs to the current text and path (otherwise — no colors), so while editing, until recomputation, the highlighting disappears.
+- **Code:** `document_syntax.go`, `highlight/highlight.go`, `cmd/farshmac/main.go` (dispatch of `--syntax-helper`).
+
+---
+
+## 12. Summary of status messages (document)
 
 `Choose a regular file` · `Editor limit is 64 MiB. Large files open in paged hex/dump viewer.` · `File grew while opening; reopen it` · `Encoding is not lossless; inspect in viewer and choose a codepage before editing` · `Binary data: open with F3 in hex/dump mode` · `Editor limit is 64 MiB` · `Binary data cannot be edited as text` · `Encoding is not lossless; choose a codepage before editing` · `Copy the file out with F5 before editing` · `Return to the archive panel to choose another file` · `No next file` / `No previous file` · `Large files currently support paged hex/dump only` · `Search in paged files larger than 64 MiB is not implemented yet` · `Hex replacement is not available in text editor` · `Enter pairs of hex digits, e.g. 48 65 6c 6c 6f` · `Not found` · `Match found` · `Replaced %d matches` · `enter search text` · `Save edited text before reinterpreting bytes` · `Tab width must be 1–16` · `Line endings must be LF, CRLF or CR` · `Enter a percentage from 0 to 100` · `Offset outside file` · `Invalid line / column` · `Bookmark %d saved` · `Read-only mode (⌘L to unlock)` · `editor is read-only` · `Saved` · `Remote file saved` · `file changed on disk; reopen it before saving` · `remote file changed; reopen before saving` · `remote file changed during download` · `viewer requires a regular remote file` · `text cannot be represented in %s: …` · `invalid UTF-8; choose another codepage` · `incomplete UTF-16 code unit` · `unsupported codepage %s` · `syntax off: >1 MiB` · `syntax paused (limit/error)` · `View/edit history is empty` · `Archive is read-only. Use F5 to copy files out.` · `Use F5 to copy the archive link` · `This command requires a local panel. Use F5 to copy remote files first.` · `Wait for the file operation to finish`.
 
 ---
 
-## Расхождения между документацией (VIEWER_EDITOR_PARITY.md, README, F1-справка) и кодом
+## Discrepancies between the documentation (VIEWER_EDITOR_PARITY.md, README, F1 help) and the code
 
-> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+> **Closed on the `backlog-fixes` branch:** the decisions on each item are in the "Decisions on discrepancies" section of `docs/IMPLEMENTATION_BACKLOG.md`.
 
-1. **Alt+F3 / Alt+F4 (инверсия внутренний/внешний) и Cmd+Shift+F3 / Cmd+Shift+F4 (принудительно внутренний)** реализованы в `launch.go`/`app.go`, но не упомянуты ни в README, ни в справке F1, ни в `VIEWER_EDITOR_PARITY.md`, ни в меню Files.
-2. **Меню Commands → `File view/edit history`** не показывает клавишу (пустая строка), хотя Alt+F11 работает и указан в справке панелей (`Alt+F11/F12 View/edit history / folder history`).
-3. **Space в просмотрщике = следующее совпадение** — есть в коде, не описано нигде.
-4. **Cmd+D (удалить выделение), Cmd+U (снять выделение), Cmd+L в просмотрщике, Shift+Enter (вставить имя файла панели), Ctrl+Tab / Cmd+Shift+[ ] (переключение экранов), двойной/тройной клик, перетаскивание полосы прокрутки, Shift+F10 в просмотрщике (просто закрывает)** — не описаны в справке/parity.
-5. **Справка F1 описывает только Cmd-сочетания**, код принимает и Ctrl (`command := m.Meta || m.Ctrl`) для всех «Cmd+…» документа, включая закладки.
-6. **Insert игнорирует модификаторы:** Ctrl+Insert в редакторе переключает insert/overwrite, а не копирует (в Far Ctrl+Insert — копирование; в панелях FarshMac Ctrl+Insert копирует имена). Shift+Delete в редакторе — удаление, а не вырезание (в панелях — permanent delete). Справка умалчивает.
-7. **F9 в документе** — справка говорит «Encoding-related options, line endings, BOM, read-only», но форма также содержит `Scrollbar`, `Syntax highlighting (Chroma)`, `Auto indent`, `Tab width (1–16)`, `Expand tabs to spaces`, причём последние четыре — **глобальные** настройки, меняющие все документы (parity упоминает их как «F9: autoindent, tab width…»).
-8. **Alt+Left/Right «Adjust hex bytes per row»** также ограничивает ширину dump-режима (`BytesPerLine` применяется и в dump, с hex-потолком `(Cols-14)/4`); не описано.
-9. **Parity: «Shift+F2 selects word/character wrapping»** — в коде Shift+F2 переключает `WordWrap` и всегда включает `Wrap` (нет отдельного выбора), что соответствует справке «Word / character wrap», но не «selects».
-10. **F8 «CP866 / Windows-1251»**: из любой другой кодировки первое нажатие даёт CP866 (не «toggle» между двумя); в просмотрщике для Dirty-документа и для постраничных файлов F8 молча ничего не делает (без сообщения), тогда как Shift+F8 даёт `Save edited text before reinterpreting bytes`.
-11. **`+`/`-` открывают соседний файл всегда в просмотрщике** (даже из редактора) и всегда внутренним (`openDocument`), минуя внешние настройки — parity пишет только «Adjacent files: + / - in viewer».
-12. **История просмотра (Alt+F11)** открывает файл напрямую `openDocument` — также минуя внешние программы и без возможности открыть удалённый/архивный файл; parity пишет «Persistent view/edit history … absent», тогда как `viewHistory` сохраняется в setup (`Viewed`) — т.е. история персистентна, персистентны лишь не позиции.
-13. **Удалённое редактирование и сохранение на сервер** (`openRemoteDocument`, `saveRemoteDocument`, проверка `sameRemoteInfo`) полностью отсутствуют в `VIEWER_EDITOR_PARITY.md` и README (README лишь упоминает FTP/SFTP панели).
-14. **Просмотр из архива** (`ReadOnly`, `ArchiveSource`, запрет F6) описан только в ARCHIVE_SUPPORT/README одной фразой («editing an archive member requires extracting it first»); сообщения не задокументированы.
-15. **Parity «Highlighting: Chroma 2.20.0»** — совпадает с `go.mod` (`chroma/v2 v2.20.0`). Но parity не упоминает, что подсветка действует и в просмотрщике (text-режим), а статус языка показывается в заголовке.
-16. **Светлая тема** подменяет `0xffffff` и `0xffff55` (ключевые слова/операторы и строки) на тёмные цвета, а `0x55ff55` (числа/функции), `0xaaaaaa`, `0xff88ff` оставляет яркими на светлом фоне — тема не описана в parity.
-17. **Справка панелей:** «The text editor saves atomically, but does not preserve ACLs/xattrs/hardlinks» — соответствует `fsops.Save`; при этом новые файлы (`fsops.Create`) создаются с правами 0644, а не по umask — не описано.
-18. **README «Keyboard essentials»** не содержит ни одной клавиши вьюера/редактора, кроме `F3 / F4`; все остальные только в F1-справке документа.
-19. **Parity/справка: «Cmd+Shift+0..9 Save bookmark»** — закладки документа разбирают `m.Key` через `strconv.Atoi` (`document.go: documentKey`), а рендерер шлёт `Key: e.key` как есть (`app.js: keyMessage`), т.е. при Shift на US-раскладке придёт `!@#…`, и закладка не сохранится. Панельные folder-shortcuts (Ctrl+Shift+1..9) для того же случая используют `m.Code == "DigitN"` (`folder_shortcuts.go`). Тест `TestWrapGotoBookmarksAndRendering` шлёт `Key:"3", Shift:true` напрямую и этот путь не покрывает. Вероятная ошибка в коде, а не в документации.
+1. **Alt+F3 / Alt+F4 (internal/external inversion) and Cmd+Shift+F3 / Cmd+Shift+F4 (force internal)** are implemented in `launch.go`/`app.go` but are not mentioned in the README, the F1 help, `VIEWER_EDITOR_PARITY.md`, or the Files menu.
+2. **Menu Commands → `File view/edit history`** does not show a key (empty string), although Alt+F11 works and is listed in the panel help (`Alt+F11/F12 View/edit history / folder history`).
+3. **Space in the viewer = next match** — exists in the code, described nowhere.
+4. **Cmd+D (delete selection), Cmd+U (clear selection), Cmd+L in the viewer, Shift+Enter (insert the panel's file name), Ctrl+Tab / Cmd+Shift+[ ] (screen switching), double/triple click, scrollbar dragging, Shift+F10 in the viewer (simply closes)** — not described in the help/parity.
+5. **The F1 help describes only Cmd combinations**, while the code also accepts Ctrl (`command := m.Meta || m.Ctrl`) for all the document's "Cmd+…" combinations, including bookmarks.
+6. **Insert ignores modifiers:** Ctrl+Insert in the editor toggles insert/overwrite rather than copying (in Far, Ctrl+Insert is copy; in the FarshMac panels Ctrl+Insert copies names). Shift+Delete in the editor is deletion, not cut (in the panels — permanent delete). The help is silent about this.
+7. **F9 in a document** — the help says "Encoding-related options, line endings, BOM, read-only", but the form also contains `Scrollbar`, `Syntax highlighting (Chroma)`, `Auto indent`, `Tab width (1–16)`, `Expand tabs to spaces`, and the last four are **global** settings that change all documents (parity mentions them as "F9: autoindent, tab width…").
+8. **Alt+Left/Right "Adjust hex bytes per row"** also limits the width of dump mode (`BytesPerLine` applies in dump too, with the hex ceiling `(Cols-14)/4`); not described.
+9. **Parity: "Shift+F2 selects word/character wrapping"** — in the code Shift+F2 toggles `WordWrap` and always enables `Wrap` (there is no separate selection), which matches the help "Word / character wrap" but not "selects".
+10. **F8 "CP866 / Windows-1251"**: from any other codepage the first press gives CP866 (not a "toggle" between the two); in the viewer, for a Dirty document and for paged files F8 silently does nothing (no message), whereas Shift+F8 gives `Save edited text before reinterpreting bytes`.
+11. **`+`/`-` always open the adjacent file in the viewer** (even from the editor) and always internally (`openDocument`), bypassing external settings — parity says only "Adjacent files: + / - in viewer".
+12. **View history (Alt+F11)** opens the file directly with `openDocument` — also bypassing external programs and without the ability to open a remote/archive file; parity says "Persistent view/edit history … absent", whereas `viewHistory` is saved in the setup (`Viewed`) — i.e. the history is persistent, only the positions are not.
+13. **Remote editing and saving to the server** (`openRemoteDocument`, `saveRemoteDocument`, the `sameRemoteInfo` check) are entirely absent from `VIEWER_EDITOR_PARITY.md` and the README (the README only mentions FTP/SFTP panels).
+14. **Viewing from an archive** (`ReadOnly`, `ArchiveSource`, F6 prohibition) is described only in ARCHIVE_SUPPORT/README in one phrase ("editing an archive member requires extracting it first"); the messages are not documented.
+15. **Parity "Highlighting: Chroma 2.20.0"** — matches `go.mod` (`chroma/v2 v2.20.0`). But parity does not mention that highlighting also applies in the viewer (text mode) and that the language status is shown in the title.
+16. **The light theme** replaces `0xffffff` and `0xffff55` (keywords/operators and strings) with dark colors, but leaves `0x55ff55` (numbers/functions), `0xaaaaaa`, `0xff88ff` bright on a light background — the theme is not described in parity.
+17. **Panel help:** "The text editor saves atomically, but does not preserve ACLs/xattrs/hardlinks" — matches `fsops.Save`; however, new files (`fsops.Create`) are created with permissions 0644 rather than per umask — not described.
+18. **README "Keyboard essentials"** contains no viewer/editor key except `F3 / F4`; all the others are only in the document's F1 help.
+19. **Parity/help: "Cmd+Shift+0..9 Save bookmark"** — document bookmarks parse `m.Key` via `strconv.Atoi` (`document.go: documentKey`), while the renderer sends `Key: e.key` as is (`app.js: keyMessage`), i.e. with Shift on the US layout `!@#…` arrives and the bookmark is not saved. The panel folder shortcuts (Ctrl+Shift+1..9) use `m.Code == "DigitN"` for the same case (`folder_shortcuts.go`). The test `TestWrapGotoBookmarksAndRendering` sends `Key:"3", Shift:true` directly and does not cover this path. Probably a bug in the code, not in the documentation.
 
 
-<a id="часть-4"></a>
-# Часть 4. Терминал, командная строка, окна, нативная оболочка, renderer
+<a id="part-4"></a>
+# Part 4. Terminal, command line, windows, native shell, renderer
 
-Источник истины — код репозитория `/Users/ikim/src/remote-codex/farshmac` (ветка `main`, коммит `b91313a`). Строки интерфейса приведены дословно (английский), как в коде. В конце — список расхождений между документацией/справкой и кодом.
+The source of truth is the repository code `/Users/ikim/src/remote-codex/farshmac` (branch `main`, commit `b91313a`). Interface strings are quoted verbatim (English), as in the code. At the end is a list of discrepancies between the documentation/help and the code.
 
-Условные обозначения: «панельный режим» — `App.TermVisible == false`, `Update.Mode == "panels"`; «терминальный режим» — `TermVisible == true`, `Mode == "terminal"`. `PanelKeys` (поле `Update`) истинно, только когда нет документа, формы, диалога, меню и не идёт фоновая операция; нативный слой дополнительно сбрасывает его в терминальном режиме (`panelKeys = state.panelKeys && mode != "terminal"`).
+Conventions: "panel mode" — `App.TermVisible == false`, `Update.Mode == "panels"`; "terminal mode" — `TermVisible == true`, `Mode == "terminal"`. `PanelKeys` (a field of `Update`) is true only when there is no document, form, dialog or menu and no background operation is running; the native layer additionally clears it in terminal mode (`panelKeys = state.panelKeys && mode != "terminal"`).
+
+---
+## 1. Panel command line
+
+#### Typing characters into the command line
+- **Invocation:** any printable key (a single rune) without Ctrl/Alt in panel mode; Space when the line is non-empty; text paste (⌘V / Shift+Insert / IME composition).
+- **Where available:** panel mode, no menu/dialog/form/document, not `Busy`. Printable characters are first checked by `fastFindKey` (Alt+character is fast find; if a fast-find query is already active, printable characters go into it), then `selectionKey` (Numpad +/−/*), then `folderShortcutKey` and `farPanelKey`.
+- **Behavior:**
+  1. `a.Command += m.Key` for single runes without Ctrl and without Alt (Meta combinations are handled separately).
+  2. Space: if `a.Command == ""`, marks the file (`mark`); otherwise appends a space.
+  3. Backspace: removes the last rune; on an empty line does nothing (does not go up to the parent directory).
+  4. Escape: first `cancelReads()` (cancels the panel read); if there is nothing to cancel, clears `a.Command` and `a.Status`.
+  5. Paste (`paste` message): control characters are replaced with a space (`unicode.IsControl → ' '`), then all `\n` are removed; the result is appended to `a.Command`. With an active fast-find the paste goes to fast-find; with an open form, into the form field; in the editor, into the document; in a dialog, into the input field (if the field has focus).
+  6. `compositionend` (IME) in panel mode is sent as `paste` with `e.data`.
+- **Rendering:** the second-to-last screen line: `<active panel path>>` + command, cursor `▌` at the end (`draw.go`). For a remote panel the prefix is `local:<local path>`. A long line is truncated from the tail (`tail(prompt, g.W-1)`). The status line above it: `a.Status` or by default `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
+- **Special cases:** Ctrl+U and ⌘U swap the panels without touching the command. Ctrl+Left/Right with an empty command change the panel widths (step 2 %, range 20–80), Ctrl+Num5 resets.
+- **Code:** `internal/ui/app.go` `key()` (the `default`, `Backspace`, `Escape`, `" "` branches), `Handle()` case `"paste"`, `internal/ui/draw.go`.
+
+#### Command history: Ctrl+E / Ctrl+X, ⌘↑ / ⌘↓, Ctrl+↑ / Ctrl+↓
+- **Invocation:** Ctrl+E (previous), Ctrl+X (next); ⌘ArrowUp / ⌘ArrowDown; Ctrl+ArrowUp / Ctrl+ArrowDown.
+- **Where available:** panel mode without modal layers.
+- **Behavior:** `a.history` is a slice of strings, `a.historyAt` is the index (equal to `len(history)` after execution). "Back" is `historyAt = max(0, historyAt-1)`, the command is replaced with `history[historyAt]`. "Forward" is `historyAt = min(len, historyAt+1)`; if the index equals `len`, the command becomes empty. Ctrl+E/X: Ctrl only (not ⌘). ⌘↑/↓ and Ctrl+↑/↓ do the same.
+- **Limit:** `Settings.HistoryLimit` (1–10000, default 200); `appendUnique` removes duplicates and keeps the last N.
+- **Persistence:** `savedSetup.Commands` in `~/Library/Application Support/FarshMac/setup.json` (via `os.UserConfigDir()`), written by `saveSetup` (Shift+F9, Options → Save setup, or on exit if `AutoSave`). On startup `LoadSetup` restores `a.history`, `historyAt = len`.
+- **Code:** `internal/ui/far_keys.go` (`case "e", "x"`), `internal/ui/app.go` `key()` (`arrowup/arrowdown`, `ArrowUp/ArrowDown` with Ctrl), `internal/ui/settings.go`.
+
+#### Clearing the command line: Ctrl+Y / ⌘Y
+- **Invocation:** Ctrl+Y or ⌘Y (`cmd && k == "y"`).
+- **Behavior:** `a.Command = ""`. The history does not change.
+- **Code:** `far_keys.go` `case "y"`.
+
+#### Command history menu (Alt+F8 / Commands → Command history)
+- **Invocation:** Alt+F8; F9 → Commands → `Command history` (shortcut label `AltF8`).
+- **Behavior:** the `a.history` list in reverse order (newest on top) in a list form titled `Command history`; selecting an item puts its text into `a.Command` (does not execute it).
+- **Messages:** with an empty history, the status `Command history is empty`.
+- **Code:** `internal/ui/commands.go` `historyMenu("Commands")`, `internal/ui/form.go` `choose`.
+
+#### Filename completion: ⌘Space
+- **Invocation:** ⌘Space (`Meta` + `" "`). Tab does NOT complete; Tab switches the active panel.
+- **Where available:** panel mode; only if `Settings.CompleteFiles` (default true; turned off in Terminal settings / AutoComplete settings).
+- **Behavior:**
+  1. Only the last word of the command is completed (after the last space/tab).
+  2. If the token contains `' " \` $ \`, the status is `Completion: use an unquoted path prefix` and nothing is done.
+  3. The base is the active panel path; `dir = filepath.Dir(token)`, `prefix = filepath.Base(token)`; if the token is empty or ends with `/`, the prefix is empty and `dir = token`. Relative paths and `~` are expanded via `expand(dir, base)`.
+  4. The directory is read with `fsops.ReadDirectory` (in the async application, as a background task labelled `Completing filename`, cancellable with Esc; in sync, synchronously). `Settings.CompleteIgnoreCase` is honored. Directories get a `/` suffix. The result is sorted.
+  5. One match is inserted immediately; several open the `Complete filename` list form, and the selection is inserted. Insertion: `a.Command[:start] + terminal.Quote(value)` (always single quotes).
+  6. No matches: the status `No matching paths`.
+- **Code:** `internal/ui/completion.go` `completeCommand`, `applyCompletion`.
+
+#### Inserting names/paths into the command line
+- **Invocation and behavior:**
+  - **⌘Enter / Ctrl+Enter / Ctrl+J / ⌘J** → `insertFilename()`: the name of the file under the cursor of the active panel. If the name contains control characters, the status is `Cannot insert a filename containing control characters`. A name starting with `-` gets the `./` prefix. If the name contains anything other than `[A-Za-z0-9_./-]`, it is wrapped in `terminal.Quote` (single quotes, `'` → `'\''`). Before insertion, if the command is non-empty and has no trailing space/tab, a space is added; after the name, a space. (Menu Commands → `Insert filename` `⌘Enter`.)
+  - **Ctrl+Shift+Enter / ⌘Shift+Enter** → the name of the file under the cursor of the **inactive** panel via `appendPanelValue` (always quoted).
+  - **Ctrl+F / ⌘F** → the full path of the current item of the active panel (`p.Current()`), quoted.
+  - **Ctrl+; / ⌘;** → the full path of the current item of the inactive panel.
+  - **Ctrl+[ / ⌘[** → the left panel path; **with Shift**, the active panel path. **Ctrl+] / ⌘]** → the right panel path; **with Shift**, the inactive panel path.
+  - `appendPanelValue`: an empty value is ignored; control characters → the status `Cannot insert a path containing control characters`; with a non-empty command without a trailing space, a space is added; the value in `terminal.Quote` + a space.
+- **Code:** `internal/ui/app.go` `insertFilename`, `internal/ui/far_keys.go` `appendPanelValue`, `farPanelKey` (`case "j"`, `"f"`, `";"`, `Enter`, `BracketLeft/Right`).
+
+#### Copying the command line / names to the clipboard: Ctrl+Insert, ⌘Insert, Alt+Shift+Insert, Ctrl+Alt+Insert
+- **Invocation:** Insert with Ctrl or ⌘ (`cmd`), or Alt+Shift.
+- **Behavior:**
+  - Without Shift/Alt and with a non-empty command, the command text is copied.
+  - If the command is empty, or Shift or Alt is pressed, the selected items are copied (`p.Selected()`: marked ones, otherwise the current one, except `..`): without Alt, base names; with Alt, full paths; with Alt+Ctrl, paths after `filepath.EvalSymlinks` (error → `a.error`), for a remote panel `Remote.Label() + path`. If nothing is selected, the panel path. Names are joined with `\n`.
+  - The value goes to `a.Clipboard` → `Update.clipboard` → the renderer sends `{Type:'clipboard'}` → the native layer writes to `NSPasteboard` (`NSPasteboardTypeString`).
+- **Code:** `far_keys.go` (`m.Key == "Insert" && (cmd || m.Alt && m.Shift)`), `app.js` (`state.clipboard`), `window_darwin.m` (`clipboard`).
+
+#### ⌘C / ⌘X / ⌘V / ⌘A in panel mode
+- **Invocation:** the Edit menu (Copy ⌘C, Cut ⌘X, Paste ⌘V, Select All ⌘A). In panel mode the renderer does not intercept ⌘C/⌘V/⌘X (`if(e.metaKey&&['c','v','x']...)return;`); they reach the native menu, which calls `window.farshmacCopy/Cut/Paste/SelectAll`.
+- **Behavior:** `copy` → `copyDocument(false)`: in a form, the field value; in a dialog, the input; without a document, `copyPanelCommand`: the command, or (if the command is empty) the marked names, or the name under the cursor (joined with `\n`). `cut` → the same, but clears the field/command (with an empty command, cut copies nothing). `selectAll` without a document → the equivalent of `⌘A` in `key()` (in a dialog selects the input). `paste`: see "Typing characters".
+- **Code:** `app.go` `Handle` (`copy`, `cut`, `selectAll`, `paste`), `document.go` `copyDocument`, `mouse.go` `copyPanelCommand`.
 
 ---
 
-## 1. Командная строка панелей
+## 2. Command execution and shell integration
 
-#### Ввод символов в командную строку
-- **Вызов:** любая печатная клавиша (один rune) без Ctrl/Alt в панельном режиме; Space при непустой строке; вставка текста (⌘V / Shift+Insert / IME composition).
-- **Где доступно:** панельный режим, нет меню/диалога/формы/документа, не `Busy`. Печатные символы сначала проверяются `fastFindKey` (Alt+символ — быстрый поиск; если уже есть активный запрос быстрого поиска, печатные символы идут в него), затем `selectionKey` (Numpad +/−/*), затем `folderShortcutKey` и `farPanelKey`.
-- **Поведение:**
-  1. `a.Command += m.Key` для одиночных rune без Ctrl и без Alt (Meta-комбинации обрабатываются отдельно).
-  2. Space: если `a.Command == ""` — помечает файл (`mark`), иначе добавляет пробел.
-  3. Backspace: удаляет последний rune; при пустой строке ничего не делает (не поднимается в родительский каталог).
-  4. Escape: сначала `cancelReads()` (отмена чтения панели); если нечего отменять — очищает `a.Command` и `a.Status`.
-  5. Вставка (`paste` сообщение): управляющие символы заменяются пробелом (`unicode.IsControl → ' '`), затем все `\n` удаляются; результат добавляется к `a.Command`. При активном fast-find вставка уходит в fast-find; при открытой форме — в поле формы; в редакторе — в документ; в диалоге — в поле ввода (если фокус на поле).
-  6. `compositionend` (IME) в панельном режиме отправляется как `paste` с `e.data`.
-- **Отрисовка:** предпоследняя строка экрана: `<путь активной панели>>` + команда, курсор `▌` в конце (`draw.go`). Для удалённой панели префикс `local:<локальный путь>`. Длинная строка усекается по хвосту (`tail(prompt, g.W-1)`). Строка статуса над ней: `a.Status` или по умолчанию `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
-- **Особые случаи:** Ctrl+U и ⌘U меняют панели местами, не трогая команду. Ctrl+Left/Right при пустой команде меняют ширину панелей (шаг 2 %, диапазон 20–80), Ctrl+Num5 сбрасывает.
-- **Код:** `internal/ui/app.go` `key()` (ветка `default`, `Backspace`, `Escape`, `" "`), `Handle()` case `"paste"`, `internal/ui/draw.go`.
+#### Executing a command (Enter)
+- **Invocation:** Enter with a non-empty `a.Command` in panel mode; also `Apply command…` (Files), `User menu` (F2), `runUserCommand`: they build `a.Command` and call `execute()`.
+- **Behavior (`App.execute`)**:
+  1. `a.Term == nil` → the status `Shell unavailable`, return.
+  2. `!a.ShellReady` → the status `Shell is busy; ⌘O to return to it`, `TermVisible = true` (switches to the terminal), the command stays in the line.
+  3. `path = active panel.filesystemPath()` (for archive/remote panels, the local path); `a.Term.Run(path, command)`; an error → `a.error`.
+  4. On success: the command is added to `a.history` (`appendUnique`, limit `HistoryLimit`), `historyAt = len`, `Command = ""`, `TermVisible = true`, `ShellReady = false`.
+- **Transport (`Session.Run` → `request`)**: validation: `cwd` is absolute, no NUL in cwd/command, `len(cwd)+len(command) <= 1 MiB`, otherwise the error `invalid panel command or directory`. The file `<sessiondir>/panel-command` is created `O_EXCL` 0600 (if it already exists, an EEXIST error), content `cwd\0command\0run\0`. Then the private key `commandKey = ESC [777;<token>~` is written to the PTY (token is 32 hex from 16 random bytes per session). On error the file is removed.
+- **On the shell side:**
+  - zsh: the ZLE widget `_farshmac_panel_command` (bound in the keymaps `main emacs viins vicmd` to commandKey, historyKey, directoryKey) reads three NUL-separated fields via `builtin read -d ''`, removes the file, and if `$PWD` does not match does `builtin cd -- target`; on failure `zle -M "Cannot enter directory: <target>"`, a status marker 1, the command is not executed. Otherwise `BUFFER=$line; CURSOR=${#BUFFER}; zle reset-prompt; zle .accept-line`: the text goes into the regular zsh history, and the user's unfinished input is replaced entirely.
+  - bash/sh (Bash 3.2): the readline macro commandKey = `\C-x\C-k` (kill-whole-line) + `\C-x\C-g` (`bind -x` → `_farshmac_panel_command`). The function prints `\n<line>\n`, restores the previous history entry (a workaround for the Bash 3.2 bug with `history -s` from `bind -x`), `history -s -- line`, prints the busy marker, `builtin eval -- "$line"`, `history -a`, prints the ready marker with the status. A failed `cd` → a status marker 1 without execution.
+  - Multi-line commands (with `\n`) are passed as is (Apply command joins commands with `\n`).
+- **Messages:** `Shell unavailable`, `Shell is busy; ⌘O to return to it`, after completion `Exit <N> · ⌘O panels / terminal`.
+- **Special cases:** the command is executed in the active panel's directory even if the shell is in another one; for a remote panel, in `RemoteLocalPath`. Integration sequences are never sent while `ShellReady == false`.
+- **Code:** `internal/ui/app.go` `execute`, `internal/terminal/session.go` `Run`, `request`, zsh rc; `internal/terminal/bourne.go`.
 
-#### История команд: Ctrl+E / Ctrl+X, ⌘↑ / ⌘↓, Ctrl+↑ / Ctrl+↓
-- **Вызов:** Ctrl+E (предыдущая), Ctrl+X (следующая); ⌘ArrowUp / ⌘ArrowDown; Ctrl+ArrowUp / Ctrl+ArrowDown.
-- **Где доступно:** панельный режим без модальных слоёв.
-- **Поведение:** `a.history` — срез строк, `a.historyAt` — индекс (равен `len(history)` после выполнения). «Назад» — `historyAt = max(0, historyAt-1)`, команда заменяется на `history[historyAt]`. «Вперёд» — `historyAt = min(len, historyAt+1)`; если индекс равен `len`, команда становится пустой. Ctrl+E/X: только Ctrl (не ⌘). ⌘↑/↓ и Ctrl+↑/↓ делают то же.
-- **Лимит:** `Settings.HistoryLimit` (1–10000, по умолчанию 200); `appendUnique` удаляет дубликаты и хранит последние N.
-- **Сохранение:** `savedSetup.Commands` в `~/Library/Application Support/FarshMac/setup.json` (через `os.UserConfigDir()`), записывается `saveSetup` (Shift+F9, Options → Save setup, или при выходе если `AutoSave`). При старте `LoadSetup` восстанавливает `a.history`, `historyAt = len`.
-- **Код:** `internal/ui/far_keys.go` (`case "e", "x"`), `internal/ui/app.go` `key()` (`arrowup/arrowdown`, `ArrowUp/ArrowDown` c Ctrl), `internal/ui/settings.go`.
+#### Keyboard input into the terminal (`input` / `inputBinary`)
+- **Invocation:** xterm `onData` → `{Type:'input',Text}`; `onBinary` (legacy mouse reports with bytes ≥128) → `{Type:'inputBinary',Text: base64}`.
+- **Behavior:** `input`: if the text contains `\r` or `\n`, `ShellReady = false` immediately (reserving the shell until the preexec marker arrives); then `Term.Write`. `inputBinary` is decoded from base64 and written as is. `Session.Write`: a 1 MiB limit (`paste exceeds 1 MiB`), a non-blocking queue of 32 buffers (`terminal input queue is full`), a closed session → `shell closed`. These messages go to `Status` via `a.error`.
+- **Special cases:** `input`/`inputBinary`/`historyAppend`/`historyRead`/`commandHistory*`/`terminalError`/`mouseUp` are handled even while `Busy` (a file operation).
+- **Code:** `app.go` `Handle`, `session.go` `Write`.
 
-#### Очистка командной строки: Ctrl+Y / ⌘Y
-- **Вызов:** Ctrl+Y или ⌘Y (`cmd && k == "y"`).
-- **Поведение:** `a.Command = ""`. История не меняется.
-- **Код:** `far_keys.go` `case "y"`.
+#### Supported shells and selection
+- **Setting:** F9 → Options → `Terminal settings…`: a form: `Shell: bash / sh / zsh (new windows)` (text), `Command history entries (1–10000)`, `Complete filenames`, `Completion ignores case`, `Use custom shell prompt / hooks (new windows, may be slow)`. Validation: `Choose bash, sh or zsh`; `History entries must be 1–10000`. After applying, the status `Shell applies to new windows; Save setup to keep settings after restart`. Defaults: `Shell: "bash"`, `ShellCustomPrompt: false`. An invalid value in setup.json is normalized to `bash`.
+- **Startup (`terminal.StartConfigured(cwd, cols, rows, shell, customPrompt)`)**:
+  - A temporary directory `farshmac-shell-*` (0700) is created with private startup files (0600).
+  - **zsh:** `/bin/zsh -il`, `ZDOTDIR=<tempdir>`, `FARSHMAC_INTEGRATION_DIR=<tempdir>`, `FARSHMAC_USER_ZDOTDIR=<the user's ZDOTDIR or $HOME>`. The `.zshenv`/`.zprofile` wrappers first source the user's files of the same name, then set `ZDOTDIR` back to the integration directory; `.zshrc` sources the user's `.zshrc`, registers `_farshmac_precmd` (in `precmd_functions`) and `_farshmac_preexec` (in `preexec_functions`), the widget, `unsetopt PROMPT_SP`, and at the end `export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"` (so child zsh processes see the user's configuration).
+  - **bash:** `/bin/bash --noprofile --rcfile <tempdir>/shellrc -i`. `shellrc` sources `/etc/profile`, then the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`; if none, `~/.bashrc`. The user's `PROMPT_COMMAND` is saved in `_farshmac_user_prompt_command` and executed BEFORE the ready marker (`_farshmac_before_prompt`), then `PROMPT_COMMAND=_farshmac_before_prompt`.
+  - **sh:** `/bin/sh -i`, `ENV=<tempdir>/shellrc`, `FARSHMAC_USER_ENV=<the old $ENV>`; shellrc sources the user's `$FARSHMAC_USER_ENV` and at the end restores `ENV` for child shells (`export ENV="$FARSHMAC_USER_ENV"` or `unset ENV`).
+  - bash/sh bindings in the keymaps `emacs-standard vi-insert vi-command`: `\C-x\C-k` kill-whole-line, `\C-x\C-g` → the function, plus the macros `\C-x\C-e` end-of-line, `\C-x\C-i` quoted-insert, `\C-x\C-b` backward-delete-char, `\C-x\C-j` accept-line, `\C-x\C-y` yank, used by directoryKey to change directory while preserving the line being edited (Bash 3.2 caches PS1 during `bind -x`).
+  - **Simple prompt (customPrompt=false, the default):** zsh: `precmd_functions=()`, `preexec_functions=()`, `unfunction precmd preexec`, `unsetopt PROMPT_SUBST`, `PROMPT='%n@%m %~ %# '`, `RPROMPT=''` (after loading the user's .zshrc, i.e. the user's prompt hooks are disabled but aliases/variables remain); bash/sh: `unset PROMPT_COMMAND`, `PS1='\u@\h \w \$ '`.
+  - Environment: `TERM=xterm-256color`, `COLORTERM=truecolor`, `SHELL=/bin/<shell>`, `BASH_SILENCE_DEPRECATION_WARNING=1`, `CLICOLOR=1` (if not set and `NO_COLOR` is empty). PTY size: `cols × (rows-1)` (one line for the footer).
+  - The user's files are not modified.
+- **Startup probe:** `TestLiveStartupProbe` is an optional diagnostic test (`FARSHMAC_PROBE_STARTUP=1`, `FARSHMAC_PROBE_CUSTOM_PROMPT`) that measures the time until the first bash ready marker and until a command is accepted, with a 20 s limit. Not part of `check.sh`.
+- **Code:** `internal/terminal/session.go`, `bourne.go`, `startup_probe_test.go`, `internal/ui/settings.go` (`Terminal settings`), `app.go` `startTerminalAt`.
 
-#### Меню истории команд (Alt+F8 / Commands → Command history)
-- **Вызов:** Alt+F8; F9 → Commands → `Command history` (подпись шортката `AltF8`).
-- **Поведение:** список `a.history` в обратном порядке (новые сверху) в форме-списке с заголовком `Command history`; выбор элемента помещает текст в `a.Command` (не выполняет).
-- **Сообщения:** при пустой истории — статус `Command history is empty`.
-- **Код:** `internal/ui/commands.go` `historyMenu("Commands")`, `internal/ui/form.go` `choose`.
+#### Readiness protocol (Ready / Running / Exit markers, cwd, exit status)
+- **Behavior:** the shell prints OSC `ESC ] 777;<token>;<status|busy>;<PWD> BEL`. The Go parser (`parser.feed`) cuts only this marker out of the PTY stream; everything else (alternate screen, mouse, colors, DSR) goes to xterm. A marker split at a read boundary is buffered (a tail of up to `len(prefix)-1` bytes is kept; an unfinished marker > 64 KiB is flushed as data). `status != "busy"` → `Event{Ready:true, Status, Cwd}`; `busy` → `Event{Running:true, Cwd}`. On every Ready event `readCommands()` picks up the `command-history` file if present. A read EOF/EIO → `Event{Exit:true, Err:nil}`, any other error → `Err`. The `Events` channel has capacity 64; the PTY reader blocks if the UI does not drain it.
+- **UI (`App.Poll`)**: a single Poll reads up to 8 events and only while `len(pending) < 256 KiB`; draining happens only if `terminalCanDrain()`. `Running` → `ShellReady=false`. `Ready` → `ShellReady=true`, `shellStarted=true`, `ShellCwd=e.Cwd`, `finishPanelReturn()`, the status `Exit <N> · ⌘O panels / terminal`, `shellCommands` (if a history snapshot arrived). `Exit` → `scheduleShellRestart(e.Err)`.
+- **Terminal footer (`Update.Footer` in terminal mode):**
+  - with a scheduled restart: `⌘O  Panels    ·    <Status>`;
+  - ready: `⌘O  Panels    ·    Shell ready    ·    <ShellCwd>`;
+  - no first prompt yet: `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt`;
+  - a command is running: `⌘O  Panels    ·    ⌘.  Interrupt`.
+  - The renderer appends ` · ⌘⇧H Commands` and, on a history error, the prefix `History: <error> · `.
+- **Code:** `session.go` `parser`, `read`; `app.go` `Poll`.
 
-#### Автодополнение имени файла: ⌘Space
-- **Вызов:** ⌘Space (`Meta` + `" "`). Tab НЕ дополняет — Tab переключает активную панель.
-- **Где доступно:** панельный режим; только если `Settings.CompleteFiles` (по умолчанию true; выключается в Terminal settings / AutoComplete settings).
-- **Поведение:**
-  1. Дополняется только последнее слово команды (после последнего пробела/табуляции).
-  2. Если токен содержит `' " \` $ \` — статус `Completion: use an unquoted path prefix`, ничего не делается.
-  3. База — путь активной панели; `dir = filepath.Dir(token)`, `prefix = filepath.Base(token)`; если токен пуст или заканчивается `/` — префикс пустой, `dir = token`. Относительные пути и `~` раскрываются через `expand(dir, base)`.
-  4. Каталог читается `fsops.ReadDirectory` (в async-приложении — как фоновая задача с подписью `Completing filename`, можно отменить Esc; в sync — синхронно). Учитывается `Settings.CompleteIgnoreCase`. Каталоги получают суффикс `/`. Результат сортируется.
-  5. Одно совпадение — подставляется сразу; несколько — форма-список `Complete filename`, выбор подставляет. Подстановка: `a.Command[:start] + terminal.Quote(value)` (одинарные кавычки всегда).
-  6. Нет совпадений — статус `No matching paths`.
-- **Код:** `internal/ui/completion.go` `completeCommand`, `applyCompletion`.
+#### Switching panels ↔ terminal (⌘O / Ctrl+O)
+- **Invocation:** ⌘O or Ctrl+O (without Alt/Shift); the menu Commands → `Panels on/off / terminal` `⌘O` (calls only `showTerminal`). In the terminal the renderer intercepts the combination and sends `key`.
+- **Where available:** no dialog and no form (`a.Dialog == nil && a.Form == nil`); works with an open document (then the terminal is shown on top, and returning does not sync the panels) and during `Busy`? No: while `Busy`, `key()` first handles only Escape/Alt+C/the form and returns.
+- **Behavior:** closes the menu and fast-find. If the terminal is hidden, `showTerminal()`; otherwise `TermVisible=false`, and if there is no document, `returnFromTerminal()` + `refresh()` (re-reading both panels).
+- **Code:** `app.go` `key()`.
 
-#### Вставка имён/путей в командную строку
-- **Вызов и поведение:**
-  - **⌘Enter / Ctrl+Enter / Ctrl+J / ⌘J** → `insertFilename()`: имя файла под курсором активной панели. Если имя содержит управляющие символы — статус `Cannot insert a filename containing control characters`. Имя, начинающееся с `-`, получает префикс `./`. Если имя содержит что-либо кроме `[A-Za-z0-9_./-]` — обёртывается в `terminal.Quote` (одинарные кавычки, `'` → `'\''`). Перед вставкой при непустой команде без завершающего пробела/таба добавляется пробел; после имени — пробел. (Меню Commands → `Insert filename` `⌘Enter`.)
-  - **Ctrl+Shift+Enter / ⌘Shift+Enter** → имя файла под курсором **неактивной** панели через `appendPanelValue` (всегда в кавычках).
-  - **Ctrl+F / ⌘F** → полный путь текущего элемента активной панели (`p.Current()`), в кавычках.
-  - **Ctrl+; / ⌘;** → полный путь текущего элемента неактивной панели.
-  - **Ctrl+[ / ⌘[** → путь левой панели; **с Shift** — путь активной панели. **Ctrl+] / ⌘]** → путь правой панели; **с Shift** — путь неактивной.
-  - `appendPanelValue`: пустое значение игнорируется; управляющие символы → статус `Cannot insert a path containing control characters`; при непустой команде без завершающего пробела добавляется пробел; значение в `terminal.Quote` + пробел.
-- **Код:** `internal/ui/app.go` `insertFilename`, `internal/ui/far_keys.go` `appendPanelValue`, `farPanelKey` (`case "j"`, `"f"`, `";"`, `Enter`, `BracketLeft/Right`).
+#### Directory sync panel → shell (`showTerminal`, `syncShellCwd`, `pendingShellCwd`)
+- **Behavior:**
+  1. `showTerminal`: `TermVisible=true`. If there is a deferred "return from terminal" `shellPanelReturn` for the same panel and the same path, it is discarded and the cwd is NOT sent (the user just glanced at the panels and came back). Otherwise, if the active panel is local (`Remote == nil`): `pendingShellCwd = filesystemPath()`, `syncShellCwd()`.
+  2. `syncShellCwd` (also called at the end of every Poll): does nothing if `Term == nil`, `!ShellReady` or `pendingShellCwd == ""`. If the target matches `ShellCwd`, only clears it. Otherwise `Term.ChangeDir(target)` → `ShellReady=false`.
+  3. `Session.ChangeDir` writes `cwd\0\0cd\0` to `panel-command` and sends `directoryKey`. zsh: the widget does `cd`, `_farshmac_precmd`, `zle reset-prompt`; the line being edited is preserved, no history entry is added. bash/sh: the macro directoryKey = `\C-x\C-g` (cd, `_farshmac_cd_status`) + accepting an empty line to recompute PS1 + restoring the line from the kill ring.
+  4. If the shell is busy (a program is reading stdin), the request stays in `pendingShellCwd` and is sent on the next Ready (test `TestPanelDirectorySyncWaitsForShell`: the keys do not end up in `read`).
+  5. `pendingShellCwd` is overwritten by the latest request; on a shell restart it is used as the starting cwd.
+- **Code:** `app.go` `showTerminal`, `syncShellCwd`; `session.go` `ChangeDir`.
 
-#### Копирование командной строки / имён в буфер: Ctrl+Insert, ⌘Insert, Alt+Shift+Insert, Ctrl+Alt+Insert
-- **Вызов:** Insert с Ctrl или ⌘ (`cmd`), либо Alt+Shift.
-- **Поведение:**
-  - Без Shift/Alt и при непустой команде — копируется текст команды.
-  - Если команда пуста, либо нажат Shift или Alt — копируются выбранные элементы (`p.Selected()`: помеченные, иначе текущий, кроме `..`): без Alt — базовые имена; с Alt — полные пути; с Alt+Ctrl — пути после `filepath.EvalSymlinks` (ошибка → `a.error`), для удалённой панели — `Remote.Label() + path`. Если ничего не выбрано — путь панели. Имена соединяются `\n`.
-  - Значение попадает в `a.Clipboard` → `Update.clipboard` → renderer отправляет `{Type:'clipboard'}` → нативный слой пишет в `NSPasteboard` (`NSPasteboardTypeString`).
-- **Код:** `far_keys.go` (`m.Key == "Insert" && (cmd || m.Alt && m.Shift)`), `app.js` (`state.clipboard`), `window_darwin.m` (`clipboard`).
+#### Directory sync shell → panel (`returnFromTerminal`, `finishPanelReturn`, `syncCwd`)
+- **Behavior:**
+  1. On ⌘O from the terminal to the panels (without a document): if `ShellReady`, `syncCwd()`: for a local active panel with `ShellCwd != ""` and `pendingShellCwd == ""` → `Panels[Active].Load(ShellCwd)`.
+  2. If the shell is not ready (a command is running, or `cd` was just typed and Ready is still on its way): `shellPanelReturn{Active, Path}` is remembered (only for a local panel and with an empty `pendingShellCwd`).
+  3. On the next Ready, `finishPanelReturn`: if the terminal is still hidden, the active panel is the same and its path has not been changed by the user, the panel is local and `ShellCwd != ""` → `Load(ShellCwd)`. If the user has meanwhile moved to another directory, their choice is not overwritten (`TestShellCDReturnsToActivePanelBeforePromptEvent`).
+  4. The passive panel does not change. Remote panels are not synced in either direction.
+- **Code:** `app.go` `returnFromTerminal`, `finishPanelReturn`, `syncCwd`.
 
-#### ⌘C / ⌘X / ⌘V / ⌘A в панельном режиме
-- **Вызов:** меню Edit (Copy ⌘C, Cut ⌘X, Paste ⌘V, Select All ⌘A). Renderer в панельном режиме не перехватывает ⌘C/⌘V/⌘X (`if(e.metaKey&&['c','v','x']...)return;`), они доходят до нативного меню, которое вызывает `window.farshmacCopy/Cut/Paste/SelectAll`.
-- **Поведение:** `copy` → `copyDocument(false)`: в форме — значение поля; в диалоге — ввод; без документа — `copyPanelCommand`: команда, либо (если команда пуста) помеченные имена, либо имя под курсором (через `\n`). `cut` → то же, но очищает поле/команду (при пустой команде cut ничего не копирует). `selectAll` без документа → эквивалент `⌘A` в `key()` (в диалоге выделяет ввод). `paste` — см. «Ввод символов».
-- **Код:** `app.go` `Handle` (`copy`, `cut`, `selectAll`, `paste`), `document.go` `copyDocument`, `mouse.go` `copyPanelCommand`.
+#### Interrupting a command: ⌘. / Ctrl+C
+- **Invocation:** ⌘. in terminal mode (renderer: `e.metaKey && e.key==='.'` → `{Type:'input',Text:'\x03'}`); Ctrl+C goes to xterm as ordinary input.
+- **Behavior:** the byte 0x03 is written to the PTY (SIGINT via the terminal driver). Does not terminate the shell.
+- **Code:** `app.js` `attachCustomKeyEventHandler`.
 
----
+#### Restarting the shell after exit (`scheduleShellRestart`, `restartShellIfDue`)
+- **Invocation:** the `Exit` event from the session (`exit`, Ctrl+D/EOF, a crash, `exec` of another program and its termination).
+- **Behavior:**
+  1. `scheduleShellRestart(err)`: the cwd for the restart = `ShellCwd`, overridden by `pendingShellCwd`, otherwise the active panel path. `Term.Close()` (SIGHUP to the process group, closing the PTY, removing the tempdir), `Term=nil`, `ShellReady=false`, `shellStarted=false`, `shellCommands=nil`. If `closed` or `Quit`, return (no restart during shutdown).
+  2. `shellRestartAt = now + 1s` (protection against an endless spawn loop with a broken rc). The status `Shell exited; restarting…` or `Shell stopped: <err>; restarting…`.
+  3. A reset sequence is appended to the terminal stream: `ESC[?1049l ESC[0m ESC[?25h ESC[?1000l ESC[?1002l ESC[?1003l ESC[?1006l ESC[?2004l \r\n[Restarting shell]\r\n` (leaving the alternate screen, resetting attributes, showing the cursor, disabling mouse tracking and bracketed paste; the scrollback is kept).
+  4. `restartShellIfDue` (every Poll): when the time comes, if the cwd has been deleted, the nearest existing parent is taken; if there is none, `$HOME`. `startTerminalAt(cwd)` with this window's current `Settings.Shell`/`ShellCustomPrompt`. An error → `shellRestartAt = now + 3s`, the status `Cannot restart shell: <err>; retrying…`; success → `Shell restarting…`.
+  5. The terminal visibility does not change. A nested shell (`/bin/sh` → `exit`) does not trigger a restart (Exit only when the parent's PTY is closed).
+- **Code:** `internal/ui/shell_restart.go`, tests `shell_restart_test.go`.
 
-## 2. Выполнение команды и shell-интеграция
+#### Terminal start at launch/new window
+- **Behavior:** `native.Run`, after `EnableSession`, calls `a.StartTerminal()` for the first window if `Term == nil`; `EnableSession`/`NewWindow` start the shell for the other windows when `g.StartShell`. An error → the status `Shell: <err>`. The starting cwd is the active panel's `filesystemPath()`. PTY size `Cols × Rows-1` (Cols 60–300, Rows 15–120).
+- **Code:** `native_darwin.go` `Run`, `windows.go`, `session.go`, `app.go` `StartTerminal`.
 
-#### Выполнение команды (Enter)
-- **Вызов:** Enter при непустой `a.Command` в панельном режиме; также `Apply command…` (Files), `User menu` (F2), `runUserCommand` — они формируют `a.Command` и вызывают `execute()`.
-- **Поведение (`App.execute`)**:
-  1. `a.Term == nil` → статус `Shell unavailable`, выход.
-  2. `!a.ShellReady` → статус `Shell is busy; ⌘O to return to it`, `TermVisible = true` (переключает на терминал), команда остаётся в строке.
-  3. `path = активная панель.filesystemPath()` (для архивов/удалённых панелей — локальный путь); `a.Term.Run(path, command)`; ошибка → `a.error`.
-  4. При успехе: команда добавляется в `a.history` (`appendUnique`, лимит `HistoryLimit`), `historyAt = len`, `Command = ""`, `TermVisible = true`, `ShellReady = false`.
-- **Транспорт (`Session.Run` → `request`)**: проверка — `cwd` абсолютный, без NUL в cwd/command, `len(cwd)+len(command) <= 1 MiB`, иначе ошибка `invalid panel command or directory`. Файл `<sessiondir>/panel-command` создаётся `O_EXCL` 0600 (если уже существует — ошибка EEXIST), содержимое `cwd\0command\0run\0`. Затем в PTY записывается приватная клавиша `commandKey = ESC [777;<token>~` (token — 32 hex из 16 случайных байт на сессию). При ошибке файл удаляется.
-- **На стороне shell:**
-  - zsh: ZLE-виджет `_farshmac_panel_command` (привязан в keymap `main emacs viins vicmd` к commandKey, historyKey, directoryKey) читает три NUL-поля через `builtin read -d ''`, удаляет файл, при несовпадении `$PWD` делает `builtin cd -- target`; при неудаче `zle -M "Cannot enter directory: <target>"`, маркер статуса 1, команда не выполняется. Иначе `BUFFER=$line; CURSOR=${#BUFFER}; zle reset-prompt; zle .accept-line` — текст попадает в обычную историю zsh, незаконченный ввод пользователя целиком заменяется.
-  - bash/sh (Bash 3.2): readline-макрос commandKey = `\C-x\C-k` (kill-whole-line) + `\C-x\C-g` (`bind -x` → `_farshmac_panel_command`). Функция печатает `\n<line>\n`, восстанавливает предыдущую запись истории (обход бага Bash 3.2 `history -s` из `bind -x`), `history -s -- line`, печатает busy-маркер, `builtin eval -- "$line"`, `history -a`, печатает маркер готовности со статусом. Неудачный `cd` → маркер статуса 1 без выполнения.
-  - Многострочные команды (с `\n`) передаются как есть (Apply command соединяет команды `\n`).
-- **Сообщения:** `Shell unavailable`, `Shell is busy; ⌘O to return to it`, после завершения — `Exit <N> · ⌘O panels / terminal`.
-- **Особые случаи:** команда выполняется в каталоге активной панели, даже если shell в другом; для удалённой панели — в `RemoteLocalPath`. Интеграционные последовательности никогда не отправляются, пока `ShellReady == false`.
-- **Код:** `internal/ui/app.go` `execute`, `internal/terminal/session.go` `Run`, `request`, zsh rc; `internal/terminal/bourne.go`.
-
-#### Ввод в терминал с клавиатуры (`input` / `inputBinary`)
-- **Вызов:** xterm `onData` → `{Type:'input',Text}`; `onBinary` (legacy mouse reports с байтами ≥128) → `{Type:'inputBinary',Text: base64}`.
-- **Поведение:** `input`: если текст содержит `\r` или `\n`, `ShellReady = false` немедленно (резервирование shell до прихода preexec-маркера); затем `Term.Write`. `inputBinary` декодируется из base64 и пишется как есть. `Session.Write`: лимит 1 MiB (`paste exceeds 1 MiB`), неблокирующая очередь на 32 буфера (`terminal input queue is full`), закрытая сессия — `shell closed`. Эти сообщения — в `Status` через `a.error`.
-- **Особые случаи:** `input`/`inputBinary`/`historyAppend`/`historyRead`/`commandHistory*`/`terminalError`/`mouseUp` обрабатываются даже при `Busy` (файловая операция).
-- **Код:** `app.go` `Handle`, `session.go` `Write`.
-
-#### Поддерживаемые shell и выбор
-- **Настройка:** F9 → Options → `Terminal settings…` — форма: `Shell: bash / sh / zsh (new windows)` (текст), `Command history entries (1–10000)`, `Complete filenames`, `Completion ignores case`, `Use custom shell prompt / hooks (new windows, may be slow)`. Валидация: `Choose bash, sh or zsh`; `History entries must be 1–10000`. После применения статус `Shell applies to new windows; Save setup to keep settings after restart`. По умолчанию `Shell: "bash"`, `ShellCustomPrompt: false`. Некорректное значение в setup.json нормализуется в `bash`.
-- **Запуск (`terminal.StartConfigured(cwd, cols, rows, shell, customPrompt)`)**:
-  - Создаётся временный каталог `farshmac-shell-*` (0700) с приватными стартовыми файлами (0600).
-  - **zsh:** `/bin/zsh -il`, `ZDOTDIR=<tempdir>`, `FARSHMAC_INTEGRATION_DIR=<tempdir>`, `FARSHMAC_USER_ZDOTDIR=<пользовательский ZDOTDIR или $HOME>`. Обёртки `.zshenv`/`.zprofile` сначала подключают пользовательские файлы с тем же именем, затем возвращают `ZDOTDIR` на интеграционный каталог; `.zshrc` подключает пользовательский `.zshrc`, регистрирует `_farshmac_precmd` (в `precmd_functions`) и `_farshmac_preexec` (в `preexec_functions`), виджет, `unsetopt PROMPT_SP`, и в конце `export ZDOTDIR="$FARSHMAC_USER_ZDOTDIR"` (чтобы дочерние zsh видели пользовательскую конфигурацию).
-  - **bash:** `/bin/bash --noprofile --rcfile <tempdir>/shellrc -i`. `shellrc` подключает `/etc/profile`, затем первый из `~/.bash_profile`, `~/.bash_login`, `~/.profile`; если ни одного — `~/.bashrc`. Пользовательский `PROMPT_COMMAND` сохраняется в `_farshmac_user_prompt_command` и выполняется ПЕРЕД маркером готовности (`_farshmac_before_prompt`), затем `PROMPT_COMMAND=_farshmac_before_prompt`.
-  - **sh:** `/bin/sh -i`, `ENV=<tempdir>/shellrc`, `FARSHMAC_USER_ENV=<старый $ENV>`; shellrc подключает пользовательский `$FARSHMAC_USER_ENV` и в конце восстанавливает `ENV` для дочерних shell (`export ENV="$FARSHMAC_USER_ENV"` или `unset ENV`).
-  - Привязки bash/sh в keymap `emacs-standard vi-insert vi-command`: `\C-x\C-k` kill-whole-line, `\C-x\C-g` → функция, плюс макросы `\C-x\C-e` end-of-line, `\C-x\C-i` quoted-insert, `\C-x\C-b` backward-delete-char, `\C-x\C-j` accept-line, `\C-x\C-y` yank — используются directoryKey для смены каталога с сохранением редактируемой строки (Bash 3.2 кэширует PS1 во время `bind -x`).
-  - **Simple prompt (customPrompt=false, по умолчанию):** zsh — `precmd_functions=()`, `preexec_functions=()`, `unfunction precmd preexec`, `unsetopt PROMPT_SUBST`, `PROMPT='%n@%m %~ %# '`, `RPROMPT=''` (после загрузки пользовательского .zshrc, т.е. пользовательские хуки промпта отключаются, но алиасы/переменные остаются); bash/sh — `unset PROMPT_COMMAND`, `PS1='\u@\h \w \$ '`.
-  - Окружение: `TERM=xterm-256color`, `COLORTERM=truecolor`, `SHELL=/bin/<shell>`, `BASH_SILENCE_DEPRECATION_WARNING=1`, `CLICOLOR=1` (если не задан и `NO_COLOR` пуст). Размер PTY: `cols × (rows-1)` (одна строка под футер).
-  - Пользовательские файлы не модифицируются.
-- **Startup probe:** `TestLiveStartupProbe` — опциональный диагностический тест (`FARSHMAC_PROBE_STARTUP=1`, `FARSHMAC_PROBE_CUSTOM_PROMPT`) измеряет время до первого маркера готовности bash и до принятия команды, предел 20 с. Не часть `check.sh`.
-- **Код:** `internal/terminal/session.go`, `bourne.go`, `startup_probe_test.go`, `internal/ui/settings.go` (`Terminal settings`), `app.go` `startTerminalAt`.
-
-#### Протокол готовности (маркеры Ready / Running / Exit, cwd, exit status)
-- **Поведение:** shell печатает OSC `ESC ] 777;<token>;<status|busy>;<PWD> BEL`. Go-парсер (`parser.feed`) вырезает только этот маркер из потока PTY, всё остальное (alternate screen, mouse, цвета, DSR) уходит в xterm. Маркер, разбитый на границе чтения, буферизуется (хранится хвост до `len(prefix)-1` байт; незавершённый маркер > 64 KiB сбрасывается как данные). `status != "busy"` → `Event{Ready:true, Status, Cwd}`; `busy` → `Event{Running:true, Cwd}`. На каждый Ready-событие `readCommands()` подхватывает файл `command-history`, если есть. EOF/EIO чтения → `Event{Exit:true, Err:nil}`, иная ошибка — `Err`. Канал `Events` ёмкостью 64; читатель PTY блокируется, если UI не дренирует.
-- **UI (`App.Poll`)**: за один Poll читается до 8 событий и не более пока `len(pending) < 256 KiB`; дренаж только если `terminalCanDrain()`. `Running` → `ShellReady=false`. `Ready` → `ShellReady=true`, `shellStarted=true`, `ShellCwd=e.Cwd`, `finishPanelReturn()`, статус `Exit <N> · ⌘O panels / terminal`, `shellCommands` (если пришёл снимок истории). `Exit` → `scheduleShellRestart(e.Err)`.
-- **Футер терминала (`Update.Footer` в режиме terminal):**
-  - при запланированном перезапуске: `⌘O  Panels    ·    <Status>`;
-  - готов: `⌘O  Panels    ·    Shell ready    ·    <ShellCwd>`;
-  - ещё не было первого промпта: `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt`;
-  - команда выполняется: `⌘O  Panels    ·    ⌘.  Interrupt`.
-  - Renderer дописывает ` · ⌘⇧H Commands` и, при ошибке истории, префикс `History: <error> · `.
-- **Код:** `session.go` `parser`, `read`; `app.go` `Poll`.
-
-#### Переключение панели ↔ терминал (⌘O / Ctrl+O)
-- **Вызов:** ⌘O или Ctrl+O (без Alt/Shift); меню Commands → `Panels on/off / terminal` `⌘O` (вызывает только `showTerminal`). В терминале renderer перехватывает комбинацию и шлёт `key`.
-- **Где доступно:** нет диалога и формы (`a.Dialog == nil && a.Form == nil`); работает при открытом документе (тогда терминал показывается поверх, возврат не синхронизирует панели) и во время `Busy`? — нет: при `Busy` `key()` сначала обрабатывает только Escape/Alt+C/форму и выходит.
-- **Поведение:** закрывает меню и fast-find. Если терминал скрыт — `showTerminal()`; иначе `TermVisible=false`, и если документа нет — `returnFromTerminal()` + `refresh()` (перечитывание обеих панелей).
-- **Код:** `app.go` `key()`.
-
-#### Синхронизация каталога панель → shell (`showTerminal`, `syncShellCwd`, `pendingShellCwd`)
-- **Поведение:**
-  1. `showTerminal`: `TermVisible=true`. Если есть отложенный «возврат из терминала» `shellPanelReturn` для той же панели и того же пути — он сбрасывается и cwd НЕ отправляется (пользователь просто заглянул в панели и вернулся). Иначе, если активная панель локальная (`Remote == nil`): `pendingShellCwd = filesystemPath()`, `syncShellCwd()`.
-  2. `syncShellCwd` (вызывается также в конце каждого Poll): ничего не делает, если `Term == nil`, `!ShellReady` или `pendingShellCwd == ""`. Если цель совпадает с `ShellCwd` — только очистка. Иначе `Term.ChangeDir(target)` → `ShellReady=false`.
-  3. `Session.ChangeDir` пишет `cwd\0\0cd\0` в `panel-command` и шлёт `directoryKey`. zsh: виджет делает `cd`, `_farshmac_precmd`, `zle reset-prompt` — редактируемая строка сохраняется, запись в историю не добавляется. bash/sh: макрос directoryKey = `\C-x\C-g` (cd, `_farshmac_cd_status`) + принятие пустой строки для пересчёта PS1 + восстановление строки из kill ring.
-  4. Если shell занят (программа читает stdin) — запрос остаётся в `pendingShellCwd` и уходит при следующем Ready (тест `TestPanelDirectorySyncWaitsForShell`: ключи не попадают в `read`).
-  5. `pendingShellCwd` перезаписывается последним запросом; при перезапуске shell используется как стартовый cwd.
-- **Код:** `app.go` `showTerminal`, `syncShellCwd`; `session.go` `ChangeDir`.
-
-#### Синхронизация каталога shell → панель (`returnFromTerminal`, `finishPanelReturn`, `syncCwd`)
-- **Поведение:**
-  1. При ⌘O из терминала в панели (без документа): если `ShellReady` — `syncCwd()`: для локальной активной панели и `ShellCwd != ""` и `pendingShellCwd == ""` → `Panels[Active].Load(ShellCwd)`.
-  2. Если shell не готов (команда выполняется, или `cd` только что набран и Ready ещё в пути): запоминается `shellPanelReturn{Active, Path}` (только для локальной панели и при пустом `pendingShellCwd`).
-  3. При следующем Ready `finishPanelReturn`: если терминал всё ещё скрыт, активная панель та же и её путь не изменился пользователем, панель локальна и `ShellCwd != ""` → `Load(ShellCwd)`. Если пользователь успел перейти в другой каталог — его выбор не перезаписывается (`TestShellCDReturnsToActivePanelBeforePromptEvent`).
-  4. Пассивная панель не меняется. Удалённые панели не синхронизируются ни в какую сторону.
-- **Код:** `app.go` `returnFromTerminal`, `finishPanelReturn`, `syncCwd`.
-
-#### Прерывание команды: ⌘. / Ctrl+C
-- **Вызов:** ⌘. в терминальном режиме (renderer: `e.metaKey && e.key==='.'` → `{Type:'input',Text:'\x03'}`); Ctrl+C идёт в xterm как обычный ввод.
-- **Поведение:** в PTY пишется байт 0x03 (SIGINT через драйвер терминала). Не завершает shell.
-- **Код:** `app.js` `attachCustomKeyEventHandler`.
-
-#### Перезапуск shell после выхода (`scheduleShellRestart`, `restartShellIfDue`)
-- **Вызов:** событие `Exit` от сессии (`exit`, Ctrl+D/EOF, crash, `exec` другой программы и её завершение).
-- **Поведение:**
-  1. `scheduleShellRestart(err)`: cwd для перезапуска = `ShellCwd`, перекрывается `pendingShellCwd`, иначе путь активной панели. `Term.Close()` (SIGHUP группе процессов, закрытие PTY, удаление tempdir), `Term=nil`, `ShellReady=false`, `shellStarted=false`, `shellCommands=nil`. Если `closed` или `Quit` — выход (не перезапускается при завершении).
-  2. `shellRestartAt = now + 1s` (защита от бесконечного цикла спауна при сломанном rc). Статус `Shell exited; restarting…` либо `Shell stopped: <err>; restarting…`.
-  3. В поток терминала добавляется последовательность сброса: `ESC[?1049l ESC[0m ESC[?25h ESC[?1000l ESC[?1002l ESC[?1003l ESC[?1006l ESC[?2004l \r\n[Restarting shell]\r\n` (выход из alternate screen, сброс атрибутов, показ курсора, отключение mouse tracking и bracketed paste; scrollback сохраняется).
-  4. `restartShellIfDue` (каждый Poll): по наступлении времени — если cwd удалён, берётся ближайший существующий родитель; если ничего нет — `$HOME`. `startTerminalAt(cwd)` с текущими `Settings.Shell`/`ShellCustomPrompt` этого окна. Ошибка → `shellRestartAt = now + 3s`, статус `Cannot restart shell: <err>; retrying…`; успех → `Shell restarting…`.
-  5. Видимость терминала не меняется. Вложенный shell (`/bin/sh` → `exit`) не вызывает перезапуск (Exit только при закрытии PTY родителя).
-- **Код:** `internal/ui/shell_restart.go`, тесты `shell_restart_test.go`.
-
-#### Старт терминала при запуске/новом окне
-- **Поведение:** `native.Run` после `EnableSession` вызывает `a.StartTerminal()` для первого окна, если `Term == nil`; `EnableSession`/`NewWindow` стартуют shell для остальных окон при `g.StartShell`. Ошибка → статус `Shell: <err>`. Стартовый cwd — `filesystemPath()` активной панели. Размер PTY `Cols × Rows-1` (Cols 60–300, Rows 15–120).
-- **Код:** `native_darwin.go` `Run`, `windows.go`, `session.go`, `app.go` `StartTerminal`.
-
-#### Изменение размера терминала
-- **Поведение:** renderer измеряет ячейку (`measureCells` по `.xterm-screen` панели), вычисляет `cols = clamp(60..300, floor((innerWidth-8)/cellW))`, `rows = clamp(15..120, floor((innerHeight-8)/cellH))`; событие `resize` коалесцируется таймером 60 мс и шлётся только при изменении. Go: `resize` с тем же результатом игнорируется до любой другой обработки; иначе `Cols/Rows` обновляются и `Term.Resize(Cols, Rows-1)` (`pty.Setsize`). Renderer ресайзит панели до `cols×rows`, терминал до `cols×(rows-1)` через `archive.resize` (захват строк до и после). При смене шрифта перемер через 100 мс.
-- **Код:** `app.js` `dimensions`, `farshmacUpdate`; `app.go` `Handle` `resize`; `history.js` `resize`; тест `resize.cjs`.
+#### Terminal resize
+- **Behavior:** the renderer measures the cell (`measureCells` on the panel's `.xterm-screen`), computes `cols = clamp(60..300, floor((innerWidth-8)/cellW))`, `rows = clamp(15..120, floor((innerHeight-8)/cellH))`; the `resize` event is coalesced by a 60 ms timer and sent only on change. Go: a `resize` with the same result is ignored before any other handling; otherwise `Cols/Rows` are updated and `Term.Resize(Cols, Rows-1)` (`pty.Setsize`). The renderer resizes the panels to `cols×rows` and the terminal to `cols×(rows-1)` via `archive.resize` (capturing lines before and after). On a font change, re-measurement after 100 ms.
+- **Code:** `app.js` `dimensions`, `farshmacUpdate`; `app.go` `Handle` `resize`; `history.js` `resize`; test `resize.cjs`.
 
 ---
 
-## 3. Терминал (renderer, xterm.js)
+## 3. Terminal (renderer, xterm.js)
 
-#### Эмуляция, цвета, мышь
-- **Поведение:** xterm.js 5.5.0 + addon-unicode11 0.8.0 (vendored, offline, CSP `default-src 'none'`). Опции терминала: `fontFamily 'Menlo, Monaco, monospace'`, `fontSize 14` (из настроек), `lineHeight 1.15`, `cursorBlink`, `scrollback 4096`, `macOptionIsMeta: true` (Option+клавиша → ESC-префикс), `macOptionClickForcesSelection: true` (Option+drag выделяет даже при mouse tracking), `rightClickSelectsWord: true`, тема `FarshMacTerminalTheme` (чёрный фон `#000000`, текст `#c0c0c0`, курсор `#c0c0c0`, выделение `#465b73`, стандартная 16-цветная палитра xterm). Поддерживаются 16/256/RGB цвета, SGR, DSR, alternate screen, bracketed paste, mouse reports (SGR и legacy через `inputBinary`), Unicode 11 ширины (проверяется `terminal.cjs`).
-- **Фокус:** при переходе в режим terminal `term.focus()`, при выходе `document.activeElement.blur()`. Закрываются оверлеи истории.
-- **Код:** `app.js`, `history.js` (тема), `index.html`.
+#### Emulation, colors, mouse
+- **Behavior:** xterm.js 5.5.0 + addon-unicode11 0.8.0 (vendored, offline, CSP `default-src 'none'`). Terminal options: `fontFamily 'Menlo, Monaco, monospace'`, `fontSize 14` (from settings), `lineHeight 1.15`, `cursorBlink`, `scrollback 4096`, `macOptionIsMeta: true` (Option+key → ESC prefix), `macOptionClickForcesSelection: true` (Option+drag selects even with mouse tracking), `rightClickSelectsWord: true`, the theme `FarshMacTerminalTheme` (black background `#000000`, text `#c0c0c0`, cursor `#c0c0c0`, selection `#465b73`, the standard 16-color xterm palette). Supported: 16/256/RGB colors, SGR, DSR, alternate screen, bracketed paste, mouse reports (SGR and legacy via `inputBinary`), Unicode 11 widths (checked by `terminal.cjs`).
+- **Focus:** on entering terminal mode `term.focus()`, on leaving `document.activeElement.blur()`. History overlays are closed.
+- **Code:** `app.js`, `history.js` (theme), `index.html`.
 
-#### Клавиатура в терминале (что перехватывает renderer)
-- **Поведение (`term.attachCustomKeyEventHandler`, только keydown):**
-  - ⌘O / Ctrl+O → `key` в Go (переключение).
+#### Keyboard in the terminal (what the renderer intercepts)
+- **Behavior (`term.attachCustomKeyEventHandler`, keydown only):**
+  - ⌘O / Ctrl+O → `key` to Go (switching).
   - ⌘. → `\x03`.
-  - ⌘C или Ctrl+Shift+C → `copyText()`.
-  - ⌘V, Ctrl+Shift+V, Shift+Insert → `pasteRequest` (нативный слой читает `NSPasteboard` и вызывает `window.farshmacPaste`).
+  - ⌘C or Ctrl+Shift+C → `copyText()`.
+  - ⌘V, Ctrl+Shift+V, Shift+Insert → `pasteRequest` (the native layer reads `NSPasteboard` and calls `window.farshmacPaste`).
   - ⌘A → `term.selectAll()`.
-  - Любая другая комбинация с ⌘ **не** передаётся xterm (`return !e.metaKey`) — уходит в нативные key equivalents (меню: ⌘N, ⌘W, ⌘Q, ⌘⇧H, ⌃⌘F, ⌘M, ⌘`, ⌘⇧`).
-  - Все остальные клавиши (включая Fn/F1–F12, Option как Meta, Escape, Ctrl+*) обрабатывает xterm и отправляет в PTY.
-  - Document-level capture-listener: ⌘⇧H в терминальном режиме → `toggleCommands()`; при видимом оверлее истории — свои клавиши (см. ниже); иначе в терминальном режиме listener ничего не делает (`if(mode==='terminal')return;`).
-  - Нативно: `performKeyEquivalent` в `terminalMode` при ⌘⇧H (keyCode 4 или символ `h`) вызывает `terminalHistory:` напрямую. Option-перевод (`handlePanelOptionKey`) не применяется в терминале (`panelKeys` false).
-- **Код:** `app.js`, `window_darwin.m`.
+  - Any other combination with ⌘ is **not** passed to xterm (`return !e.metaKey`); it goes to the native key equivalents (menu: ⌘N, ⌘W, ⌘Q, ⌘⇧H, ⌃⌘F, ⌘M, ⌘`, ⌘⇧`).
+  - All other keys (including Fn/F1–F12, Option as Meta, Escape, Ctrl+*) are handled by xterm and sent to the PTY.
+  - Document-level capture listener: ⌘⇧H in terminal mode → `toggleCommands()`; with a visible history overlay, its own keys (see below); otherwise in terminal mode the listener does nothing (`if(mode==='terminal')return;`).
+  - Natively: `performKeyEquivalent` in `terminalMode` on ⌘⇧H (keyCode 4 or the character `h`) calls `terminalHistory:` directly. Option translation (`handlePanelOptionKey`) is not applied in the terminal (`panelKeys` false).
+- **Code:** `app.js`, `window_darwin.m`.
 
-#### Мышь в терминале
-- **Поведение:** xterm обрабатывает выделение и mouse tracking. Context menu (`contextmenu`): в терминальном режиме, если приложение включило mouse tracking (`term.modes.mouseTrackingMode !== 'none'`) и не зажаты Shift/Alt — меню не показывается (событие уходит приложению). Иначе показывается своё меню `.clipboard-menu` с кнопками `Copy`, `Paste`, `Select all` (позиция ограничена окном: `min(clientX, innerWidth-130)`, `min(clientY, innerHeight-100)`); закрывается кликом вне. В панельном режиме без документа контекстное меню не показывается (правая кнопка помечает файлы).
-- **Колесо вверх** в терминале: если буфер normal, viewport на самом верху (`viewportY===0`), в архиве есть строки старше резидентного scrollback (`history.total > baseY`) и (нет mouse tracking или зажат Shift/Alt) → открывается оверлей истории вывода на позиции `max(first, total - baseY - rows)`.
-- **Код:** `app.js` (`contextmenu`, `termEl wheel`).
+#### Mouse in the terminal
+- **Behavior:** xterm handles selection and mouse tracking. Context menu (`contextmenu`): in terminal mode, if the application has enabled mouse tracking (`term.modes.mouseTrackingMode !== 'none'`) and Shift/Alt are not held, the menu is not shown (the event goes to the application). Otherwise its own `.clipboard-menu` is shown with the buttons `Copy`, `Paste`, `Select all` (the position is clamped to the window: `min(clientX, innerWidth-130)`, `min(clientY, innerHeight-100)`); closed by a click outside. In panel mode without a document the context menu is not shown (the right button marks files).
+- **Wheel up** in the terminal: if the buffer is normal, the viewport is at the very top (`viewportY===0`), the archive has rows older than the resident scrollback (`history.total > baseY`) and (no mouse tracking or Shift/Alt held) → the output history overlay opens at the position `max(first, total - baseY - rows)`.
+- **Code:** `app.js` (`contextmenu`, `termEl wheel`).
 
-#### Копирование / вставка / выделить всё в терминале
-- **⌘C / Ctrl+Shift+C / Edit → Copy / контекстное меню Copy:** если открыт оверлей команд — копируется выделение в textarea; если открыт оверлей истории — выделенные строки страницы (переносы `\n` между строками, кроме soft-wrapped; `​` удаляется); иначе, если `term.hasSelection()` — `term.getSelection()`. Текст → `{Type:'clipboard'}` → `NSPasteboard`. Без выделения ничего не копируется.
-- **⌘V / Ctrl+Shift+V / Shift+Insert / Edit → Paste:** `pasteRequest` → native читает строку из pasteboard → `window.farshmacPaste(text)`: в оверлее команд — вставка в textarea; в терминале — закрывает оверлей истории, `term.paste(data)` (с bracketed paste при `?2004h`, `\n`→`\r`), `term.focus()`. Go-лимит 1 MiB.
-- **⌘A / Edit → Select All:** в оверлее команд — выделить textarea; в оверлее истории — выделить страницу; в терминале — `term.selectAll()` (весь резидентный буфер, до 4096 строк + экран).
-- **⌘X / Edit → Cut:** в оверлее команд — вырезать из textarea; в терминале ничего; в панелях — `cut`.
-- **Код:** `app.js` `copyText`, `farshmacPaste`, `farshmacSelectAll`, `farshmacCut`; `commands.js`; `history_view.js` `copy`, `selectAll`; `window_darwin.m` `pasteText:`, `copyText:` и обработчик `clipboard`.
+#### Copy / paste / select all in the terminal
+- **⌘C / Ctrl+Shift+C / Edit → Copy / context menu Copy:** if the commands overlay is open, the selection in the textarea is copied; if the history overlay is open, the selected rows of the page (`\n` line breaks between rows, except soft-wrapped ones; `​` is removed); otherwise, if `term.hasSelection()`, `term.getSelection()`. The text → `{Type:'clipboard'}` → `NSPasteboard`. Without a selection nothing is copied.
+- **⌘V / Ctrl+Shift+V / Shift+Insert / Edit → Paste:** `pasteRequest` → native reads the string from the pasteboard → `window.farshmacPaste(text)`: in the commands overlay, insertion into the textarea; in the terminal, closes the history overlay, `term.paste(data)` (with bracketed paste under `?2004h`, `\n`→`\r`), `term.focus()`. Go limit 1 MiB.
+- **⌘A / Edit → Select All:** in the commands overlay, select the textarea; in the history overlay, select the page; in the terminal, `term.selectAll()` (the whole resident buffer, up to 4096 rows + the screen).
+- **⌘X / Edit → Cut:** in the commands overlay, cut from the textarea; in the terminal, nothing; in the panels, `cut`.
+- **Code:** `app.js` `copyText`, `farshmacPaste`, `farshmacSelectAll`, `farshmacCut`; `commands.js`; `history_view.js` `copy`, `selectAll`; `window_darwin.m` `pasteText:`, `copyText:` and the `clipboard` handler.
 
-#### Scrollback и спулинг истории вывода на диск
-- **Поведение (renderer, `TerminalArchive`):** строки normal-буфера, уходящие выше верха экрана (между маркером и `baseY`), сериализуются (`{c: cols, w: isWrapped, r: [[text, fgRGB, bgRGB, flags], …]}`; flags: 1 bold, 2 dim, 4 italic, 8 underline, 16 blink, 32 inverse, 64 invisible, 128 strikethrough; хвостовые пробелы без фона/флагов обрезаются). Захват происходит после каждой записи куска ≤ `min(4094, scrollback-2)` байт, перед `ESC[3J`, `ESC c` и переходом в alternate screen (`?1049h/?1047h/?47h`), а также до/после resize. Alternate screen не архивируется. Рост окна не дублирует уже заархивированные строки. Архив отключается при `state.history.error`.
-- **Передача:** после обработки кадра renderer шлёт `{Type:'historyAppend', History: lines}`; Go (`appendTerminalHistory`) ставит батч в очередь: не больше 8 батчей и не больше `MaxHistoryBatch = 8 MiB` в очереди, иначе `historyStatus.Error = "History writer is overloaded; live output continues"`. Запись идёт в горутине по одному батчу (`startHistoryWrite`).
-- **Backpressure:** `terminalCanDrain()` = ошибка истории уже есть ИЛИ (`len(queue) < 2` и `queuedBytes < 4 MiB`). Пока false — события PTY не читаются и `Update.Terminal` не отправляется; кадр терминала ≤ 16 KiB base64-данных за Poll; буфер `pending` ограничен 256 KiB на цикл чтения. Renderer подтверждает кадр `frameDone{More}` только после парсинга xterm и отправки батча; native не вызывает следующий `goPoll`, пока `evaluating`; при `More` тик вызывается немедленно.
-- **Хранилище (`terminal.History`):** temp-каталог `farshmac-history-*` (0700), сегменты `<total>.rows`/`.idx` (0600), сегмент ≈ `HistorySegmentBytes = 16 MiB`, общий бюджет `HistoryDiskBytes = 1 GiB` на окно — старые сегменты удаляются, `First` растёт («oldest rows expired»). Ограничения батча: строка ≤ 256 KiB, батч ≤ 8 MiB и ≤ 20000 строк, валидный JSON, иначе `terminal history batch exceeds limits or is invalid` и история переходит в состояние ошибки (ранее записанные страницы читаются). В RAM — только метаданные сегментов (тест: 200 000 строк, рост heap < 4 MiB).
-- **Чтение:** `Page(start, count)`: `count` ограничен `HistoryPageLines = 256`; за раз в полёте не больше одного запроса (`historyRead`).
-- **Закрытие окна:** `App.Close` закрывает историю в горутине и удаляет каталог; `WindowGroup.CloseAll` ждёт завершения всех очисток. Между запусками история не восстанавливается.
-- **Код:** `internal/native/assets/history.js`, `internal/ui/terminal_history.go`, `internal/terminal/history.go`, тесты `terminal.cjs`, `throughput.cjs`, `terminal_throughput_test.go`, `history_test.go`.
+#### Scrollback and spooling output history to disk
+- **Behavior (renderer, `TerminalArchive`):** rows of the normal buffer that scroll above the top of the screen (between the marker and `baseY`) are serialized (`{c: cols, w: isWrapped, r: [[text, fgRGB, bgRGB, flags], …]}`; flags: 1 bold, 2 dim, 4 italic, 8 underline, 16 blink, 32 inverse, 64 invisible, 128 strikethrough; trailing spaces without background/flags are trimmed). Capture happens after every write of a chunk ≤ `min(4094, scrollback-2)` bytes, before `ESC[3J`, `ESC c` and switching to the alternate screen (`?1049h/?1047h/?47h`), and before/after a resize. The alternate screen is not archived. Window growth does not duplicate rows already archived. The archive is disabled on `state.history.error`.
+- **Transfer:** after processing a frame the renderer sends `{Type:'historyAppend', History: lines}`; Go (`appendTerminalHistory`) queues the batch: at most 8 batches and at most `MaxHistoryBatch = 8 MiB` in the queue, otherwise `historyStatus.Error = "History writer is overloaded; live output continues"`. Writing happens in a goroutine one batch at a time (`startHistoryWrite`).
+- **Backpressure:** `terminalCanDrain()` = a history error already exists OR (`len(queue) < 2` and `queuedBytes < 4 MiB`). While false, PTY events are not read and `Update.Terminal` is not sent; a terminal frame is ≤ 16 KiB of base64 data per Poll; the `pending` buffer is limited to 256 KiB per read cycle. The renderer acknowledges the frame with `frameDone{More}` only after xterm parsing and sending the batch; native does not call the next `goPoll` while `evaluating`; with `More` the tick is invoked immediately.
+- **Storage (`terminal.History`):** a temp directory `farshmac-history-*` (0700), segments `<total>.rows`/`.idx` (0600), a segment ≈ `HistorySegmentBytes = 16 MiB`, a total budget `HistoryDiskBytes = 1 GiB` per window; old segments are deleted, `First` grows ("oldest rows expired"). Batch limits: a row ≤ 256 KiB, a batch ≤ 8 MiB and ≤ 20000 rows, valid JSON, otherwise `terminal history batch exceeds limits or is invalid` and the history enters the error state (previously written pages remain readable). Only segment metadata is kept in RAM (test: 200,000 rows, heap growth < 4 MiB).
+- **Reading:** `Page(start, count)`: `count` is limited to `HistoryPageLines = 256`; at most one request in flight at a time (`historyRead`).
+- **Window close:** `App.Close` closes the history in a goroutine and removes the directory; `WindowGroup.CloseAll` waits for all cleanups to finish. The history is not restored between launches.
+- **Code:** `internal/native/assets/history.js`, `internal/ui/terminal_history.go`, `internal/terminal/history.go`, tests `terminal.cjs`, `throughput.cjs`, `terminal_throughput_test.go`, `history_test.go`.
 
-#### Оверлей истории вывода (Window → Terminal Output History)
-- **Вызов:** меню Window → `Terminal Output History` (без шортката; активен только в терминальном режиме — `validateMenuItem`); колесо вверх от верха scrollback (см. выше). Отдельного клавиатурного шортката нет (⌘⇧? не привязан).
-- **Поведение:** `document.body` получает класс `archive`: терминал скрывается, показывается `#history` с тулбаром: кнопки `↑ Older`, `↓ Newer`, `Live · Esc` и подпись. Открывается на `max(first, total - rows)` (последняя страница), `rows = max(1, term.rows-2)`. Запрос `{Type:'historyRead', Start, Count: rows, Request}`; Go отвечает `historyPage` (в `Update`), renderer применяет только страницу с совпадающим `request`. Строки рендерятся span-ами с цветами/атрибутами (inverse меняет fg/bg, dim — opacity .5, invisible — hidden). Пустая строка — `​`.
-- **Подпись:** `History <start+1>–<end> / <total>` + ` · oldest rows expired` если `first > 0`; `History is empty`; либо текст ошибки страницы.
-- **Навигация:** ArrowUp/ArrowDown ±1, PageUp/PageDown ±rows, Home — самая старая страница, End/Escape — закрыть (`Live`), колесо — ±1..12 строк (по `deltaY/20`). Если ответ пришёл не на желаемую позицию — повторный запрос. ⌘O закрывает оверлей и переключает режим. ⌘C/⌘A/⌘V — копирование/выделение страницы/вставка (вставка закрывает оверлей и идёт в терминал).
-- **Особые случаи:** поиск по истории не реализован. Выделение/копирование ограничены одной страницей. При смене режима оверлей закрывается.
-- **Код:** `history_view.js`, `app.js` `toggleHistory`, `window_darwin.m` `terminalOutputHistory:`, `terminal_history.go` `readTerminalHistory`.
+#### Output history overlay (Window → Terminal Output History)
+- **Invocation:** the menu Window → `Terminal Output History` (no shortcut; enabled only in terminal mode, `validateMenuItem`); wheel up from the top of the scrollback (see above). There is no separate keyboard shortcut (⌘⇧? is not bound).
+- **Behavior:** `document.body` gets the class `archive`: the terminal is hidden, `#history` is shown with a toolbar: the buttons `↑ Older`, `↓ Newer`, `Live · Esc` and a caption. Opens at `max(first, total - rows)` (the last page), `rows = max(1, term.rows-2)`. The request `{Type:'historyRead', Start, Count: rows, Request}`; Go replies with `historyPage` (in `Update`), the renderer applies only the page with a matching `request`. Rows are rendered as spans with colors/attributes (inverse swaps fg/bg, dim is opacity .5, invisible is hidden). An empty row is `​`.
+- **Caption:** `History <start+1>–<end> / <total>` + ` · oldest rows expired` if `first > 0`; `History is empty`; or the page error text.
+- **Navigation:** ArrowUp/ArrowDown ±1, PageUp/PageDown ±rows, Home is the oldest page, End/Escape closes (`Live`), the wheel is ±1..12 rows (by `deltaY/20`). If the reply is not for the desired position, a repeated request. ⌘O closes the overlay and switches the mode. ⌘C/⌘A/⌘V copy/select the page/paste (paste closes the overlay and goes to the terminal).
+- **Special cases:** history search is not implemented. Selection/copying are limited to one page. On a mode switch the overlay closes.
+- **Code:** `history_view.js`, `app.js` `toggleHistory`, `window_darwin.m` `terminalOutputHistory:`, `terminal_history.go` `readTerminalHistory`.
 
-#### Оверлей истории команд shell (⌘⇧H / Window → Command History)
-- **Вызов:** ⌘⇧H (renderer capture-listener и нативный `performKeyEquivalent` в terminalMode); меню Window → `Command History` `⇧⌘H` (активен только в терминальном режиме). Повторное нажатие закрывает.
-- **Поведение:**
-  1. Открывается диалог `#commands` (подпись `Command history`, список `<select size=12>`, поле `Edit command (Shift+Enter: new line)` — textarea 3 строки, кнопки `Run · Enter`, `Cancel · Esc`). Оверлей истории вывода закрывается.
-  2. Подпись `Loading command history…`; если shell не готов — `Waiting for shell prompt… · Esc: cancel`; запрос `{Type:'commandHistory'}` отправляется, как только `shellReady` (один раз на открытие).
-  3. Go: `Term.RequestCommands(ShellCwd)` — mode `history` через `historyKey`: zsh пишет до 500 последних записей `$history` (новые первыми) NUL-разделёнными в `command-history`; bash/sh — `history 500` с `HISTTIMEFORMAT='FARSHMAC_HISTORY_ENTRY:'`. Редактируемая строка сохраняется, запрос сам в историю не попадает. `ShellReady=false` до следующего Ready.
-  4. При Ready `readCommands()`: файл читается (лимит 4 MiB + 1; при превышении последняя запись отбрасывается), парсится, bash-порядок разворачивается (новые первыми), пустые и дубликаты удаляются; файл удаляется. Результат → `Update.commands` (один раз).
-  5. Renderer: список (многострочные команды показываются с ` ↵ `), выбран первый, его текст в textarea; подпись `Command history — Enter: run · F4: edit · Esc: cancel` или `Command history is empty`. Кнопка Run недоступна, пока `!shellReady`.
-  6. Клавиши: Enter (без Shift) / двойной клик / кнопка — `run`: если shell готов и текст непустой → `{Type:'commandHistoryRun', Text}` и закрытие; F4 — фокус в textarea; Escape — закрыть; ⌘C/⌘X/⌘V/⌘A — буфер в textarea. Остальные клавиши идут в select/textarea (стрелки — выбор, `onchange` обновляет textarea).
-  7. Go `commandHistoryRun`: `Term.Run(ShellCwd, text)` при `ShellReady` и непустом тексте → команда выполняется в текущем cwd shell, попадает в историю shell (не в `a.history` панелей).
-- **Код:** `commands.js`, `app.js` `toggleCommands`, `app.go` `Handle` (`commandHistory`, `commandHistoryRun`), `internal/terminal/commands.go`, rc-скрипты в `session.go`/`bourne.go`, тест `commands.cjs`, `commands_test.go`.
+#### Shell command history overlay (⌘⇧H / Window → Command History)
+- **Invocation:** ⌘⇧H (the renderer capture listener and the native `performKeyEquivalent` in terminalMode); the menu Window → `Command History` `⇧⌘H` (enabled only in terminal mode). Pressing again closes it.
+- **Behavior:**
+  1. The `#commands` dialog opens (caption `Command history`, a `<select size=12>` list, the field `Edit command (Shift+Enter: new line)`, a 3-row textarea, the buttons `Run · Enter`, `Cancel · Esc`). The output history overlay closes.
+  2. The caption `Loading command history…`; if the shell is not ready, `Waiting for shell prompt… · Esc: cancel`; the request `{Type:'commandHistory'}` is sent as soon as `shellReady` (once per opening).
+  3. Go: `Term.RequestCommands(ShellCwd)`, the `history` mode via `historyKey`: zsh writes up to the 500 most recent `$history` entries (newest first) NUL-separated into `command-history`; bash/sh: `history 500` with `HISTTIMEFORMAT='FARSHMAC_HISTORY_ENTRY:'`. The line being edited is preserved, the request itself does not enter the history. `ShellReady=false` until the next Ready.
+  4. On Ready, `readCommands()`: the file is read (limit 4 MiB + 1; when exceeded the last entry is dropped), parsed, the bash order is reversed (newest first), empty entries and duplicates are removed; the file is deleted. The result → `Update.commands` (once).
+  5. Renderer: the list (multi-line commands are shown with ` ↵ `), the first is selected, its text in the textarea; the caption `Command history — Enter: run · F4: edit · Esc: cancel` or `Command history is empty`. The Run button is disabled while `!shellReady`.
+  6. Keys: Enter (without Shift) / double click / the button → `run`: if the shell is ready and the text is non-empty → `{Type:'commandHistoryRun', Text}` and close; F4 focuses the textarea; Escape closes; ⌘C/⌘X/⌘V/⌘A are clipboard operations in the textarea. Other keys go to the select/textarea (arrows select, `onchange` updates the textarea).
+  7. Go `commandHistoryRun`: `Term.Run(ShellCwd, text)` when `ShellReady` and the text is non-empty → the command is executed in the shell's current cwd and enters the shell history (not the panels' `a.history`).
+- **Code:** `commands.js`, `app.js` `toggleCommands`, `app.go` `Handle` (`commandHistory`, `commandHistoryRun`), `internal/terminal/commands.go`, the rc scripts in `session.go`/`bourne.go`, test `commands.cjs`, `commands_test.go`.
 
-#### «commands» в Update
-- `Update.Commands *[]string` — снимок истории shell для оверлея; отправляется один раз после Ready с `Commands != nil`. Это не автодополнение команд: completion из shell не реализован.
+#### "commands" in Update
+- `Update.Commands *[]string` is a snapshot of the shell history for the overlay; sent once after Ready with `Commands != nil`. This is not command autocompletion: completion from the shell is not implemented.
 
-#### Размер шрифта
-- **Вызов:** F9 → Options → `General settings…` (`Font size (10–24)`) или `Interface settings` (`Font size (10–24)`, `Key bar`). Клавиатурных ⌘= / ⌘− / ⌘0 нет.
-- **Поведение:** `Settings.FontSize` (10–24, по умолчанию 14; ошибка `Font size must be 10–24`) → `Update.fontSize` → renderer меняет `fontSize` обеих xterm и `#history-lines`, через 100 мс перемеряет ячейки и пересылает `resize`. Сохраняется через Save setup.
-- **Код:** `settings.go`, `app.js`.
+#### Font size
+- **Invocation:** F9 → Options → `General settings…` (`Font size (10–24)`) or `Interface settings` (`Font size (10–24)`, `Key bar`). There are no keyboard ⌘= / ⌘− / ⌘0.
+- **Behavior:** `Settings.FontSize` (10–24, default 14; the error `Font size must be 10–24`) → `Update.fontSize` → the renderer changes `fontSize` of both xterms and `#history-lines`, after 100 ms re-measures the cells and resends `resize`. Saved via Save setup.
+- **Code:** `settings.go`, `app.js`.
 
-#### Полноэкранный режим и Zoom
-- **Вызов:** Window → `Enter Full Screen` / `Exit Full Screen` (`⌃⌘F`, заголовок меняется по состоянию окна); F9 → Commands → `Full screen` `⌃⌘F` (ставит `a.Fullscreen = true` → `Update.fullscreen` → `[window toggleFullScreen:]`). Alt+F9 → `a.Zoom = true` → `[window zoom:]` (масштаб окна Cocoa, не шрифт).
-- **Особые случаи:** во время fullscreen кадр окна не сохраняется в сессию (`captureFrame` пропускает при `NSWindowStyleMaskFullScreen` и во время перехода).
-- **Код:** `window_darwin.m` (`toggleFullScreenActive:`, `validateMenuItem`, `tick:`), `menu.go`, `far_keys.go`.
+#### Full screen mode and Zoom
+- **Invocation:** Window → `Enter Full Screen` / `Exit Full Screen` (`⌃⌘F`, the title changes with the window state); F9 → Commands → `Full screen` `⌃⌘F` (sets `a.Fullscreen = true` → `Update.fullscreen` → `[window toggleFullScreen:]`). Alt+F9 → `a.Zoom = true` → `[window zoom:]` (Cocoa window zoom, not the font).
+- **Special cases:** during fullscreen the window frame is not saved to the session (`captureFrame` skips under `NSWindowStyleMaskFullScreen` and during the transition).
+- **Code:** `window_darwin.m` (`toggleFullScreenActive:`, `validateMenuItem`, `tick:`), `menu.go`, `far_keys.go`.
 
 ---
 
-## 4. Окна, сессия, выход
+## 4. Windows, session, quitting
 
-#### Новое окно (⌘N)
-- **Вызов:** ⌘N (в панельном и терминальном режиме, если нет `Busy`), File → `New Window` `⌘N`, Commands → `New window` `⌘N`; Dock-клик при отсутствии видимых окон (`applicationShouldHandleReopen` → `newWindowFrom:0`).
-- **Поведение:** `a.NewWindow=true` → `Update.newWindow` → native `newWindowFrom:session` → `goNewWindow(parent)` → `WindowGroup.NewWindow`: отказ `finish quitting before opening a new window` во время quit; левая/правая папки наследуются от родителя (`filesystemPath()`), иначе `$HOME`; настройки копируются через JSON (независимые копии), `panelOptions` обеих панелей копируются, `refresh()`; без родителя — `LoadSetup()`. Стартует собственный shell (`StartTerminal`) — PTY независимы (`TestIndependentPTYWindows`). Окно каскадируется от точки `(100+24*session, 850-24*session)`, размер 1120×740, минимальный контент 700×400, заголовок `FarshMac — <session>`; после первого Poll — `FarshMac — <session> — <путь активной панели | имя документа>`.
-- **Код:** `windows.go` `NewWindow`, `window_darwin.m` `newWindowFrom:`, `open`.
+#### New window (⌘N)
+- **Invocation:** ⌘N (in panel and terminal mode, if not `Busy`), File → `New Window` `⌘N`, Commands → `New window` `⌘N`; a Dock click with no visible windows (`applicationShouldHandleReopen` → `newWindowFrom:0`).
+- **Behavior:** `a.NewWindow=true` → `Update.newWindow` → native `newWindowFrom:session` → `goNewWindow(parent)` → `WindowGroup.NewWindow`: the refusal `finish quitting before opening a new window` during quit; the left/right folders are inherited from the parent (`filesystemPath()`), otherwise `$HOME`; settings are copied via JSON (independent copies), `panelOptions` of both panels are copied, `refresh()`; without a parent, `LoadSetup()`. Starts its own shell (`StartTerminal`); PTYs are independent (`TestIndependentPTYWindows`). The window cascades from the point `(100+24*session, 850-24*session)`, size 1120×740, minimum content 700×400, title `FarshMac — <session>`; after the first Poll, `FarshMac — <session> — <active panel path | document name>`.
+- **Code:** `windows.go` `NewWindow`, `window_darwin.m` `newWindowFrom:`, `open`.
 
-#### Переключение окон
-- Window → `Next Window` `⌘``, `Previous Window` `⇧⌘``, `Minimize` `⌘M`, `Bring All to Front`. Окна циклически по списку контроллеров.
+#### Switching windows
+- Window → `Next Window` `⌘``, `Previous Window` `⇧⌘``, `Minimize` `⌘M`, `Bring All to Front`. Windows cycle through the list of controllers.
 
-#### Сохранение и восстановление сессии
-- **Файл:** `<UserConfigDir>/FarshMac/session.json` (0600 через temp+rename), fallback чтения из `<UserConfigDir>/Far Go/session.json` если нового нет. Формат: `{"Version":1,"Windows":[{"Frame":{X,Y,Width,Height},"Panels":[{"Path","Options":panelOptions,"Cursor","Top"},…],"Active":0|1}],"Focused":N}`.
-- **Когда сохраняется:** каждый `WindowGroup.Poll` (не чаще 500 мс и только при изменении байтов; неудачные записи тоже троттлятся), при закрытии окна (force), при начале завершения (`advanceQuit` → `SaveSession(true)`), `finishQuit` → `goSaveSession`, `CloseAll` (если ещё не Terminating). При нуле окон сохраняется последнее закрытое (`lastWindow`). Кадры окна приходят из Cocoa (`windowDidMove/Resize/EndLiveResize`), координаты в points; `Valid()` требует 100 ≤ W,H ≤ 20000, |X|,|Y| < 100000, без NaN/Inf.
-- **Восстановление (`EnableSession(path, restore)`):** при старте, если не переданы `-left`/`-right` (`flag.Visit` → `restore=false`). Ошибки: `cannot read window session: …`, `unsupported window session version N`, `too many saved windows` (>100) — попадают в `a.Status`, приложение стартует с дефолтами. Для каждого окна: папки проверяются `accessibleFolder` (подъём к ближайшему читаемому родителю, затем fallback на папку первого окна, `$HOME`, `/`); `panelOptions` применяются; курсор/верх восстанавливаются по именам (`pendingPosition` для async-загрузки); `Active` ограничивается 0..1; невалидный кадр игнорируется (окно центрируется/каскадируется); фокус — `Focused`. Нативный слой при восстановлении подгоняет кадр под экран с наибольшим пересечением: ширина ≥700, высота ≥428, не больше `visibleFrame`, origin внутри экрана.
-- **Особые случаи:** восстановление не зависит от `AutoSave`; архивная панель сохраняет `Cursor = имя архива`; команда, история терминала, содержимое shell не сохраняются.
-- **Код:** `internal/ui/session.go`, `windows.go`, `native_darwin.go`, `window_darwin.m` `open`, `cmd/farshmac/main.go`, тесты `session_test.go`.
+#### Saving and restoring the session
+- **File:** `<UserConfigDir>/FarshMac/session.json` (0600 via temp+rename), a read fallback from `<UserConfigDir>/Far Go/session.json` if the new one does not exist. Format: `{"Version":1,"Windows":[{"Frame":{X,Y,Width,Height},"Panels":[{"Path","Options":panelOptions,"Cursor","Top"},…],"Active":0|1}],"Focused":N}`.
+- **When it is saved:** every `WindowGroup.Poll` (no more often than every 500 ms and only when the bytes change; failed writes are throttled too), on window close (force), at the start of quitting (`advanceQuit` → `SaveSession(true)`), `finishQuit` → `goSaveSession`, `CloseAll` (if not yet Terminating). With zero windows the last closed one is saved (`lastWindow`). Window frames come from Cocoa (`windowDidMove/Resize/EndLiveResize`), coordinates in points; `Valid()` requires 100 ≤ W,H ≤ 20000, |X|,|Y| < 100000, no NaN/Inf.
+- **Restoring (`EnableSession(path, restore)`):** at startup, if `-left`/`-right` were not passed (`flag.Visit` → `restore=false`). Errors: `cannot read window session: …`, `unsupported window session version N`, `too many saved windows` (>100) go to `a.Status`, and the application starts with defaults. For each window: folders are checked by `accessibleFolder` (climbing to the nearest readable parent, then a fallback to the first window's folder, `$HOME`, `/`); `panelOptions` are applied; the cursor/top are restored by names (`pendingPosition` for async loading); `Active` is clamped to 0..1; an invalid frame is ignored (the window is centered/cascaded); focus is `Focused`. On restore the native layer fits the frame to the screen with the largest intersection: width ≥700, height ≥428, no larger than `visibleFrame`, origin inside the screen.
+- **Special cases:** restoring does not depend on `AutoSave`; an archive panel saves `Cursor = archive name`; the command, the terminal history and the shell contents are not saved.
+- **Code:** `internal/ui/session.go`, `windows.go`, `native_darwin.go`, `window_darwin.m` `open`, `cmd/farshmac/main.go`, tests `session_test.go`.
 
-#### Закрытие окна (⌘W / красная кнопка)
-- **Вызов:** File → `Close Window` `⌘W`; `windowShouldClose` → `{Type:"close"}` (окно не закрывается само).
-- **Поведение:** `WindowGroup.Handle` → `a.RequestQuit()` для этого окна (та же последовательность подтверждений, что при выходе, см. ниже); при `a.Quit` → `Update.quit` → native `closeWindow:` → `goCloseWindow` → `CloseWindow`: снимок окна в `lastWindow`, `App.Close()` (отмена задач, закрытие документов/temp, `saveSetup` если `AutoSave`, `Term.Close()`), удаление из группы, сессия сохраняется. Остальные окна и их shell продолжают работать. Приложение не завершается после закрытия последнего окна (`applicationShouldTerminateAfterLastWindowClosed → NO`).
-- **Код:** `windows.go` `Handle`, `CloseWindow`; `window_darwin.m`.
+#### Closing a window (⌘W / the red button)
+- **Invocation:** File → `Close Window` `⌘W`; `windowShouldClose` → `{Type:"close"}` (the window does not close by itself).
+- **Behavior:** `WindowGroup.Handle` → `a.RequestQuit()` for this window (the same confirmation sequence as on quit, see below); on `a.Quit` → `Update.quit` → native `closeWindow:` → `goCloseWindow` → `CloseWindow`: a snapshot of the window into `lastWindow`, `App.Close()` (cancelling tasks, closing documents/temp, `saveSetup` if `AutoSave`, `Term.Close()`), removal from the group, the session is saved. The other windows and their shells keep working. The application does not terminate after the last window closes (`applicationShouldTerminateAfterLastWindowClosed → NO`).
+- **Code:** `windows.go` `Handle`, `CloseWindow`; `window_darwin.m`.
 
-#### Выход из приложения (⌘Q) — групповая последовательность
-- **Вызов:** ⌘Q (перехватывается `WindowGroup.Handle` по `key` Meta+q, либо нативное меню `Quit FarshMac` ⌘Q → `goQuitAll`), Commands → `Quit` `⌘Q`, `applicationShouldTerminate` (Dock/система) → `requestQuit:` (возвращает `NSTerminateCancel`, завершение идёт через группу). F10 приложение не закрывает.
-- **Поведение (`BeginQuit`/`advanceQuit`):**
-  1. Окна проходятся по порядку `Order`. Для каждого — `a.RequestQuit()`:
-     - если `a.Busy` → статус `Wait for the file operation to finish`, quit прерывается;
-     - если есть несохранённые документы → терминал скрывается и показывается подтверждение `Save changes` / `Save changes in open documents before quitting?` с кнопками `Save all`, `Discard`, `Cancel`; `Save all` сохраняет все и переходит к проверке shell; `Discard` — сразу к shell; `Cancel` — отмена всей последовательности (ранее одобренные окна остаются открытыми);
-     - `confirmQuitShell`: если `Term != nil && !ShellReady` (команда выполняется или shell ещё стартует) → терминал скрывается, диалог `Quit` / `A command is running. Close the application?` с кнопками `Yes`, `No`; `Yes` → `a.Quit=true`;
-     - иначе `a.Quit=true` сразу.
-  2. Пока окно ждёт ответа, `Update.attentionWindow = id` заставляет native вывести это окно на передний план; ввод в другие окна отклоняется со статусом `Finish the quit dialog in the other window` (кроме `resize`).
-  3. Когда все окна одобрили: `Terminating=true`, `SaveSession(true)` (ошибка — в статус всех окон), `Update.quitApplication` → native `finishQuit`: захват кадров, `goSaveSession`, закрытие всех окон, `[NSApp stop]`; `native.Run` → `CloseAll` (ждёт очистку историй).
-- **Особые случаи:** в одном окне ⌘W при выполняющейся команде показывает тот же текст `Close the application?`. `NewWindow` во время quit невозможен.
-- **Код:** `windows.go` `BeginQuit`, `advanceQuit`, `Handle`, `Poll`; `app.go` `RequestQuit`, `confirmQuitShell`; `window_darwin.m` `requestQuit:`, `finishQuit`; тест `TestIndependentWindowsAndQuitTransaction`.
+#### Quitting the application (⌘Q): the group sequence
+- **Invocation:** ⌘Q (intercepted by `WindowGroup.Handle` on the `key` Meta+q, or the native menu `Quit FarshMac` ⌘Q → `goQuitAll`), Commands → `Quit` `⌘Q`, `applicationShouldTerminate` (Dock/system) → `requestQuit:` (returns `NSTerminateCancel`, termination proceeds through the group). F10 does not close the application.
+- **Behavior (`BeginQuit`/`advanceQuit`):**
+  1. The windows are walked in `Order`. For each, `a.RequestQuit()`:
+     - if `a.Busy` → the status `Wait for the file operation to finish`, the quit is aborted;
+     - if there are unsaved documents → the terminal is hidden and the confirmation `Save changes` / `Save changes in open documents before quitting?` is shown with the buttons `Save all`, `Discard`, `Cancel`; `Save all` saves everything and proceeds to the shell check; `Discard` goes straight to the shell; `Cancel` cancels the whole sequence (windows approved earlier stay open);
+     - `confirmQuitShell`: if `Term != nil && !ShellReady` (a command is running or the shell is still starting) → the terminal is hidden, the dialog `Quit` / `A command is running. Close the application?` with the buttons `Yes`, `No`; `Yes` → `a.Quit=true`;
+     - otherwise `a.Quit=true` immediately.
+  2. While a window waits for an answer, `Update.attentionWindow = id` makes native bring that window to the front; input to other windows is rejected with the status `Finish the quit dialog in the other window` (except `resize`).
+  3. When all windows have approved: `Terminating=true`, `SaveSession(true)` (an error goes to the status of all windows), `Update.quitApplication` → native `finishQuit`: capturing frames, `goSaveSession`, closing all windows, `[NSApp stop]`; `native.Run` → `CloseAll` (waits for the history cleanups).
+- **Special cases:** in a single window, ⌘W while a command is running shows the same text `Close the application?`. `NewWindow` is impossible during quit.
+- **Code:** `windows.go` `BeginQuit`, `advanceQuit`, `Handle`, `Poll`; `app.go` `RequestQuit`, `confirmQuitShell`; `window_darwin.m` `requestQuit:`, `finishQuit`; test `TestIndependentWindowsAndQuitTransaction`.
 
 #### Full Disk Access
-- **Диалог при старте (`native.PrepareDiskAccess` → `farshmac_prepare_disk_access`):** показывается один раз (флаг `NSUserDefaults` `FarshMacDiskAccessIntroductionShown`), только если bundle id `local.farshmac.app` и запуск из `.app` (CLI/`go run`/тесты — пропуск). NSAlert: заголовок `Full Disk Access for FarshMac`, текст: `To browse protected folders without separate folder prompts, enable FarshMac in System Settings → Privacy & Security → Full Disk Access.\n\nIf it is missing, use '+' or drag the app selected in Finder:\n<bundlePath>\n\nOpen Settings closes this launch before folders are loaded. Enable access, then reopen FarshMac. If already enabled, choose Continue. You can also continue with limited access and use FarshMac → Full Disk Access later.` Кнопки: `Open Settings` (первая), `Continue` (Esc). Флаг ставится независимо от выбора. `Open Settings` → `farshmac_open_disk_access()`; при успехе процесс завершается (`main` возвращается до создания `App`), пользователь перезапускает вручную — автоматического relaunch нет. Доступ приложение не проверяет и не выдаёт.
-- **`farshmac_open_disk_access`:** выделяет bundle в Finder (`activateFileViewerSelectingURLs`), открывает `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`, fallback — System Settings; если и это не удалось — NSAlert `Open Full Disk Access in System Settings` / `Open Privacy & Security → Full Disk Access, add this copy of FarshMac and enable it. Then quit and reopen FarshMac.` / `OK`.
-- **Позже:** меню приложения `FarshMac → Full Disk Access…` (нативно, сразу) и F9 → Options → `Full Disk Access…` (ставит `DiskAccessSettings=true`, статус `Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen.`).
-- **Документация:** PUBLISHING.md — bundle id должен быть стабильным; после смены подписи (ad-hoc → self-signed) добавить копию в FDA заново; TCC не проверяется кодом.
-- **Код:** `internal/native/disk_access_darwin.m`, `native_darwin.go`, `cmd/farshmac/main.go`, `menu.go`, `window_darwin.m` `diskAccessSettings:`.
+- **Startup dialog (`native.PrepareDiskAccess` → `farshmac_prepare_disk_access`):** shown once (the `NSUserDefaults` flag `FarshMacDiskAccessIntroductionShown`), only if the bundle id is `local.farshmac.app` and the launch is from the `.app` (CLI/`go run`/tests skip it). NSAlert: title `Full Disk Access for FarshMac`, text: `To browse protected folders without separate folder prompts, enable FarshMac in System Settings → Privacy & Security → Full Disk Access.\n\nIf it is missing, use '+' or drag the app selected in Finder:\n<bundlePath>\n\nOpen Settings closes this launch before folders are loaded. Enable access, then reopen FarshMac. If already enabled, choose Continue. You can also continue with limited access and use FarshMac → Full Disk Access later.` Buttons: `Open Settings` (first), `Continue` (Esc). The flag is set regardless of the choice. `Open Settings` → `farshmac_open_disk_access()`; on success the process exits (`main` returns before the `App` is created), and the user relaunches manually; there is no automatic relaunch. The application neither checks nor grants the access.
+- **`farshmac_open_disk_access`:** selects the bundle in Finder (`activateFileViewerSelectingURLs`), opens `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`, fallback is System Settings; if that fails too, the NSAlert `Open Full Disk Access in System Settings` / `Open Privacy & Security → Full Disk Access, add this copy of FarshMac and enable it. Then quit and reopen FarshMac.` / `OK`.
+- **Later:** the application menu `FarshMac → Full Disk Access…` (native, immediate) and F9 → Options → `Full Disk Access…` (sets `DiskAccessSettings=true`, the status `Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen.`).
+- **Documentation:** PUBLISHING.md: the bundle id must be stable; after a signature change (ad-hoc → self-signed) add the copy to FDA again; TCC is not checked by code.
+- **Code:** `internal/native/disk_access_darwin.m`, `native_darwin.go`, `cmd/farshmac/main.go`, `menu.go`, `window_darwin.m` `diskAccessSettings:`.
 
 ---
 
-## 5. Нативное меню macOS (window_darwin.m `startWindows`)
+## 5. Native macOS menu (window_darwin.m `startWindows`)
 
-| Меню | Пункт | Шорткат | Действие |
+| Menu | Item | Shortcut | Action |
 | --- | --- | --- | --- |
-| FarshMac | `About FarshMac` | — | стандартная панель About |
+| FarshMac | `About FarshMac` | — | the standard About panel |
 | FarshMac | `Full Disk Access…` | — | `farshmac_open_disk_access()` |
-| FarshMac | `Quit FarshMac` | ⌘Q | `requestQuit:` → `goQuitAll` (групповой quit); без окон — `finishQuit` |
-| File | `New Window` | ⌘N | `newWindowFrom:` активного окна |
-| File | `Close Window` | ⌘W | шлёт `{Type:"close"}` активному окну |
+| FarshMac | `Quit FarshMac` | ⌘Q | `requestQuit:` → `goQuitAll` (group quit); with no windows, `finishQuit` |
+| File | `New Window` | ⌘N | `newWindowFrom:` of the active window |
+| File | `Close Window` | ⌘W | sends `{Type:"close"}` to the active window |
 | Edit | `Copy` | ⌘C | `window.farshmacCopy()` |
 | Edit | `Cut` | ⌘X | `window.farshmacCut()` |
-| Edit | `Paste` | ⌘V | читает `NSPasteboard` → `window.farshmacPaste(text)` |
+| Edit | `Paste` | ⌘V | reads `NSPasteboard` → `window.farshmacPaste(text)` |
 | Edit | `Select All` | ⌘A | `window.farshmacSelectAll()` |
-| Window | `Command History` | ⇧⌘H | `window.farshmacToggleHistory()`; активен только в terminal mode |
-| Window | `Terminal Output History` | — | `window.farshmacToggleOutputHistory()`; только в terminal mode |
-| Window | `Enter Full Screen` / `Exit Full Screen` | ⌃⌘F | `toggleFullScreen:` активного окна; заголовок по состоянию |
+| Window | `Command History` | ⇧⌘H | `window.farshmacToggleHistory()`; enabled only in terminal mode |
+| Window | `Terminal Output History` | — | `window.farshmacToggleOutputHistory()`; only in terminal mode |
+| Window | `Enter Full Screen` / `Exit Full Screen` | ⌃⌘F | `toggleFullScreen:` of the active window; title follows the state |
 | Window | `Minimize` | ⌘M | `performMiniaturize:` |
-| Window | `Next Window` | ⌘` | цикл по окнам +1 |
-| Window | `Previous Window` | ⇧⌘` | цикл −1 |
+| Window | `Next Window` | ⌘` | cycle through windows +1 |
+| Window | `Previous Window` | ⇧⌘` | cycle −1 |
 | Window | `Bring All to Front` | — | `arrangeInFront:` |
 
-«Активное окно» — `NSApp.keyWindow`, иначе последнее. Иконка приложения — `FarshMac.icns` из bundle. Окно: фон `#000080`, `NSWindowStyleMaskTitled|Closable|Resizable|Miniaturizable`, WKWebView с `nonPersistentDataStore`, навигация разрешена только на `index.html`; при крахе web-процесса — `reload`. Таймер 30 Гц (`NSRunLoopCommonModes`) вызывает `goPoll` на serial `engineQueue`, результат — `window.farshmacUpdate(json)`.
+The "active window" is `NSApp.keyWindow`, otherwise the last one. The application icon is `FarshMac.icns` from the bundle. Window: background `#000080`, `NSWindowStyleMaskTitled|Closable|Resizable|Miniaturizable`, a WKWebView with `nonPersistentDataStore`, navigation allowed only to `index.html`; on a web-process crash, `reload`. A 30 Hz timer (`NSRunLoopCommonModes`) calls `goPoll` on the serial `engineQueue`, the result is `window.farshmacUpdate(json)`.
 
 ---
 
-## 6. Клавиатура: нативный и renderer-уровень (панельный режим)
+## 6. Keyboard: native and renderer level (panel mode)
 
-#### Option+буква (dead keys), Numpad, ⌘⇧.
-- **Поведение (native, только `panelKeys`):**
-  - Local event monitor (`NSEventMaskKeyDown`) перед AppKit и input methods: `FarshMacPanelOptionMessage` — для keyDown с Option и без ⌘/Ctrl символ берётся `charactersByApplyingModifiers:(Shift|CapsLock)` — т.е. базовый символ текущей раскладки без Option-акцентов/dead keys (Option+E → `e`, Option+- → `-`, Option+Shift+- → `_`). Управляющие (<32, 127) и функциональные (0xF700–0xF8FF) игнорируются. Отправляется `{Type:"key", Key, Code:(NumpadMultiply|NumpadAdd|NumpadSubtract|""), Alt:true, Shift}` — событие не доходит до WebKit (fast find по Alt+буква).
-  - `performKeyEquivalent`: keyCode 46 (M) с ⌘/Ctrl → `Key:"m", Code:"KeyM"`; keyCode 67/69/78 (Numpad * + −) → `Key "*","+","-"` с кодами `NumpadMultiply/Add/Subtract` и флагами; keyCode 47 с ⌘⇧ (без Ctrl/Opt) → `Key ".", Code "Period", Meta, Shift` (показ скрытых). Остальное — Option-перевод, затем `super`.
-  - В terminalMode и при модальных слоях (`panelKeys=false`) Option-перевод не выполняется: xterm получает Option как Meta, редактор — обычные символы.
-- **Renderer (document keydown, capture) в панельном режиме:** игнорирует `isComposing`; Shift+Insert → `pasteRequest`; ⌘C/⌘V/⌘X пропускаются к нативному меню; всё остальное — `preventDefault` + `{Type:'key', Key:e.key, Code:e.code, Ctrl, Alt, Meta, Shift}`. Fn/F1–F12 приходят как `Key:"F1"…` (на клавиатурах с медиа-клавишами — удерживать Fn, см. README). Escape — обычная клавиша. Go в `key()`: Alt+Key* при открытой форме/диалоге/Busy маппится из `Code` (`KeyC` → `c`) для Alt-акселераторов.
-- **Тест:** `panel_keys.m` (clang) — Option+a/e/./-/Shift+-, запрет при `panelKeys=NO` и при ⌘; `input.cjs` — `ç`/KeyC с Alt.
-- **Код:** `panel_keys_darwin.h`, `window_darwin.m`, `app.js`.
+#### Option+letter (dead keys), Numpad, ⌘⇧.
+- **Behavior (native, `panelKeys` only):**
+  - A local event monitor (`NSEventMaskKeyDown`) ahead of AppKit and input methods: `FarshMacPanelOptionMessage`: for a keyDown with Option and without ⌘/Ctrl the character is taken from `charactersByApplyingModifiers:(Shift|CapsLock)`, i.e. the base character of the current layout without Option accents/dead keys (Option+E → `e`, Option+- → `-`, Option+Shift+- → `_`). Control (<32, 127) and function (0xF700–0xF8FF) characters are ignored. `{Type:"key", Key, Code:(NumpadMultiply|NumpadAdd|NumpadSubtract|""), Alt:true, Shift}` is sent; the event does not reach WebKit (fast find via Alt+letter).
+  - `performKeyEquivalent`: keyCode 46 (M) with ⌘/Ctrl → `Key:"m", Code:"KeyM"`; keyCode 67/69/78 (Numpad * + −) → `Key "*","+","-"` with the codes `NumpadMultiply/Add/Subtract` and flags; keyCode 47 with ⌘⇧ (without Ctrl/Opt) → `Key ".", Code "Period", Meta, Shift` (show hidden). Everything else: Option translation, then `super`.
+  - In terminalMode and under modal layers (`panelKeys=false`) Option translation is not performed: xterm receives Option as Meta, the editor receives ordinary characters.
+- **Renderer (document keydown, capture) in panel mode:** ignores `isComposing`; Shift+Insert → `pasteRequest`; ⌘C/⌘V/⌘X are passed through to the native menu; everything else is `preventDefault` + `{Type:'key', Key:e.key, Code:e.code, Ctrl, Alt, Meta, Shift}`. Fn/F1–F12 arrive as `Key:"F1"…` (on keyboards with media keys, hold Fn, see README). Escape is an ordinary key. Go in `key()`: Alt+Key* with an open form/dialog/Busy is mapped from `Code` (`KeyC` → `c`) for Alt accelerators.
+- **Test:** `panel_keys.m` (clang): Option+a/e/./-/Shift+-, refusal under `panelKeys=NO` and with ⌘; `input.cjs`: `ç`/KeyC with Alt.
+- **Code:** `panel_keys_darwin.h`, `window_darwin.m`, `app.js`.
 
-#### Мышь в панелях (renderer → Go)
-- **Поведение:** `pointerdown` (кнопки 0 и 2): `preventDefault`, снятие выделения xterm, `{Type:'click', X, Y (в ячейках), Clicks:1, Button, Buttons, Shift, Alt, Meta, Ctrl}`; **Control+левая = правая кнопка (`Button:2`)** — помечает файл как в Far. В документе правая/Ctrl-клик игнорируются. `dblclick` (левая без Ctrl) → `Clicks:2`; тройной клик в документе → `Clicks:3`. Drag: `pointermove` с зажатыми кнопками коалесцируется таймером 25 мс в `{Type:'drag'}`; автоповтор 60 мс у краёв (строки < 3 / ≥ rows-6 для панелей, < 1 / ≥ rows-1 для документа). `pointerup`/`pointercancel`/`blur` → `mouseUp` (обрабатывается при Busy). Колесо → `{Type:'wheel', Delta: sign·clamp(1..12, ceil(|deltaY|/20))}`. Pointer capture на `#panels`. Текст панелей `user-select:none`.
-- **Go `click`:** клики по строке меню (Y=0) открывают разделы; при `TermVisible` клики игнорируются; клик по key bar (последняя строка, если `ShowKeys`) → `function(min(10, X*10/Cols+1))`.
-- **Drag&drop файлов (из Finder/в Finder):** не реализован; «drag» — только выделение мышью внутри панелей/документа.
-- **Код:** `app.js` (`pointer`, `flushDrag`), `app.go` `click`, `mouse.go`; тест `input.cjs`.
+#### Mouse in the panels (renderer → Go)
+- **Behavior:** `pointerdown` (buttons 0 and 2): `preventDefault`, clearing the xterm selection, `{Type:'click', X, Y (in cells), Clicks:1, Button, Buttons, Shift, Alt, Meta, Ctrl}`; **Control+left = right button (`Button:2`)** marks the file as in Far. In a document, right/Ctrl-click is ignored. `dblclick` (left without Ctrl) → `Clicks:2`; a triple click in a document → `Clicks:3`. Drag: `pointermove` with buttons held is coalesced by a 25 ms timer into `{Type:'drag'}`; auto-repeat of 60 ms at the edges (rows < 3 / ≥ rows-6 for panels, < 1 / ≥ rows-1 for a document). `pointerup`/`pointercancel`/`blur` → `mouseUp` (handled while Busy). Wheel → `{Type:'wheel', Delta: sign·clamp(1..12, ceil(|deltaY|/20))}`. Pointer capture on `#panels`. Panel text is `user-select:none`.
+- **Go `click`:** clicks on the menu bar (Y=0) open sections; with `TermVisible` clicks are ignored; a click on the key bar (the last row, if `ShowKeys`) → `function(min(10, X*10/Cols+1))`.
+- **File drag&drop (from Finder/to Finder):** not implemented; "drag" is only mouse selection inside the panels/document.
+- **Code:** `app.js` (`pointer`, `flushDrag`), `app.go` `click`, `mouse.go`; test `input.cjs`.
 
 ---
 
-## 7. Справка F1 (фрагмент про терминал, дословно)
+## 7. F1 help (the terminal fragment, verbatim)
 `Type a shell command directly while panels are visible, then press Enter. The panels disappear and the SAME window becomes an interactive terminal. Commands run in the active panel's directory. zsh keeps its environment, history, aliases and jobs. Your .zshrc is loaded at shell startup. The output stays visible after completion; ⌘O restores the panels. ⌘O also works during a command; returning does not stop the job. Use Cmd+. (or Ctrl+C) to interrupt, Cmd+C / Cmd+V to copy / paste. Scroll the terminal to review output. vim/less use the alternate screen.`
 
 ---
 
-## Расхождения между документацией/справкой и кодом
+## Discrepancies between documentation/help and code
 
-> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+> **Closed on the `backlog-fixes` branch:** the decisions on each item are in the "Decisions on discrepancies" section of `docs/IMPLEMENTATION_BACKLOG.md`.
 
-1. **Справка F1** (`app.go`, `help`): заголовок `persistent zsh terminal`, «zsh keeps its environment…», «Your .zshrc is loaded at shell startup» — по умолчанию shell `bash` (`defaultSettings`, `TestDefaultShellIsBash`); zsh — только при выборе в Terminal settings.
-2. **Справка F1**: `Ctrl+E/X/Y` — в коде Ctrl+Y и ⌘Y очищают строку, но Ctrl+E/X работают только с Ctrl (не ⌘); дополнительно работают недокументированные Ctrl+↑/Ctrl+↓ и ⌘↑/⌘↓ (последние есть в справке).
-3. **Справка F1**: `Ctrl+F / Ctrl+;` — в коде также ⌘F / ⌘; (любой `cmd`). `Ctrl+Insert … Alt+Shift+Insert full paths` — ⌘Insert тоже работает; недокументирован Ctrl+Alt+Insert (пути с разрешением симлинков / метка удалённого сервера). Ctrl+[ / Ctrl+] (пути левой/правой панели, с Shift — активной/неактивной) и Ctrl+Shift+Enter (имя из неактивной панели) в справке отсутствуют.
-4. **Справка F1** упоминает `F10 closes only viewer/editor` — в панельном режиме `function(10)` ничего не делает (комментарий: выход только ⌘Q); закрытие документа F10 — в `document_keys.go` (вне этой области).
-5. **TERMINAL_PARITY.md**: «xterm parses 1024-byte chunks before collecting history» — в `history.js` размер куска `min(4094, scrollback-2)` = 4094 байт.
-6. **TERMINAL_PARITY.md**: «⌘⇧H Command history (output archive in the original 0.13 implementation)» и таблица навигации «в архиве» — актуально: ⌘⇧H = история команд, архив вывода — только через меню Window без шортката. Документ сам это оговаривает в преамбуле.
-7. **Terminal settings**: подписи `Shell: … (new windows)` и `Use custom shell prompt / hooks (new windows…)`, статус `Shell applies to new windows` — но `restartShellIfDue` использует текущие `Settings.Shell`/`ShellCustomPrompt` этого же окна, т.е. после `exit` в текущем окне новый shell уже стартует с изменёнными настройками.
-8. **Диалог закрытия окна**: ⌘W / кнопка закрытия при выполняющейся команде показывает `A command is running. Close the application?` — закрывается только окно, остальные продолжают работать.
-9. **Задание упоминает ⌘= / ⌘− / ⌘0 (zoom шрифта) и ⌘⇧? (output history)** — таких привязок в коде нет: размер шрифта только через настройки (10–24), история вывода — только через меню Window / колесо вверх от края scrollback.
-10. **README «Keyboard essentials»**: `Cmd+Shift+H Shell command history: Enter to run, F4 to edit` — верно, но пункт доступен только в терминальном режиме (меню деактивировано в панелях); в README это не указано.
-12. **Справка F1**: «Shift+Insert Paste text» — в панельном режиме реализовано в renderer (`pasteRequest`); в Go нет отдельной обработки Shift+Insert — зависит от renderer, что верно для приложения, но не для headless-тестов.
-13. **TERMINAL_PARITY.md**: «Pages … the UI asks for at most the window height» — запрашивается `term.rows-2` строк (минимум 1), не высота окна.
+1. **F1 help** (`app.go`, `help`): the heading `persistent zsh terminal`, "zsh keeps its environment…", "Your .zshrc is loaded at shell startup", while the default shell is `bash` (`defaultSettings`, `TestDefaultShellIsBash`); zsh only when selected in Terminal settings.
+2. **F1 help**: `Ctrl+E/X/Y`: in the code Ctrl+Y and ⌘Y clear the line, but Ctrl+E/X work only with Ctrl (not ⌘); additionally the undocumented Ctrl+↑/Ctrl+↓ and ⌘↑/⌘↓ work (the latter are in the help).
+3. **F1 help**: `Ctrl+F / Ctrl+;`: in the code also ⌘F / ⌘; (any `cmd`). `Ctrl+Insert … Alt+Shift+Insert full paths`: ⌘Insert works too; Ctrl+Alt+Insert (paths with symlink resolution / the remote server label) is undocumented. Ctrl+[ / Ctrl+] (left/right panel paths, with Shift active/inactive) and Ctrl+Shift+Enter (the name from the inactive panel) are missing from the help.
+4. **F1 help** mentions `F10 closes only viewer/editor`; in panel mode `function(10)` does nothing (comment: exit only via ⌘Q); closing a document with F10 is in `document_keys.go` (outside this area).
+5. **TERMINAL_PARITY.md**: "xterm parses 1024-byte chunks before collecting history"; in `history.js` the chunk size is `min(4094, scrollback-2)` = 4094 bytes.
+6. **TERMINAL_PARITY.md**: "⌘⇧H Command history (output archive in the original 0.13 implementation)" and the navigation table "in the archive": current state: ⌘⇧H = command history, the output archive is only via the Window menu without a shortcut. The document itself notes this in its preamble.
+7. **Terminal settings**: the labels `Shell: … (new windows)` and `Use custom shell prompt / hooks (new windows…)`, the status `Shell applies to new windows`; but `restartShellIfDue` uses the current `Settings.Shell`/`ShellCustomPrompt` of the same window, i.e. after `exit` in the current window the new shell already starts with the changed settings.
+8. **Window close dialog**: ⌘W / the close button while a command is running shows `A command is running. Close the application?`; only the window closes, the others keep working.
+9. **The task mentions ⌘= / ⌘− / ⌘0 (font zoom) and ⌘⇧? (output history)**: there are no such bindings in the code: the font size only via settings (10–24), the output history only via the Window menu / wheel up from the scrollback edge.
+10. **README "Keyboard essentials"**: `Cmd+Shift+H Shell command history: Enter to run, F4 to edit` is correct, but the item is available only in terminal mode (the menu is disabled in the panels); README does not say so.
+12. **F1 help**: "Shift+Insert Paste text": in panel mode it is implemented in the renderer (`pasteRequest`); Go has no separate Shift+Insert handling; it depends on the renderer, which is correct for the application but not for headless tests.
+13. **TERMINAL_PARITY.md**: "Pages … the UI asks for at most the window height": `term.rows-2` rows (minimum 1) are requested, not the window height.
 
 
-<a id="часть-5"></a>
-# Часть 5. Меню F9, диалоги, настройки, сетевые подключения, справка
+<a id="part-5"></a>
+# Part 5. F9 menu, dialogs, settings, network connections, help
 
-Источник истины — код в `internal/ui` и `internal/remotefs` (версия 0.20.0, строка бренда `FarshMac 0.20.0` в `draw.go`). Строки интерфейса приведены дословно на английском. Отсылки «см. раздел файловых операций / поиска / user menu» относятся к спецификациям других разделов.
-
----
-
-## 1. Общая механика модальных окон
-
-Движок UI хранит ровно четыре вида модального состояния в `App` (`internal/ui/app.go`): `Menu *MenuState`, `Dialog *Dialog`, `Form *Form`, а также «занятость» `Busy` с прогресс-окном (`Operation`). Пока открыт документ, форма, диалог, меню или идёт фоновая операция, `Update.PanelKeys == false` и рендерер маршрутизирует клавиши иначе (`App.Poll`).
-
-Порядок обработки клавиш в `App.key` (упрощённо): `Alt+буква` при открытой форме/диалоге/Busy нормализуется к латинской букве по `m.Code` → если `Busy`: `Escape`/`Alt+C` отменяют операцию, иначе клавиши идут в форму (вопросы операции) → `⌘N` новое окно → `⌘Q` quit → `Ctrl+Tab`/`⌘⇧[ ]` переключение экранов → `⌘O`/`Ctrl+O` (только без диалога/формы) закрывает меню и переключает терминал → если терминал виден — выход → `Form` → `Dialog` → `Doc` → … → `Menu`.
-
-Отрисовка (`Draw`, `draw.go`): панели → строка статуса → командная строка → key bar → документ → fast find → меню → прогресс → Dialog → Form → применение цветовой темы.
-
-### Общие примитивы (`internal/ui/modal.go`)
-
-- `modalBounds(cols, rows, width, height)` — окно по центру; ширина `min(width, max(12, cols-4))`, высота `min(height, max(8, rows-2))`.
-- `drawModal` — тень (чёрная заливка со сдвигом +2/+1), серое тело (`Gray`), рамка `Box` с отступом 2 по X и 1 по Y, заголовок по центру в рамке, обрезанный `tail(title, W-10)` и обёрнутый пробелами.
-- `modalRule` — горизонтальный разделитель `─` с концами `╟`/`╢`.
-- `mnemonicKeys(labels)` — для каждого ярлыка первая ещё не занятая буква (в нижнем регистре) становится акселератором; `modalLabel` рисует эту букву жёлтым (`Yellow`).
-- `modalInput` — поле ввода: фон `Cyan`, текст `LightCyan`; при `selected` (выделено всё) — `White` на `Blue`; каретка — инверсия ячейки (`White` на `Black`) только у сфокусированного поля; управляющие символы заменяются пробелом; показывается окно текста вокруг каретки (`editWindow`).
-- `buttonLayout(labels, width)` — кнопки в ряд с шагом 1, ширина `len+4`, перенос на новую строку при нехватке места, каждая строка центрируется.
-- `drawModalButtons` — первая кнопка рисуется как `{ OK }`, остальные `[ Cancel ]`; сфокусированная — фон `Cyan`, остальные `Gray`; акселераторы подсвечены.
-
-### Dialog (однострочный prompt, `App.prompt`, `app.go`)
-
-#### Dialog (prompt с одним полем)
-- **Вызов:** `a.prompt(title, msg, value, fn)` — используют: Make folder (F7), Change directory (⌘L), Select/Deselect group, File panel filter, Create archive, Extract archive, Tree settings, Command line settings, File descriptions, Sort groups, Folder description files, Describe files, Apply command, Save folder shortcut, Remote move / rename, Make remote folder, Move / rename (F6).
-- **Поведение:**
-  - Если `value == ""` и включено `RememberDialogValues`, подставляется последнее введённое значение для этого заголовка (`a.dialogValues[title]`, только в памяти процесса).
-  - `Selected = Settings.SelectDialogInput` — при включённой настройке начальный текст выделен целиком; первый печатный символ/Backspace заменяет его.
-  - Фокус: `0` поле, `1` OK, `2` Cancel. `Tab`/`Shift+Tab` циклически по трём; `ArrowLeft/Right/Home/End` в поле снимают выделение (курсор всегда в конце строки — отдельного курсора у Dialog нет), на кнопках переключают OK↔Cancel.
-  - `Enter`: закрывает; если фокус не на Cancel — вызывает `Confirm(Input)` (и запоминает значение при `RememberDialogValues`). `Space` на кнопке = Enter. `Escape` — закрыть без вызова.
-  - `Alt+O` → OK, `Alt+C` → Cancel. `⌘A` — выделить всё. Backspace удаляет последний символ (или всё выделение). Печатные символы (без ⌘/Ctrl) добавляются в конец.
-  - Вставка (`paste`): только при фокусе на поле; управляющие символы → пробел, переводы строк удаляются.
-  - Мышь (`promptClick`): клик по строке поля ставит фокус 0; клик по кнопке активирует её.
-- **Отрисовка** (`drawDialog`): ширина `min(88, Cols-4)`, сообщение до 3 строк (перенос по ширине `W-8`), поле ввода, разделитель, кнопки `OK`/`Cancel` (акселераторы `o`/`c`).
-- **Код:** `app.go` (`Dialog`, `prompt`, `key`), `draw.go` (`promptBounds`, `drawDialog`, `promptClick`).
-
-### Form (многопольная форма / список выбора / подтверждение, `internal/ui/form.go`)
-
-Одна структура `Form` обслуживает три режима:
-1. **Форма с полями** (`a.form(title, fields, submit)`): `Fields []Field{Label, Value, Toggle, Checked, Secret}`, кнопки `Primary`/`Cancel`.
-2. **Список выбора** (`a.choose(title, choices, select)`): `Choice` непустой, `Buttons=false`. Если список пуст — форма не открывается, статус `"<title>: empty"`.
-3. **Подтверждение с кнопками** (`a.confirm(title, message, buttons, select)`): `Buttons=true`, `Choice` = ярлыки кнопок, `Cancel` вызывает `select(len(buttons)-1)` (т.е. Esc = последняя кнопка). Доп. поле `Remember` — чекбокс `Remember choice` (используется вопросами операций).
-
-#### Форма с полями
-- **Поведение:**
-  - Начальный фокус — поле 0, курсор в конце его значения. `Selected` (выделить всё) включает вызывающий код (например, диалог копирования ставит `Form.Selected = Settings.SelectDialogInput`).
-  - Навигация: `Tab`/`ArrowDown` → следующий элемент, `Shift+Tab`/`ArrowUp` → предыдущий; элементы = поля + кнопка Primary + кнопка Cancel (`count = len(Fields)+2`), переход циклический. `ArrowLeft/Right` внутри текстового поля двигают курсор, а не фокус; на toggle-поле переключают флажок.
-  - Текстовое поле: `Home/End`, `Backspace`, `Delete`, печатные символы (без ⌘/Ctrl); `⌘A` выделяет всё; при выделении Backspace/Delete/символ очищают поле. Вставка `formPaste` — в позицию курсора.
-  - Toggle: `Space`, `ArrowLeft`, `ArrowRight` переключают `[ ]`/`[x]`.
-  - `Secret`: значение отображается как `•` на каждый символ (пароли). Тест `TestRemoteUnknownHostConfirmationAndMasking` проверяет, что пароль не попадает в сетку.
-  - `Enter`: закрывает форму; если фокус на Cancel (`len(Fields)+1`) — вызывает `Cancel` (если задан), иначе `Submit(Fields)` (в т.ч. при фокусе на любом поле). `Space` на кнопке = Enter.
-  - `Escape`: закрывает, вызывает `Cancel` если задан.
-  - Акселераторы `Alt+буква`: мнемоники вычисляются как `mnemonicKeys(buttons ++ labels)` — т.е. сначала буквы кнопок (`OK`/`Primary` и `Cancel`), затем ярлыки полей. `Alt+буква` поля: фокус на поле; toggle переключается, текстовое — курсор в конец. `Alt+буква` кнопки — нажатие.
-  - Разделитель рисуется между группой текстовых и группой toggle-полей (`Rules`). При `CheckColumns == 2` toggle-поля раскладываются в две колонки с вертикальной линией `│` (`┬`/`┴`).
-  - Геометрия: ширина 88 (или меньше), высота `rows+8`; текстовое поле занимает 2 строки (ярлык с добавленным `:` + поле), toggle — 1. Прокрутка (`Scroll`) следует за фокусом; индикатор `▲` справа вверху, если список прокручен.
-  - Кнопки: `[Primary|OK]` и `Cancel` (`Form.buttons()`); у списка выбора — `Select`/`Cancel` без фокуса.
-  - Мышь (`formClick`): клик по кнопке — Primary: фокус на кнопку + Enter (submit), Cancel → Escape. Клик по полю — фокус, курсор в конец, toggle переключается.
-- **Код:** `form.go` (`form`, `formKey`, `formPaste`, `formGeometry`, `drawForm`, `formClick`).
-
-#### Список выбора (`choose`)
-- **Поведение:** `ArrowUp/Down/Tab` двигают фокус; при `Settings.MenuWrap` — циклически, иначе с ограничением; `Home`/`End`; `Enter` → `Select(Focus)`; `Escape` закрывает (без колбэка, `Cancel` не задаётся). Акселераторы по первым буквам пунктов (`Alt+буква` ставит фокус, не выбирает). Клик по строке выбирает сразу. Видимые строки = `rows+8` ограничено высотой окна, прокрутка.
-- **Используют:** Sort mode, Volumes and home, Folder shortcuts, Network connections, Advanced settings, Colors, Code pages, Groups of file masks, Command/Folder/View-edit history, Screens, Archive commands, User menu, Edit user menu, File associations, результаты Find, Folder tree.
-
-#### Подтверждение (`confirm`)
-- **Поведение:** сообщение переносится по ширине `W-8` (многострочное через `\n`); `PageUp/PageDown` прокручивают длинный текст на 3 строки; кнопки по `ArrowLeft/Right/Tab`, `Enter`/`Space`, `Escape` = последняя кнопка; `Alt+буква` нажимает кнопку; при `Remember` — чекбокс `Remember choice` (`Space`/`Enter` на нём, `Alt+M`). Клик по кнопке нажимает её; клик по строке чекбокса переключает.
-- **Используют:** Save changes (quit), Quit (shell busy), Unknown SSH host key, Delete remote files permanently, Move to Trash / Delete permanently, Error (Make folder retry), `<label> failed` (ошибки фоновых задач с `reportError`), вопросы операций (overwrite/skip/retry; описаны в разделе файловых операций).
-
-### Окно прогресса (`internal/ui/progress.go`)
-- Показывается, пока `a.Operation != nil` (Busy). Размер 88×15. Заголовок = метка операции; строки: путь текущего элемента, `Working / calculating… ▰▱▱▱  N items` (сканирование/стриминг) или `Total  xx.x%  n / m items` + полоса, `File  ` + полоса, при `Workers > 1` — `Parallel transfers: A active / W workers`, статистика `done / total · rate/s · Ns  ETA Ns` или `… processed · rate/s · Ns`. Кнопка `Cancel` (акселератор `c`); `Escape`/`Alt+C` или клик по кнопке → `cancelOperation`.
-- При завершении (`pollTask`): `Status = ""`, ошибка → `a.error(err)` (в статус), а если у задачи `reportError` и ошибка не отмена — дополнительно `confirm("<Label> failed", err, ["OK"])`.
-
-### Строка статуса и key bar (`draw.go`, `Poll`)
-- Строка `Rows-3`: `a.Status`; если пусто — подсказка `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
-- Строка `Rows-2`: `<path>>` + командная строка; для удалённой панели путь показывается как `local:<локальный путь панели>` (команды выполняются локально).
-- Строка `Rows-1` (если `ShowKeys`): 10 ячеек `1Help 2UserMenu 3View 4Edit 5Copy 6RenMov 7MkFold 8Trash 9Menu 10` (пусто); для удалённой панели 8 → `Delete`. Клик по ячейке вызывает `function(n)`.
-- В режиме терминала `Footer` заменяется: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt` / `⌘O  Panels    ·    ⌘.  Interrupt` / при перезапуске `⌘O  Panels    ·    <Status>`.
-- Очистка статуса: `Escape` в панелях (если нет активных чтений: `Command = ""; Status = ""`), завершение фоновой задачи (`task.go`), а также каждое событие готовности shell перезаписывает статус `Exit N · ⌘O panels / terminal`. Остальные сообщения живут до следующей перезаписи.
-- `a.error(err)` — если `err != nil`, кладёт `err.Error()` в статус и помечает `dirty`. Отдельного окна ошибок нет (кроме `reportError` задач и `Error` при создании папки).
+The source of truth is the code in `internal/ui` and `internal/remotefs` (version 0.20.0, the brand string `FarshMac 0.20.0` in `draw.go`). Interface strings are given verbatim in English. References "see the file operations / search / user menu section" refer to the specifications of other sections.
 
 ---
 
-## 2. Меню F9
+## 1. General mechanics of modal windows
 
-### Открытие и навигация
+The UI engine keeps exactly four kinds of modal state in `App` (`internal/ui/app.go`): `Menu *MenuState`, `Dialog *Dialog`, `Form *Form`, and the "busy" state `Busy` with a progress window (`Operation`). While a document, form, dialog, or menu is open, or a background operation is running, `Update.PanelKeys == false` and the renderer routes keys differently (`App.Poll`).
 
-#### Главное меню F9
-- **Вызов:** `F9`, `⌘9` (`function(9)`); `Shift+F10` — открыть меню на последнем выполненном пункте (`a.lastMenu`, запоминается при `Enter`); мышь — клик по имени раздела в строке 0.
-- **Где доступно:** панели (не терминал, не документ, не форма/диалог, не Busy). При `Active == 0` открывается раздел `Left` (column 0), при `Active == 1` — `Right` (column 4).
-- **Поведение (`menuKey`):**
-  - `Escape`, `F9`, `⌘9` — закрыть.
-  - `ArrowLeft`/`ArrowRight` — соседний раздел по кругу, строка 0.
-  - `Tab` — из `Left` в `Right`, из `Right` в `Left`, из любого другого — в `Right` (или в `Left`, если активна правая панель); строка 0.
-  - `ArrowDown`/`ArrowUp` — при `Settings.MenuWrap` циклически, иначе с упором; `Home`/`End`; `PageDown`/`PageUp` — шаг `Rows-5`.
-  - `Enter` — запоминает `lastMenu`, закрывает меню, затем выполняет `Run` пункта.
-  - После любой клавиши курсор «перепрыгивает» разделители (пустые `menuItem`) в направлении движения.
-  - Буквенных акселераторов в меню **нет**.
-  - `⌘O` при открытом меню закрывает его и переключает терминал. Клавиши `Alt+F1/F2/F7/F8/F10`, `Shift+F10`, `Shift+F4`, `F12`, `⌘N`, `⌘Q` перехватываются раньше `menuKey` и срабатывают даже при открытом меню (меню при этом остаётся открытым, кроме явного закрытия).
-- **Мышь (`menuClick`):** клик внутри рамки по пункту (не разделителю) — выполнить; по разделителю — ничего; вне рамки — закрыть меню. Клик по заголовку другого раздела в строке 0 переключает раздел.
-- **Отрисовка (`drawMenu`):** строка 0 — имена разделов (`Left` x=2, `Files` x=11, `Commands` x=21, `Options` x=34, `Right` x=46), активный раздел инвертирован (`White` на `Black`); справа бренд `FarshMac 0.20.0` (при ширине ≥ 70). Выпадающий блок: ширина `min(44, Cols-2)`, высота `min(items+2, Rows-3)`, прокрутка через `Menu.Top`, фон `Cyan`, рамка белая, текущая строка — фон `Black`; разделители `╟───╢`; текст шортката жёлтым в правых 9 колонках; префикс `✓ ` рисуется как галочка в первой колонке (текущий вид панели).
-- **Код:** `menu.go` (`menuSections`, `menuKey`, `menuBounds`, `menuClick`, `drawMenu`), `app.go` (`function(9)`, `click`).
+Key handling order in `App.key` (simplified): `Alt+letter` while a form/dialog/Busy is open is normalised to the Latin letter by `m.Code` → if `Busy`: `Escape`/`Alt+C` cancel the operation, otherwise keys go to the form (operation questions) → `⌘N` new window → `⌘Q` quit → `Ctrl+Tab`/`⌘⇧[ ]` screen switching → `⌘O`/`Ctrl+O` (only without a dialog/form) closes the menu and toggles the terminal → if the terminal is visible — return → `Form` → `Dialog` → `Doc` → … → `Menu`.
 
-### Раздел Left / Right (одинаковы, параметр — индекс панели)
+Drawing (`Draw`, `draw.go`): panels → status line → command line → key bar → document → fast find → menu → progress → Dialog → Form → application of the colour theme.
 
-| Пункт | Шорткат в меню | Действие |
+### Shared primitives (`internal/ui/modal.go`)
+
+- `modalBounds(cols, rows, width, height)` — a centred window; width `min(width, max(12, cols-4))`, height `min(height, max(8, rows-2))`.
+- `drawModal` — shadow (black fill offset by +2/+1), grey body (`Gray`), `Box` frame with an inset of 2 on X and 1 on Y, title centred in the frame, truncated with `tail(title, W-10)` and wrapped in spaces.
+- `modalRule` — a horizontal separator `─` with `╟`/`╢` ends.
+- `mnemonicKeys(labels)` — for each label the first not-yet-taken letter (lower case) becomes the accelerator; `modalLabel` draws that letter in yellow (`Yellow`).
+- `modalInput` — input field: background `Cyan`, text `LightCyan`; when `selected` (everything selected) — `White` on `Blue`; the caret is the inverted cell (`White` on `Black`) only in the focused field; control characters are replaced with a space; a window of text around the caret is shown (`editWindow`).
+- `buttonLayout(labels, width)` — buttons in a row with a step of 1, width `len+4`, wrapping to a new row when space runs out, each row is centred.
+- `drawModalButtons` — the first button is drawn as `{ OK }`, the others as `[ Cancel ]`; the focused one has background `Cyan`, the others `Gray`; accelerators are highlighted.
+
+### Dialog (single-line prompt, `App.prompt`, `app.go`)
+
+#### Dialog (prompt with one field)
+- **Invocation:** `a.prompt(title, msg, value, fn)` — used by: Make folder (F7), Change directory (⌘L), Select/Deselect group, File panel filter, Create archive, Extract archive, Tree settings, Command line settings, File descriptions, Sort groups, Folder description files, Describe files, Apply command, Save folder shortcut, Remote move / rename, Make remote folder, Move / rename (F6).
+- **Behaviour:**
+  - If `value == ""` and `RememberDialogValues` is enabled, the last value entered for this title is substituted (`a.dialogValues[title]`, in process memory only).
+  - `Selected = Settings.SelectDialogInput` — with the setting enabled, the initial text is selected in full; the first printable character/Backspace replaces it.
+  - Focus: `0` field, `1` OK, `2` Cancel. `Tab`/`Shift+Tab` cycle through the three; `ArrowLeft/Right/Home/End` in the field clear the selection (the cursor is always at the end of the line — Dialog has no separate cursor), on the buttons they switch OK↔Cancel.
+  - `Enter`: closes; if focus is not on Cancel — calls `Confirm(Input)` (and remembers the value when `RememberDialogValues`). `Space` on a button = Enter. `Escape` — close without calling.
+  - `Alt+O` → OK, `Alt+C` → Cancel. `⌘A` — select all. Backspace deletes the last character (or the whole selection). Printable characters (without ⌘/Ctrl) are appended at the end.
+  - Paste (`paste`): only when focus is on the field; control characters → space, line breaks are removed.
+  - Mouse (`promptClick`): a click on the field row sets focus 0; a click on a button activates it.
+- **Drawing** (`drawDialog`): width `min(88, Cols-4)`, message up to 3 lines (wrapped at width `W-8`), input field, separator, `OK`/`Cancel` buttons (accelerators `o`/`c`).
+- **Code:** `app.go` (`Dialog`, `prompt`, `key`), `draw.go` (`promptBounds`, `drawDialog`, `promptClick`).
+
+### Form (multi-field form / choice list / confirmation, `internal/ui/form.go`)
+
+A single `Form` structure serves three modes:
+1. **Form with fields** (`a.form(title, fields, submit)`): `Fields []Field{Label, Value, Toggle, Checked, Secret}`, buttons `Primary`/`Cancel`.
+2. **Choice list** (`a.choose(title, choices, select)`): `Choice` is non-empty, `Buttons=false`. If the list is empty, the form does not open; status `"<title>: empty"`.
+3. **Confirmation with buttons** (`a.confirm(title, message, buttons, select)`): `Buttons=true`, `Choice` = the button labels, `Cancel` calls `select(len(buttons)-1)` (i.e. Esc = the last button). An extra field `Remember` — a `Remember choice` checkbox (used by operation questions).
+
+#### Form with fields
+- **Behaviour:**
+  - Initial focus is field 0, cursor at the end of its value. `Selected` (select all) is enabled by the calling code (for example, the copy dialog sets `Form.Selected = Settings.SelectDialogInput`).
+  - Navigation: `Tab`/`ArrowDown` → next element, `Shift+Tab`/`ArrowUp` → previous; elements = fields + the Primary button + the Cancel button (`count = len(Fields)+2`), navigation is cyclic. `ArrowLeft/Right` inside a text field move the cursor, not the focus; on a toggle field they flip the checkbox.
+  - Text field: `Home/End`, `Backspace`, `Delete`, printable characters (without ⌘/Ctrl); `⌘A` selects all; with a selection, Backspace/Delete/a character clear the field. Paste `formPaste` — at the cursor position.
+  - Toggle: `Space`, `ArrowLeft`, `ArrowRight` switch `[ ]`/`[x]`.
+  - `Secret`: the value is shown as `•` per character (passwords). The test `TestRemoteUnknownHostConfirmationAndMasking` verifies that the password does not reach the grid.
+  - `Enter`: closes the form; if focus is on Cancel (`len(Fields)+1`) — calls `Cancel` (if set), otherwise `Submit(Fields)` (including when focus is on any field). `Space` on a button = Enter.
+  - `Escape`: closes, calls `Cancel` if set.
+  - `Alt+letter` accelerators: mnemonics are computed as `mnemonicKeys(buttons ++ labels)` — i.e. first the button letters (`OK`/`Primary` and `Cancel`), then the field labels. `Alt+letter` of a field: focus on the field; a toggle is flipped, a text field gets the cursor at the end. `Alt+letter` of a button — a press.
+  - A separator is drawn between the group of text fields and the group of toggle fields (`Rules`). With `CheckColumns == 2` the toggle fields are laid out in two columns with a vertical line `│` (`┬`/`┴`).
+  - Geometry: width 88 (or less), height `rows+8`; a text field takes 2 rows (label with an appended `:` + the field), a toggle takes 1. Scrolling (`Scroll`) follows the focus; a `▲` indicator at the top right if the list is scrolled.
+  - Buttons: `[Primary|OK]` and `Cancel` (`Form.buttons()`); a choice list has `Select`/`Cancel` without focus.
+  - Mouse (`formClick`): a click on a button — Primary: focus on the button + Enter (submit), Cancel → Escape. A click on a field — focus, cursor at the end, a toggle is flipped.
+- **Code:** `form.go` (`form`, `formKey`, `formPaste`, `formGeometry`, `drawForm`, `formClick`).
+
+#### Choice list (`choose`)
+- **Behaviour:** `ArrowUp/Down/Tab` move the focus; with `Settings.MenuWrap` — cyclically, otherwise clamped; `Home`/`End`; `Enter` → `Select(Focus)`; `Escape` closes (without a callback, `Cancel` is not set). Accelerators by the first letters of the items (`Alt+letter` sets the focus, does not select). A click on a row selects immediately. Visible rows = `rows+8` limited by the window height, with scrolling.
+- **Used by:** Sort mode, Volumes and home, Folder shortcuts, Network connections, Advanced settings, Colors, Code pages, Groups of file masks, Command/Folder/View-edit history, Screens, Archive commands, User menu, Edit user menu, File associations, Find results, Folder tree.
+
+#### Confirmation (`confirm`)
+- **Behaviour:** the message is wrapped at width `W-8` (multi-line via `\n`); `PageUp/PageDown` scroll long text by 3 lines; buttons via `ArrowLeft/Right/Tab`, `Enter`/`Space`, `Escape` = the last button; `Alt+letter` presses a button; with `Remember` — a `Remember choice` checkbox (`Space`/`Enter` on it, `Alt+M`). A click on a button presses it; a click on the checkbox row toggles it.
+- **Used by:** Save changes (quit), Quit (shell busy), Unknown SSH host key, Delete remote files permanently, Move to Trash / Delete permanently, Error (Make folder retry), `<label> failed` (background task errors with `reportError`), operation questions (overwrite/skip/retry; described in the file operations section).
+
+### Progress window (`internal/ui/progress.go`)
+- Shown while `a.Operation != nil` (Busy). Size 88×15. Title = the operation label; rows: the path of the current item, `Working / calculating… ▰▱▱▱  N items` (scanning/streaming) or `Total  xx.x%  n / m items` + bar, `File  ` + bar, with `Workers > 1` — `Parallel transfers: A active / W workers`, statistics `done / total · rate/s · Ns  ETA Ns` or `… processed · rate/s · Ns`. A `Cancel` button (accelerator `c`); `Escape`/`Alt+C` or a click on the button → `cancelOperation`.
+- On completion (`pollTask`): `Status = ""`, an error → `a.error(err)` (into the status), and if the task has `reportError` and the error is not a cancellation — additionally `confirm("<Label> failed", err, ["OK"])`.
+
+### Status line and key bar (`draw.go`, `Poll`)
+- Row `Rows-3`: `a.Status`; if empty — the hint `Tab Switch panel   Space Select   ⌘O Terminal   ⌘⌥0…9 Bookmark`.
+- Row `Rows-2`: `<path>>` + the command line; for a remote panel the path is shown as `local:<local panel path>` (commands run locally).
+- Row `Rows-1` (if `ShowKeys`): 10 cells `1Help 2UserMenu 3View 4Edit 5Copy 6RenMov 7MkFold 8Trash 9Menu 10` (empty); for a remote panel 8 → `Delete`. A click on a cell calls `function(n)`.
+- In terminal mode the `Footer` is replaced: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt` / `⌘O  Panels    ·    ⌘.  Interrupt` / on restart `⌘O  Panels    ·    <Status>`.
+- Clearing the status: `Escape` in the panels (if there are no active reads: `Command = ""; Status = ""`), completion of a background task (`task.go`), and every shell readiness event overwrites the status with `Exit N · ⌘O panels / terminal`. Other messages live until the next overwrite.
+- `a.error(err)` — if `err != nil`, puts `err.Error()` into the status and marks `dirty`. There is no separate error window (except for `reportError` tasks and `Error` on folder creation).
+
+---
+
+## 2. The F9 menu
+
+### Opening and navigation
+
+#### Main menu F9
+- **Invocation:** `F9`, `⌘9` (`function(9)`); `Shift+F10` — open the menu on the last executed item (`a.lastMenu`, remembered on `Enter`); mouse — a click on a section name in row 0.
+- **Where available:** panels (not the terminal, not a document, not a form/dialog, not Busy). With `Active == 0` the `Left` section opens (column 0), with `Active == 1` — `Right` (column 4).
+- **Behaviour (`menuKey`):**
+  - `Escape`, `F9`, `⌘9` — close.
+  - `ArrowLeft`/`ArrowRight` — the adjacent section, wrapping around, row 0.
+  - `Tab` — from `Left` to `Right`, from `Right` to `Left`, from any other — to `Right` (or to `Left` if the right panel is active); row 0.
+  - `ArrowDown`/`ArrowUp` — with `Settings.MenuWrap` cyclically, otherwise clamped; `Home`/`End`; `PageDown`/`PageUp` — step `Rows-5`.
+  - `Enter` — remembers `lastMenu`, closes the menu, then executes the item's `Run`.
+  - After any key the cursor "jumps over" separators (empty `menuItem`s) in the direction of movement.
+  - There are **no** letter accelerators in the menu.
+  - `⌘O` with the menu open closes it and toggles the terminal. The keys `Alt+F1/F2/F7/F8/F10`, `Shift+F10`, `Shift+F4`, `F12`, `⌘N`, `⌘Q` are intercepted before `menuKey` and work even while the menu is open (the menu stays open in that case, except on explicit closing).
+- **Mouse (`menuClick`):** a click inside the frame on an item (not a separator) — execute; on a separator — nothing; outside the frame — close the menu. A click on another section's title in row 0 switches the section.
+- **Drawing (`drawMenu`):** row 0 — section names (`Left` x=2, `Files` x=11, `Commands` x=21, `Options` x=34, `Right` x=46), the active section is inverted (`White` on `Black`); on the right the brand `FarshMac 0.20.0` (at width ≥ 70). The drop-down block: width `min(44, Cols-2)`, height `min(items+2, Rows-3)`, scrolling via `Menu.Top`, background `Cyan`, white frame, the current row has background `Black`; separators `╟───╢`; the shortcut text in yellow in the rightmost 9 columns; the `✓ ` prefix is drawn as a check mark in the first column (the current panel view).
+- **Code:** `menu.go` (`menuSections`, `menuKey`, `menuBounds`, `menuClick`, `drawMenu`), `app.go` (`function(9)`, `click`).
+
+### The Left / Right section (identical, the parameter is the panel index)
+
+| Item | Shortcut in the menu | Action |
 | --- | --- | --- |
 | `Brief` | — | `setView(i, "Brief")` |
 | `Medium` | — | `setView(i, "Medium")` |
-| `Full` | — | `setView(i, "Full")` (галочка также при пустом `View`) |
+| `Full` | — | `setView(i, "Full")` (also checked when `View` is empty) |
 | `Wide` | — | `setView(i, "Wide")` |
 | `Detailed` | — | `setView(i, "Detailed")` |
-| *(разделитель)* | | |
+| *(separator)* | | |
 | `Info panel` | — | `setView(i, "Info panel")` |
 | `Tree panel` | — | `setView(i, "Tree panel")` |
 | `Quick view` | — | `setView(i, "Quick view")` |
-| *(разделитель)* | | |
+| *(separator)* | | |
 | `Sort modes…` | — | `sortMenu(i)` |
 | `Panel on/off` | `⌘F1` / `⌘F2` | `togglePanel(i)` |
 | `Re-read` | `⌘R` | `rereadPanel(i)` |
 | `Change volume…` | `AltF1` / `AltF2` | `volumes(i)` |
 
-Текущий вид помечен `✓ `. Тест `TestCleanMenuOrderAndSeparators` фиксирует именно этот порядок.
+The current view is marked with `✓ `. The test `TestCleanMenuOrderAndSeparators` pins exactly this order.
 
-#### Смена вида панели (setView)
-- **Поведение:** для удалённой панели `Tree panel`/`Info panel`/`Quick view` запрещены → статус `Choose a file view for remote panels`; внутри архива `Tree panel` → `Tree view is unavailable inside archives`. Иначе `View = view`, `Hidden = false`, панель перезагружается, кэш quick view сбрасывается. При загрузке старых setup виды `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` нормализуются в `Full` (`configurePanel`).
-- **Код:** `panel_options.go` (`setView`), `settings.go` (`configurePanel`).
+#### Changing the panel view (setView)
+- **Behaviour:** for a remote panel `Tree panel`/`Info panel`/`Quick view` are forbidden → status `Choose a file view for remote panels`; inside an archive `Tree panel` → `Tree view is unavailable inside archives`. Otherwise `View = view`, `Hidden = false`, the panel is reloaded, the quick view cache is reset. When loading old setups the views `Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` are normalised to `Full` (`configurePanel`).
+- **Code:** `panel_options.go` (`setView`), `settings.go` (`configurePanel`).
 
 #### Sort modes…
-- **Диалог:** список `Sort mode`: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`.
-- **Поведение:** пункты-режимы устанавливают `panelOptions.Sort`; `Reverse order`/`Case sensitive`/`Directories first`/`Selected first` переключают флаги `Reverse`/`CaseSensitive`/`MixDirectories`/`SelectedFirst` (пункт `Directories first` инвертирует `MixDirectories`; в списке текущие значения не показываются). После выбора панель перезагружается.
-- **Клавиши вне меню:** `Ctrl/⌘+F12` — тот же список для активной панели; `Ctrl/⌘+F3…F11` — прямой выбор режима (`Name, Extension, Modified, Size, Unsorted, Created, Accessed, Description, Owner`; повтор — инверсия порядка); на удалённой панели `Created/Accessed/Owner/Description` → `This sort mode requires local file metadata`; `Shift+F11` — выкл/вкл sort groups (`DisableSortGroups`), `Shift+F12` — `Selected first`.
-- **Код:** `panel_options.go` (`sortMenu`, `sortEntries`), `far_keys.go`.
+- **Dialog:** the `Sort mode` list: `Name`, `Extension`, `Size`, `Modified`, `Reverse order`, `Case sensitive`, `Directories first`, `Selected first`, `Unsorted`, `Created`, `Accessed`, `Description`, `Owner`.
+- **Behaviour:** the mode items set `panelOptions.Sort`; `Reverse order`/`Case sensitive`/`Directories first`/`Selected first` toggle the flags `Reverse`/`CaseSensitive`/`MixDirectories`/`SelectedFirst` (the `Directories first` item inverts `MixDirectories`; the current values are not shown in the list). After the choice the panel is reloaded.
+- **Keys outside the menu:** `Ctrl/⌘+F12` — the same list for the active panel; `Ctrl/⌘+F3…F11` — direct choice of a mode (`Name, Extension, Modified, Size, Unsorted, Created, Accessed, Description, Owner`; repeating inverts the order); on a remote panel `Created/Accessed/Owner/Description` → `This sort mode requires local file metadata`; `Shift+F11` — sort groups off/on (`DisableSortGroups`), `Shift+F12` — `Selected first`.
+- **Code:** `panel_options.go` (`sortMenu`, `sortEntries`), `far_keys.go`.
 
 #### Panel on/off
-- **Вызов:** меню, `⌘F1`/`⌘F2` (`Ctrl+F1/F2` тоже), `Ctrl/⌘+P` — скрыть неактивную панель.
-- **Поведение:** `Hidden` инвертируется; если скрывается активная панель, а другая видима, активной становится другая.
-- **Код:** `archive_panel.go` (`togglePanel`).
+- **Invocation:** menu, `⌘F1`/`⌘F2` (`Ctrl+F1/F2` too), `Ctrl/⌘+P` — hide the inactive panel.
+- **Behaviour:** `Hidden` is inverted; if the active panel is being hidden and the other one is visible, the other one becomes active.
+- **Code:** `archive_panel.go` (`togglePanel`).
 
 #### Re-read
-- **Вызов:** меню (конкретная панель), `⌘R`/`Ctrl+R` (активная панель).
-- **Поведение:** сбрасывает ключи инфо-панели, для архива — переоткрывает архив, иначе `Load(Path)`; ошибка в статус.
-- **Код:** `archive_panel.go` (`rereadPanel`).
+- **Invocation:** menu (a specific panel), `⌘R`/`Ctrl+R` (the active panel).
+- **Behaviour:** resets the info panel keys, for an archive — reopens the archive, otherwise `Load(Path)`; an error goes to the status.
+- **Code:** `archive_panel.go` (`rereadPanel`).
 
 #### Change volume… / Mounted volumes
-- **Вызов:** меню Left/Right (`AltF1`/`AltF2`), Commands → `Mounted volumes` (активная панель).
-- **Диалог:** список `Volumes and home`: `/`, домашняя папка, все записи `/Volumes/*`.
-- **Поведение:** выбранная панель становится активной, `Remote = nil` (удалённое подключение панели сбрасывается без сообщения), загружается путь.
-- **Код:** `panel_options.go` (`volumes`).
+- **Invocation:** the Left/Right menu (`AltF1`/`AltF2`), Commands → `Mounted volumes` (the active panel).
+- **Dialog:** the `Volumes and home` list: `/`, the home folder, all entries of `/Volumes/*`.
+- **Behaviour:** the chosen panel becomes active, `Remote = nil` (the panel's remote connection is dropped without a message), the path is loaded.
+- **Code:** `panel_options.go` (`volumes`).
 
-### Раздел Files
+### The Files section
 
-| Пункт | Шорткат | Действие / условия |
+| Item | Shortcut | Action / conditions |
 | --- | --- | --- |
-| `Open with macOS` | `⇧Enter` | `openSystemSelected`: на удалённой панели → статус `Copy remote files to a local panel before opening them with macOS`; элемент внутри архива → `Use F5 to copy this archive item out before opening it with macOS`; иначе `open` через Finder-ассоциацию |
-| `View / folder size` | `F3` | `function(3)`: на папке — подсчёт размеров; удалённый файл — скачивание и просмотр; архив — просмотр члена |
-| `Calculate all folder sizes` | `⌘⌥F3` | `calculateFolderSizes(true)` (работает и на SFTP, см. тест) |
-| `Edit` | `F4` | `function(4)`; в архиве → `Archive is read-only. Use F5 to copy files out.`; на удалённой панели — скачать и редактировать |
-| `New file…` | `ShiftF4` | `newFile` (на удалённой панели/в архиве блокируется) |
+| `Open with macOS` | `⇧Enter` | `openSystemSelected`: on a remote panel → status `Copy remote files to a local panel before opening them with macOS`; an item inside an archive → `Use F5 to copy this archive item out before opening it with macOS`; otherwise `open` via the Finder association |
+| `View / folder size` | `F3` | `function(3)`: on a folder — size calculation; a remote file — download and view; an archive — view a member |
+| `Calculate all folder sizes` | `⌘⌥F3` | `calculateFolderSizes(true)` (also works over SFTP, see the test) |
+| `Edit` | `F4` | `function(4)`; in an archive → `Archive is read-only. Use F5 to copy files out.`; on a remote panel — download and edit |
+| `New file…` | `ShiftF4` | `newFile` (blocked on a remote panel/in an archive) |
 | `Copy…` | `F5` | `transferDialog(false)` |
-| `Rename or move…` | `F6` | `transferDialog(true)` → для удалённых панелей `remoteMoveDialog` |
-| `Link…` | — (в коде `Alt+F6`) | `createLink` |
-| `Make folder…` | `F7` | `function(7)` → локально prompt `Make folder` / удалённо `Make remote folder` |
-| `Move to Trash…` | `F8` | `deleteSelected(false)`; на удалённой панели — `remoteDelete` |
-| `Delete permanently…` | `⇧F8` | `deleteSelected(true)` (также `Shift+Delete`; `Delete` без Shift = Trash) |
-| `Create archive…` | — (в коде `Shift+F1`) | `archiveCreate` |
-| `Extract archive…` | — (в коде `Shift+F2`) | `archiveExtract` |
-| `Archive commands…` | — (в коде `Shift+F3`) | `archiveCommands` |
+| `Rename or move…` | `F6` | `transferDialog(true)` → for remote panels `remoteMoveDialog` |
+| `Link…` | — (`Alt+F6` in the code) | `createLink` |
+| `Make folder…` | `F7` | `function(7)` → locally the `Make folder` prompt / remotely `Make remote folder` |
+| `Move to Trash…` | `F8` | `deleteSelected(false)`; on a remote panel — `remoteDelete` |
+| `Delete permanently…` | `⇧F8` | `deleteSelected(true)` (also `Shift+Delete`; `Delete` without Shift = Trash) |
+| `Create archive…` | — (`Shift+F1` in the code) | `archiveCreate` |
+| `Extract archive…` | — (`Shift+F2` in the code) | `archiveExtract` |
+| `Archive commands…` | — (`Shift+F3` in the code) | `archiveCommands` |
 | `File attributes…` | — | `fileAttributes` |
 | `Apply command…` | — | `applyCommand` |
 | `Describe files…` | — | `describeFiles` |
@@ -2035,41 +2030,41 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 | `Invert selection` | `Num *` | `selectGroup("Invert")` |
 | `Restore selection` | `⌘M` | `selectGroup("Restore")` |
 
-Пункты `Link…`, `File attributes…`, `Apply command…`, `Describe files…`, `New file…`, `Create archive…` на удалённой панели пишут в статус `This command requires a local panel. Use F5 to copy remote files first.` и ничего не открывают (тест `TestRemoteCommandsDoNotModifyLocalPaths`); внутри архива — `Archive is read-only. Use F5 to copy files out.`.
+The items `Link…`, `File attributes…`, `Apply command…`, `Describe files…`, `New file…`, `Create archive…` on a remote panel write `This command requires a local panel. Use F5 to copy remote files first.` to the status and open nothing (test `TestRemoteCommandsDoNotModifyLocalPaths`); inside an archive — `Archive is read-only. Use F5 to copy files out.`.
 
 #### Link…
-- **Диалог:** `Create link`: `Link name` (по умолчанию `<другая панель>/<имя>`), toggle `Symbolic link` (вкл.). OK → `os.Symlink` или `os.Link`, ошибки в статус, панели обновляются.
+- **Dialog:** `Create link`: `Link name` (default `<other panel>/<name>`), toggle `Symbolic link` (on). OK → `os.Symlink` or `os.Link`, errors go to the status, the panels are refreshed.
 
 #### File attributes…
-- **Диалог:** `File attributes`: `Permissions (octal)` (текущие права `%03o` первого выбранного), `Modified (local)` (`2006-01-02 15:04:05`). Проверки: `Permissions must be 000–777`; время парсится в локальной зоне. Применяется ко всем выбранным через `workProgress("Updating attributes")`; символические ссылки → ошибка `attributes of symlinks are not changed: <path>`.
+- **Dialog:** `File attributes`: `Permissions (octal)` (the current permissions `%03o` of the first selected item), `Modified (local)` (`2006-01-02 15:04:05`). Checks: `Permissions must be 000–777`; the time is parsed in the local zone. Applied to all selected items via `workProgress("Updating attributes")`; symbolic links → error `attributes of symlinks are not changed: <path>`.
 
 #### Apply command…
-- **Диалог:** prompt `Apply command` / `Use {} for a shell-quoted filename`. Для каждого выбранного файла формируется команда (`{}` заменяется на экранированный путь, иначе путь добавляется в конец), команды объединяются `\n` и выполняются в терминале (`execute`).
+- **Dialog:** prompt `Apply command` / `Use {} for a shell-quoted filename`. For each selected file a command is built (`{}` is replaced with the escaped path, otherwise the path is appended at the end), the commands are joined with `\n` and executed in the terminal (`execute`).
 
 #### Describe files…
-- **Диалог:** prompt `Describe files` / `Description (empty removes it)`, начальное значение — описание первого выбранного. Пишет файл `Settings.DescriptionFile` (по умолчанию `descript.ion`) в текущей папке атомарно; имена с пробелами в кавычках; имена с `\n\r"` → ошибка `this filename cannot be stored in descript.ion`.
+- **Dialog:** prompt `Describe files` / `Description (empty removes it)`, the initial value is the description of the first selected item. Writes the file `Settings.DescriptionFile` (default `descript.ion`) in the current folder atomically; names with spaces are quoted; names containing `\n\r"` → error `this filename cannot be stored in descript.ion`.
 
 #### Select group… / Deselect group… / Invert / Restore
-- **Диалог:** prompt `Select group` / `Deselect group`, подсказка `Masks: *.go;*.md | *_test.go (exclude)`, значение `*`. Маски валидируются (`validateMasks`, группы `<name>` из `MaskGroups`); папки включаются при `Settings.SelectFolders`. `Restore` обменивает `Marked` и `RestoreMarked`.
+- **Dialog:** prompt `Select group` / `Deselect group`, hint `Masks: *.go;*.md | *_test.go (exclude)`, value `*`. Masks are validated (`validateMasks`, `<name>` groups from `MaskGroups`); folders are included when `Settings.SelectFolders`. `Restore` swaps `Marked` and `RestoreMarked`.
 
-### Раздел Commands
+### The Commands section
 
-| Пункт | Шорткат | Действие |
+| Item | Shortcut | Action |
 | --- | --- | --- |
-| `Network connections…` | — | `networkMenu` (раздел 5) |
-| `Quick view on/off` | `Ctrl+Q` | `toggleOtherView("Quick view")` для неактивной панели; возврат к прежнему виду при повторе |
-| `New window` | `⌘N` | `NewWindow = true` → Cocoa открывает окно, копируя настройки |
-| `Find file…` | `AltF7` | `findFiles(false)` — см. раздел поиска |
+| `Network connections…` | — | `networkMenu` (section 5) |
+| `Quick view on/off` | `Ctrl+Q` | `toggleOtherView("Quick view")` for the inactive panel; returns to the previous view on repeat |
+| `New window` | `⌘N` | `NewWindow = true` → Cocoa opens a window, copying the settings |
+| `Find file…` | `AltF7` | `findFiles(false)` — see the search section |
 | `Command history` | `AltF8` | `historyMenu("Commands")` |
 | `Find folder…` | — | `findFiles(true)` |
-| `Folder tree` | `AltF10` | `treeMenu` — фоновое сканирование, список `Folder tree` (`(partial)` при лимитах) |
-| `File view/edit history` | — (в коде `Alt+F11`) | `historyMenu("Files")` |
-| `Folder history` | — (в коде `Alt+F12`) | `historyMenu("Folders")` |
-| `Same folder in other panel` | `⌘=` | `matchOtherPanel` (также `⌘⇧\`) |
-| `Swap panels` | `⌘U` | обмен `Panels[0]`/`Panels[1]` (также `Ctrl+U`) |
+| `Folder tree` | `AltF10` | `treeMenu` — background scan, the `Folder tree` list (`(partial)` when limits are hit) |
+| `File view/edit history` | — (`Alt+F11` in the code) | `historyMenu("Files")` |
+| `Folder history` | — (`Alt+F12` in the code) | `historyMenu("Folders")` |
+| `Same folder in other panel` | `⌘=` | `matchOtherPanel` (also `⌘⇧\`) |
+| `Swap panels` | `⌘U` | swaps `Panels[0]`/`Panels[1]` (also `Ctrl+U`) |
 | `Panels on/off / terminal` | `⌘O` | `showTerminal` |
 | `Compare folders` | — | `compareFolders` |
-| `User menu` | `F2` | `userMenu` — см. раздел user menu |
+| `User menu` | `F2` | `userMenu` — see the user menu section |
 | `Edit user menu…` | — | `editUserMenu` |
 | `File associations…` | — | `fileAssociations` |
 | `Bookmarks…` | ⌘⌥0…9 | `bookmarksMenu` |
@@ -2083,140 +2078,140 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 | `Quit` | `⌘Q` | `RequestQuit` |
 
 #### Command history / View-edit history / Folder history
-- **Диалоги:** списки `Command history` (новые сверху; выбор подставляет команду в командную строку без выполнения), `View/edit history` (`View <path>` / `Edit <path>`; выбор открывает документ), `Folder history` (объединение `folderHistory` и истории обеих панелей, лимит `HistoryLimit`; выбор загружает в активную панель).
-- **Сообщения:** `Command history is empty`, `View/edit history is empty`; для пустой папочной истории — `Folder history: empty` (через `choose`).
-- Истории сохраняются в `setup.json` только по Save setup.
+- **Dialogs:** the lists `Command history` (newest on top; a choice puts the command into the command line without executing it), `View/edit history` (`View <path>` / `Edit <path>`; a choice opens the document), `Folder history` (the union of `folderHistory` and the history of both panels, limited by `HistoryLimit`; a choice loads it into the active panel).
+- **Messages:** `Command history is empty`, `View/edit history is empty`; for an empty folder history — `Folder history: empty` (via `choose`).
+- Histories are saved to `setup.json` only via Save setup.
 
 #### Compare folders
-- Снимает выделение (сохраняя в `RestoreMarked`) и помечает в обеих панелях файлы, отсутствующие напротив, отличающиеся размером или более новые. Статус: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
+- Clears the selection (saving it to `RestoreMarked`) and marks in both panels the files that are missing on the opposite side, differ in size, or are newer. Status: `Marked files missing, different in size, or newer than the opposite panel (non-recursive)`.
 
 #### Edit user menu… / File associations…
-- `Edit user menu`: список `Add command…` + имена команд; форма `User command — {} inserts filename` с полями `Label`, `Command (empty deletes)`; после OK — `saveSetup()` (немедленная запись setup.json).
-- `File associations`: список `Add association…`, `Open current file with macOS default app`, затем `<mask> → <command>`; форма `File association — {} inserts filename`: `Masks`, `Run command`, `Viewer command`, `Editor command`; маски валидируются; после OK — `saveSetup()`. Viewer/Editor-команды ассоциаций переопределяют внешний viewer/editor из настроек (`viewPlan`).
+- `Edit user menu`: the list `Add command…` + command names; the form `User command — {} inserts filename` with the fields `Label`, `Command (empty deletes)`; after OK — `saveSetup()` (immediate write of setup.json).
+- `File associations`: the list `Add association…`, `Open current file with macOS default app`, then `<mask> → <command>`; the form `File association — {} inserts filename`: `Masks`, `Run command`, `Viewer command`, `Editor command`; masks are validated; after OK — `saveSetup()`. The Viewer/Editor commands of associations override the external viewer/editor from the settings (`viewPlan`).
 
 #### Bookmarks…
-- **Диалог:** список `Bookmarks`: `Save current folder…`, затем `0  <метка>` … `9  <метка>` (папка — `<путь>/<файл>`, для удалённых с префиксом `<label>`; документ — `Edit|View <путь>:<строка>`). Выбор слота → `goBookmark`; `Save current folder…` → prompt `Save bookmark` / `Slot 0–9` (значение `1`), ошибка `Choose 0–9`.
-- **Клавиши:** `⌘⌥0…9` — сохранить (в панелях папку и файл под курсором, в документе позицию), `⌘0…9` — перейти (не Numpad). Вариантов с Ctrl или Shift нет.
-- **Хранение:** `App.Bookmarks map[int]bookmark` — только в памяти окна; не сохраняются и другим окнам не видны. Подробности — раздел 9.
-- **Код:** `folder_shortcuts.go`, `panel_options.go` (`folderShortcuts`).
+- **Dialog:** the `Bookmarks` list: `Save current folder…`, then `0  <label>` … `9  <label>` (a folder — `<path>/<file>`, for remote ones prefixed with `<label>`; a document — `Edit|View <path>:<line>`). Choosing a slot → `goBookmark`; `Save current folder…` → prompt `Save bookmark` / `Slot 0–9` (value `1`), error `Choose 0–9`.
+- **Keys:** `⌘⌥0…9` — save (in the panels the folder and the file under the cursor, in a document the position), `⌘0…9` — go to (not Numpad). There are no Ctrl or Shift variants.
+- **Storage:** `App.Bookmarks map[int]bookmark` — in window memory only; not saved and not visible to other windows. Details — section 9.
+- **Code:** `folder_shortcuts.go`, `panel_options.go` (`folderShortcuts`).
 
 #### File panel filter…
-- prompt `File panel filter` / `Include masks | exclude masks; empty shows all`, текущее значение `panelOptions.Filter`; валидация масок; фильтр применяется к файлам (не папкам), сохраняется в `panelOptions` (и в setup/session).
+- prompt `File panel filter` / `Include masks | exclude masks; empty shows all`, the current value is `panelOptions.Filter`; mask validation; the filter applies to files (not folders) and is stored in `panelOptions` (and in setup/session).
 
 #### Screens list
-- Список `Screens`: `Panels`, затем `View <name>`/`Edit <name>` (`* ` при несохранённых изменениях); фокус на текущем документе. `Ctrl+Tab`/`⌘⇧[`/`]` — циклическое переключение.
+- The `Screens` list: `Panels`, then `View <name>`/`Edit <name>` (`* ` when there are unsaved changes); focus on the current document. `Ctrl+Tab`/`⌘⇧[`/`]` — cyclic switching.
 
 #### Task list
-- Фоновая задача `Reading processes` (`/bin/ps -axo pid,ppid,%cpu,%mem,comm`), результат — документ-отчёт `Processes` (режим Help, только чтение).
+- The background task `Reading processes` (`/bin/ps -axo pid,ppid,%cpu,%mem,comm`), the result is the report document `Processes` (Help mode, read-only).
 
 #### Insert filename
-- `⌘Enter` (и `Ctrl+J`): имя текущего файла добавляется в командную строку с экранированием (`terminal.Quote`), имена с `-` получают `./`; имена с управляющими символами → `Cannot insert a filename containing control characters`.
+- `⌘Enter` (and `Ctrl+J`): the name of the current file is appended to the command line with escaping (`terminal.Quote`), names starting with `-` get `./`; names with control characters → `Cannot insert a filename containing control characters`.
 
 #### Quit
-- `⌘Q` обрабатывается `WindowGroup.BeginQuit` для всех окон. `RequestQuit`: при Busy → `Wait for the file operation to finish`; при несохранённых документах — confirm `Save changes` / `Save changes in open documents before quitting?` с кнопками `Save all`, `Discard`, `Cancel`; при занятом shell — confirm `Quit` / `A command is running. Close the application?` (`Yes`/`No`). Другие окна во время группового выхода получают статус `Finish the quit dialog in the other window`. Перед завершением сохраняется session.json; `AutoSave` → `saveSetup()` в `App.Close`.
+- `⌘Q` is handled by `WindowGroup.BeginQuit` for all windows. `RequestQuit`: when Busy → `Wait for the file operation to finish`; with unsaved documents — confirm `Save changes` / `Save changes in open documents before quitting?` with the buttons `Save all`, `Discard`, `Cancel`; with a busy shell — confirm `Quit` / `A command is running. Close the application?` (`Yes`/`No`). Other windows during the group quit get the status `Finish the quit dialog in the other window`. Before exiting, session.json is saved; `AutoSave` → `saveSetup()` in `App.Close`.
 
-### Раздел Options
+### The Options section
 
-| Пункт | Шорткат | Действие |
+| Item | Shortcut | Action |
 | --- | --- | --- |
-| `General settings…` | — | форма `General settings` |
-| `Panel settings…` | — | форма `Panel settings` |
-| `Terminal settings…` | — | форма `Terminal settings` |
-| *(разделитель)* | | |
-| `Viewer settings…` | — | форма `Viewer settings` |
-| `Editor settings…` | — | форма `Editor settings` |
-| `Advanced…` | — | список `Advanced settings` |
-| *(разделитель)* | | |
-| `Full Disk Access…` | — | `DiskAccessSettings = true` + статус |
-| *(разделитель)* | | |
-| `Save setup` | — (в коде `Shift+F9`) | `saveSetup` |
-| `Keyboard reference` | `F1` | `function(1)` — справка |
+| `General settings…` | — | the `General settings` form |
+| `Panel settings…` | — | the `Panel settings` form |
+| `Terminal settings…` | — | the `Terminal settings` form |
+| *(separator)* | | |
+| `Viewer settings…` | — | the `Viewer settings` form |
+| `Editor settings…` | — | the `Editor settings` form |
+| `Advanced…` | — | the `Advanced settings` list |
+| *(separator)* | | |
+| `Full Disk Access…` | — | `DiskAccessSettings = true` + status |
+| *(separator)* | | |
+| `Save setup` | — (`Shift+F9` in the code) | `saveSetup` |
+| `Keyboard reference` | `F1` | `function(1)` — help |
 
 ---
 
-## 3. Диалоги настроек (`internal/ui/settings.go`, `settingsMenu`)
+## 3. Settings dialogs (`internal/ui/settings.go`, `settingsMenu`)
 
-Все формы настроек применяют значения в памяти сразу после OK; на диск они попадают только через `Save setup` (Shift+F9 / меню), `AutoSave` при закрытии окна или косвенно через действия, вызывающие `saveSetup()` (user menu, associations, folder shortcuts). Ошибка валидации пишется в статус, форма при этом уже закрыта (значения не применены).
+All settings forms apply the values in memory immediately after OK; they reach the disk only via `Save setup` (Shift+F9 / menu), `AutoSave` on window close, or indirectly through actions that call `saveSetup()` (user menu, associations, folder shortcuts). A validation error is written to the status, while the form is already closed (the values are not applied).
 
 #### General settings
-- **Диалог:** `General settings`
-  - `Font size (10–24)` — текст, default `14` → `FontSize` (передаётся рендереру в каждом `Update.FontSize`).
-  - `Key bar` — toggle, default вкл → `ShowKeys` (также `Ctrl/⌘+B`).
-  - `Wrap menus` — toggle, default вкл → `MenuWrap` (циклическая навигация в меню и списках).
-  - `Select initial dialog text` — toggle, default вкл → `SelectDialogInput`.
-  - `Remember dialog values` — toggle, default выкл → `RememberDialogValues`.
-  - `Confirm deletion` — toggle, default вкл → `ConfirmDelete`.
-  - `Confirm overwrite` — toggle, default вкл → `ConfirmOverwrite`.
-  - `Save setup on exit` — toggle, default выкл → `AutoSave`.
-- **Сообщения:** `Font size must be 10–24`.
+- **Dialog:** `General settings`
+  - `Font size (10–24)` — text, default `14` → `FontSize` (passed to the renderer in every `Update.FontSize`).
+  - `Key bar` — toggle, default on → `ShowKeys` (also `Ctrl/⌘+B`).
+  - `Wrap menus` — toggle, default on → `MenuWrap` (cyclic navigation in menus and lists).
+  - `Select initial dialog text` — toggle, default on → `SelectDialogInput`.
+  - `Remember dialog values` — toggle, default off → `RememberDialogValues`.
+  - `Confirm deletion` — toggle, default on → `ConfirmDelete`.
+  - `Confirm overwrite` — toggle, default on → `ConfirmOverwrite`.
+  - `Save setup on exit` — toggle, default off → `AutoSave`.
+- **Messages:** `Font size must be 10–24`.
 
 #### Panel settings
-- **Диалог:** `Panel settings`
-  - `Show hidden files (Cmd+Shift+.)` — default вкл → `ShowHidden` (панели получают `HideHidden = !ShowHidden`); клавиши `⌘⇧.`, `Ctrl+H`.
-  - `Highlight files` — default вкл → `Highlight` (раскраска по типу в панелях).
-  - `Human-readable sizes (off = bytes)` — default выкл → `HumanReadableSizes` (также `Ctrl/⌘+Shift+S`).
-  - `Hide and ignore .DS_Store` — default выкл → `IgnoreDSStore` (скрывает в панелях, в т.ч. удалённых, и пропускает при копировании/архивации: `Operation.IgnoreDSStore`).
-  - `Select folders with file masks` — default выкл → `SelectFolders`.
-- **Эффект:** сброс `ForcedVisiblePath`, `configurePanel` для обеих панелей, `refresh()`.
+- **Dialog:** `Panel settings`
+  - `Show hidden files (Cmd+Shift+.)` — default on → `ShowHidden` (the panels get `HideHidden = !ShowHidden`); keys `⌘⇧.`, `Ctrl+H`.
+  - `Highlight files` — default on → `Highlight` (colouring by type in the panels).
+  - `Human-readable sizes (off = bytes)` — default off → `HumanReadableSizes` (also `Ctrl/⌘+Shift+S`).
+  - `Hide and ignore .DS_Store` — default off → `IgnoreDSStore` (hides in the panels, including remote ones, and skips during copying/archiving: `Operation.IgnoreDSStore`).
+  - `Select folders with file masks` — default off → `SelectFolders`.
+- **Effect:** reset of `ForcedVisiblePath`, `configurePanel` for both panels, `refresh()`.
 
 #### Terminal settings
-- **Диалог:** `Terminal settings`
-  - `Shell: bash / sh / zsh (new windows)` — текст, default `bash` → `Shell`.
+- **Dialog:** `Terminal settings`
+  - `Shell: bash / sh / zsh (new windows)` — text, default `bash` → `Shell`.
   - `Command history entries (1–10000)` — default `200` → `HistoryLimit`.
-  - `Complete filenames` — default вкл → `CompleteFiles` (⌘Space).
-  - `Completion ignores case` — default выкл → `CompleteIgnoreCase`.
-  - `Use custom shell prompt / hooks (new windows, may be slow)` — default выкл → `ShellCustomPrompt`.
-- **Сообщения:** `Choose bash, sh or zsh` (валидация `terminal.ValidShell`, защищает от инъекций вроде `zsh; echo bad`), `History entries must be 1–10000`, после успеха: `Shell applies to new windows; Save setup to keep settings after restart`.
+  - `Complete filenames` — default on → `CompleteFiles` (⌘Space).
+  - `Completion ignores case` — default off → `CompleteIgnoreCase`.
+  - `Use custom shell prompt / hooks (new windows, may be slow)` — default off → `ShellCustomPrompt`.
+- **Messages:** `Choose bash, sh or zsh` (validation `terminal.ValidShell`, protects against injections such as `zsh; echo bad`), `History entries must be 1–10000`, on success: `Shell applies to new windows; Save setup to keep settings after restart`.
 
 #### Viewer settings
-- **Диалог:** `Viewer settings`: `Wrap lines` (default выкл → `ViewerWrap`), `External by default` (выкл → `ExternalViewerDefault`), `Command (blank=system)` (текст → `ExternalViewer`).
+- **Dialog:** `Viewer settings`: `Wrap lines` (default off → `ViewerWrap`), `External by default` (off → `ExternalViewerDefault`), `Command (blank=system)` (text → `ExternalViewer`).
 
 #### Editor settings
-- **Диалог:** `Editor settings`: `Auto indent` (вкл → `EditorAutoIndent`), `Syntax highlighting (Chroma)` (вкл → `EditorSyntax`), `Tab width (1–16)` (`4` → `EditorTabSize`), `Expand tabs to spaces` (выкл → `EditorExpandTabs`), `External by default` (выкл → `ExternalEditorDefault`), `Command (blank=system)` (→ `ExternalEditor`).
-- **Сообщения:** `Tab width must be 1–16`.
+- **Dialog:** `Editor settings`: `Auto indent` (on → `EditorAutoIndent`), `Syntax highlighting (Chroma)` (on → `EditorSyntax`), `Tab width (1–16)` (`4` → `EditorTabSize`), `Expand tabs to spaces` (off → `EditorExpandTabs`), `External by default` (off → `ExternalEditorDefault`), `Command (blank=system)` (→ `ExternalEditor`).
+- **Messages:** `Tab width must be 1–16`.
 
 #### Advanced…
-- **Диалог:** список `Advanced settings`: `Colors`, `Info panel settings`, `Tree settings`, `Folder description files`, `File descriptions`, `Groups of file masks`, `Sort groups`, `Code pages`.
+- **Dialog:** the `Advanced settings` list: `Colors`, `Info panel settings`, `Tree settings`, `Folder description files`, `File descriptions`, `Groups of file masks`, `Sort groups`, `Code pages`.
 
 #### Colors
-- Список `Colors`: `Classic Far`, `Dark`, `Light` → `ColorTheme` (default `""` = классическая палитра). `Dark`: `Blue→#151b24`, `LightCyan→#c7d7e9`, `Cyan→#486987`; `Light`: `Blue→#f1f3f5`, `LightCyan→#182b49`, `White→#000000`, `Yellow→#885000`, `Cyan→#80b8dd`. Применяется ко всей сетке при отрисовке (`Draw`). Отдельной настройки шрифта (гарнитуры) нет — только размер.
+- The `Colors` list: `Classic Far`, `Dark`, `Light` → `ColorTheme` (default `""` = the classic palette). `Dark`: `Blue→#151b24`, `LightCyan→#c7d7e9`, `Cyan→#486987`; `Light`: `Blue→#f1f3f5`, `LightCyan→#182b49`, `White→#000000`, `Yellow→#885000`, `Cyan→#80b8dd`. Applied to the whole grid at drawing time (`Draw`). There is no separate font (typeface) setting — only the size.
 
 #### Info panel settings
-- **Вызов:** Advanced → `Info panel settings`, либо `Ctrl/⌘+F12` при активной инфо-панели.
-- **Диалог:** `Info panel settings`: `Computer and user` (вкл → `InfoHost`), `Drive information` (вкл → `InfoVolume`), `Memory information` (вкл → `InfoMemory`), `Folder description` (вкл → `InfoDescription`), `Power status` (вкл → `InfoPower`). После OK кэш инфо-панели сбрасывается.
+- **Invocation:** Advanced → `Info panel settings`, or `Ctrl/⌘+F12` while the info panel is active.
+- **Dialog:** `Info panel settings`: `Computer and user` (on → `InfoHost`), `Drive information` (on → `InfoVolume`), `Memory information` (on → `InfoMemory`), `Folder description` (on → `InfoDescription`), `Power status` (on → `InfoPower`). After OK the info panel cache is reset.
 
 #### Tree settings
-- prompt `Tree settings` / `Maximum levels for folder tree (1–12)`, default `4` → `TreeDepth`; ошибка `Enter a number from 1 to 12`; панели перенастраиваются и обновляются.
+- prompt `Tree settings` / `Maximum levels for folder tree (1–12)`, default `4` → `TreeDepth`; error `Enter a number from 1 to 12`; the panels are reconfigured and refreshed.
 
 #### Folder description files
-- prompt `Folder description files` / `Names separated by commas`, default `file_id.diz,README.md,README,readme.txt` → `FolderDescriptions` (показ описания папки в инфо-панели); имена с путём → `Use filenames without paths`.
+- prompt `Folder description files` / `Names separated by commas`, default `file_id.diz,README.md,README,readme.txt` → `FolderDescriptions` (shows the folder description in the info panel); names with a path → `Use filenames without paths`.
 
 #### File descriptions
 - prompt `File descriptions` / `Description file name`, default `descript.ion` → `DescriptionFile`; `Enter a file name without a path`.
 
 #### Groups of file masks
-- Список `Groups of file masks`: `Add group…`, затем `<name> = <masks>` (ключи отсортированы). Форма `Mask group`: `Name`, `Masks (empty deletes)`. Ошибки: `Invalid group name` (пусто или содержит `<>,;|`), `Use literal masks in groups` (вложенные `<>`), ошибки `filepath.Match`. Переименование удаляет старый ключ. Default-группы: `arc` (`*.zip,*.tar,*.gz,*.bz2,*.xz,*.tgz,*.tbz,*.tbz2,*.txz,*.7z,*.rar,*.jar,*.war,*.cpio`), `source` (`*.go,*.c,*.h,*.js,*.ts,*.py`), `exec` (`*.sh,*.command`). Группы подставляются как `<name>` в масках фильтра, выделения, поиска, ассоциаций, sort groups.
+- The `Groups of file masks` list: `Add group…`, then `<name> = <masks>` (keys sorted). The `Mask group` form: `Name`, `Masks (empty deletes)`. Errors: `Invalid group name` (empty or containing `<>,;|`), `Use literal masks in groups` (nested `<>`), `filepath.Match` errors. Renaming removes the old key. Default groups: `arc` (`*.zip,*.tar,*.gz,*.bz2,*.xz,*.tgz,*.tbz,*.tbz2,*.txz,*.7z,*.rar,*.jar,*.war,*.cpio`), `source` (`*.go,*.c,*.h,*.js,*.ts,*.py`), `exec` (`*.sh,*.command`). Groups are substituted as `<name>` in the masks of the filter, selection, search, associations, and sort groups.
 
 #### Sort groups (Advanced → Sort groups; Commands → Edit sort groups…)
-- Два входа в один prompt — намеренное дублирование (как в Far: Commands → «Edit sort groups», Options → «Sorting»).
-- prompt `Sort groups` / `Masks in priority order, separated by semicolons`, default пусто → `SortGroups`. Валидация с заменой `;`→`,`; статус с текстом ошибки (`unknown mask group` и т.п.). Файлы, подходящие под более ранние маски, сортируются выше (кроме режима `Unsorted` и при `DisableSortGroups`/Shift+F11).
+- Two entry points into the same prompt — intentional duplication (as in Far: Commands → "Edit sort groups", Options → "Sorting").
+- prompt `Sort groups` / `Masks in priority order, separated by semicolons`, default empty → `SortGroups`. Validation with `;`→`,` replacement; the status carries the error text (`unknown mask group` etc.). Files matching earlier masks sort higher (except in `Unsorted` mode and with `DisableSortGroups`/Shift+F11).
 
 #### Code pages
-- Список `Default encoding for new files`: `UTF-8`, `UTF-16LE`, `UTF-16BE`, `Windows-1251`, `CP866`, `Windows-1252`, `ISO-8859-1`, `KOI8-R` → `DefaultCodepage` (default `UTF-8`).
+- The `Default encoding for new files` list: `UTF-8`, `UTF-16LE`, `UTF-16BE`, `Windows-1251`, `CP866`, `Windows-1252`, `ISO-8859-1`, `KOI8-R` → `DefaultCodepage` (default `UTF-8`).
 
 #### Full Disk Access…
-- **Вызов:** меню Options, а также нативное меню приложения `FarshMac → Full Disk Access…`.
-- **Поведение:** `DiskAccessSettings = true` (одноразовый флаг в `Update`, тест `TestDiskAccessMenuEmitsOneNativeRequest`), статус `Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen.`. Нативная сторона выделяет бандл в Finder и открывает `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles` (fallback — System Settings, затем NSAlert `Open Full Disk Access in System Settings`). При первом запуске `native.PrepareDiskAccess` показывает алерт `Full Disk Access for FarshMac` с кнопками `Open Settings`/`Continue` (флаг `FarshMacDiskAccessIntroductionShown` в NSUserDefaults). Подробности — в разделе платформы.
+- **Invocation:** the Options menu, and also the native application menu `FarshMac → Full Disk Access…`.
+- **Behaviour:** `DiskAccessSettings = true` (a one-shot flag in `Update`, test `TestDiskAccessMenuEmitsOneNativeRequest`), status `Enable this copy of FarshMac in Full Disk Access (+ or drag from Finder), then quit and reopen.`. The native side reveals the bundle in Finder and opens `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles` (fallback — System Settings, then an NSAlert `Open Full Disk Access in System Settings`). On first launch `native.PrepareDiskAccess` shows the alert `Full Disk Access for FarshMac` with the buttons `Open Settings`/`Continue` (the flag `FarshMacDiskAccessIntroductionShown` in NSUserDefaults). Details — in the platform section.
 
 #### Save setup
-- **Вызов:** меню Options → `Save setup`; `Shift+F9`; косвенно из user menu/associations/folder shortcuts.
-- **Поведение (`saveSetup`):** `normalizeSettings()`; для удалённых панелей обновляет `Directory` соответствующего профиля в `Settings.RemoteConnections` (в памяти); истории папок обеих панелей добавляются в `folderHistory`; собирается `savedSetup{Settings, Panels[2] panelOptions, Paths[2] (filesystemPath), Commands, Folders, Viewed}`; JSON с отступами пишется атомарно (temp-файл `.setup-*` + rename, каталог `0700`). Статус `Setup saved`; ошибка записи — поверх через `a.error`.
-- **Код:** `settings.go`.
+- **Invocation:** the Options menu → `Save setup`; `Shift+F9`; indirectly from the user menu/associations/folder shortcuts.
+- **Behaviour (`saveSetup`):** `normalizeSettings()`; for remote panels updates the `Directory` of the corresponding profile in `Settings.RemoteConnections` (in memory); the folder histories of both panels are added to `folderHistory`; a `savedSetup{Settings, Panels[2] panelOptions, Paths[2] (filesystemPath), Commands, Folders, Viewed}` is assembled; indented JSON is written atomically (temp file `.setup-*` + rename, directory `0700`). Status `Setup saved`; a write error is shown on top via `a.error`.
+- **Code:** `settings.go`.
 
 #### Keyboard reference (F1)
-- **Вызов:** `F1`, `⌘1`, меню Options.
-- **Поведение:** открывает документ `FarshMac — Help` с константой `help` в режиме `Help` (только чтение, `markSaved`). Внутри документа `F1` повторно ничего не делает (для Help-документа), для обычных документов `F1` открывает `Viewer / editor help`. Закрытие: `Escape`, `F10`, `F3` (в viewer). `F12` — список экранов. `F6` (переключение viewer/editor) для Help игнорируется.
-- **Содержание (дословно):**
+- **Invocation:** `F1`, `⌘1`, the Options menu.
+- **Behaviour:** opens the document `FarshMac — Help` with the `help` constant in `Help` mode (read-only, `markSaved`). Inside the document a repeated `F1` does nothing (for the Help document); for ordinary documents `F1` opens `Viewer / editor help`. Closing: `Escape`, `F10`, `F3` (in the viewer). `F12` — the screens list. `F6` (viewer/editor switch) is ignored for Help.
+- **Content (verbatim):**
 
 ```
 FarshMac — native macOS window, Go file manager, persistent zsh terminal
@@ -2302,33 +2297,33 @@ The text editor saves atomically, but does not preserve ACLs/xattrs/hardlinks.
 Text editing/decoding: 64 MiB limit. Larger files: paged hex/dump viewer.
 Esc returns to the file panels.
 ```
-- **Код:** `app.go` (`help`, `function(1)`), `document.go` (`documentKey`), `commands.go` (`report`).
+- **Code:** `app.go` (`help`, `function(1)`), `document.go` (`documentKey`), `commands.go` (`report`).
 
-#### Неиспользуемые из меню ветки settingsMenu (мёртвый код)
-В `settingsMenu` есть формы, до которых нельзя добраться из текущего меню: `Dialog settings` (`Select initial input`, `Remember values`), `AutoComplete settings` (`Files (⌘Space)`, `Ignore case`), `System settings` (`Save setup on exit`), `Interface settings` (`Font size (10–24)`, `Key bar`), `Menu settings` (`Wrap at list ends`), `Confirmations` (`Delete files/folders`, `Overwrite files`), `Command line settings` (prompt `Maximum history entries (1–10000)`). Неизвестный `kind` → статус `Settings: <kind>`.
+#### settingsMenu branches not used from the menu (dead code)
+`settingsMenu` contains forms that cannot be reached from the current menu: `Dialog settings` (`Select initial input`, `Remember values`), `AutoComplete settings` (`Files (⌘Space)`, `Ignore case`), `System settings` (`Save setup on exit`), `Interface settings` (`Font size (10–24)`, `Key bar`), `Menu settings` (`Wrap at list ends`), `Confirmations` (`Delete files/folders`, `Overwrite files`), `Command line settings` (prompt `Maximum history entries (1–10000)`). An unknown `kind` → status `Settings: <kind>`.
 
-#### Настройки, редактируемые вне Options
-- `CopyWorkers` (default `4`, диапазон 1–8), `CopyPermissions` (вкл), `CopyAttributes` (вкл) — поля диалога копирования F5: `Preserve permissions (mode, owner, group, ACL)`, `Preserve attributes (xattrs, flags, timestamps)`, `Parallel transfers (1–8)` (ошибка `parallel transfers must be between 1 and 8`). Значения запоминаются в `Settings` при каждом копировании.
-- `EditorExpandTabs`/`EditorTabSize` — также из диалога настроек редактора внутри документа (`document.go`).
-- `ShowHidden`, `ShowKeys`, `HumanReadableSizes` — горячими клавишами (см. выше).
-- `UserMenu`, `Associations`, `Shortcuts*` — соответствующими диалогами (с немедленным `saveSetup`).
-- `RemoteConnections` — `connections.json` (раздел 5).
+#### Settings edited outside Options
+- `CopyWorkers` (default `4`, range 1–8), `CopyPermissions` (on), `CopyAttributes` (on) — fields of the F5 copy dialog: `Preserve permissions (mode, owner, group, ACL)`, `Preserve attributes (xattrs, flags, timestamps)`, `Parallel transfers (1–8)` (error `parallel transfers must be between 1 and 8`). The values are remembered in `Settings` on every copy.
+- `EditorExpandTabs`/`EditorTabSize` — also from the editor settings dialog inside a document (`document.go`).
+- `ShowHidden`, `ShowKeys`, `HumanReadableSizes` — via hotkeys (see above).
+- `UserMenu`, `Associations`, `Shortcuts*` — via the corresponding dialogs (with an immediate `saveSetup`).
+- `RemoteConnections` — `connections.json` (section 5).
 
 ---
 
-## 4. Структура Settings, значения по умолчанию, хранение и совместимость
+## 4. The Settings structure, default values, storage and compatibility
 
-### Поля `Settings` (`settings.go`) и defaults (`defaultSettings`)
+### `Settings` fields (`settings.go`) and defaults (`defaultSettings`)
 
-| Поле | Default | Где меняется |
+| Field | Default | Where it is changed |
 | --- | --- | --- |
 | `InfoMemory`, `InfoPower`, `InfoDescription` | true | Info panel settings |
 | `ShellCustomPrompt` | false | Terminal settings |
 | `SelectFolders` | false | Panel settings |
-| `CopyWorkers` | 4 (норм. 1–8) | диалог Copy |
+| `CopyWorkers` | 4 (normalised to 1–8) | the Copy dialog |
 | `RemoteConnections []remotefs.Config` | nil | connections.json / connectRemote |
-| `CopyPermissions`, `CopyAttributes` | true | диалог Copy |
-| `Shell` | `bash` (норм. `ValidShell`) | Terminal settings |
+| `CopyPermissions`, `CopyAttributes` | true | the Copy dialog |
+| `Shell` | `bash` (normalised by `ValidShell`) | Terminal settings |
 | `HumanReadableSizes` | false | Panel settings, Ctrl+Shift+S |
 | `ExternalViewer`, `ExternalEditor` | "" | Viewer/Editor settings |
 | `ExternalViewerDefault`, `ExternalEditorDefault` | false | Viewer/Editor settings |
@@ -2339,10 +2334,10 @@ Esc returns to the file panels.
 | `InfoHost`, `InfoVolume` | true | Info panel settings |
 | `FolderDescriptions` | `file_id.diz,README.md,README,readme.txt` | Folder description files |
 | `AutoSave` | false | General settings |
-| `RestoreFolders` | false | **нигде не используется** |
+| `RestoreFolders` | false | **used nowhere** |
 | `MenuWrap` | true | General settings |
 | `ShowKeys` | true | General settings, Ctrl+B |
-| `FontSize` | 14 (норм. 10–24) | General settings |
+| `FontSize` | 14 (normalised to 10–24) | General settings |
 | `ColorTheme` | "" (Classic Far) | Colors |
 | `ConfirmDelete` | true | General settings |
 | `ConfirmOverwrite` | true | General settings |
@@ -2352,408 +2347,408 @@ Esc returns to the file panels.
 | `ViewerWrap` | false | Viewer settings |
 | `EditorAutoIndent` | true | Editor settings |
 | `EditorSyntax` | true | Editor settings |
-| `EditorExpandTabs` | false | Editor settings / документ |
-| `EditorTabSize` | 4 (норм. 1–16) | Editor settings / документ |
+| `EditorExpandTabs` | false | Editor settings / document |
+| `EditorTabSize` | 4 (normalised to 1–16) | Editor settings / document |
 | `DefaultCodepage` | `UTF-8` | Code pages |
-| `HistoryLimit` | 200 (норм. 1–10000) | Terminal settings |
-| `TreeDepth` | 4 (норм. 1–12) | Tree settings |
+| `HistoryLimit` | 200 (normalised to 1–10000) | Terminal settings |
+| `TreeDepth` | 4 (normalised to 1–12) | Tree settings |
 | `UserMenu []UserCommand{Name, Command}` | nil | Edit user menu |
 | `Associations []Association{Mask, Command, Viewer, Editor}` | nil | File associations |
-| `Shortcuts [10]string`, `ShortcutRemotes [10]*remotefs.Config`, `ShortcutArchives [10]string` | пусто | Устаревшие folder shortcuts; читаются для совместимости, не используются (закладки живут в окне) |
+| `Shortcuts [10]string`, `ShortcutRemotes [10]*remotefs.Config`, `ShortcutArchives [10]string` | empty | Legacy folder shortcuts; read for compatibility, not used (bookmarks live in the window) |
 | `SortGroups` | "" | Sort groups |
-| `MaskGroups map[string]string` | `arc`, `source`, `exec` (см. выше) | Groups of file masks |
-| `DescriptionFile` | `descript.ion` (норм. — только базовое имя) | File descriptions |
+| `MaskGroups map[string]string` | `arc`, `source`, `exec` (see above) | Groups of file masks |
+| `DescriptionFile` | `descript.ion` (normalised — base name only) | File descriptions |
 
-Также в `savedSetup` сохраняются `panelOptions` обеих панелей (`DisableSortGroups`, `View`, `Sort`, `Filter`, `Reverse`, `CaseSensitive`, `MixDirectories`, `SelectedFirst`, `Hidden`), `Paths[2]`, `Commands` (история команд), `Folders` (история папок), `Viewed []viewRecord{Path, Edit}`.
+`savedSetup` also stores the `panelOptions` of both panels (`DisableSortGroups`, `View`, `Sort`, `Filter`, `Reverse`, `CaseSensitive`, `MixDirectories`, `SelectedFirst`, `Hidden`), `Paths[2]`, `Commands` (command history), `Folders` (folder history), `Viewed []viewRecord{Path, Edit}`.
 
-#### Расположение файлов
-- Корень: `os.UserConfigDir()` → на macOS `~/Library/Application Support`. Каталог `FarshMac/`:
-  - `setup.json` — настройки + истории (`setupPath`).
-  - `connections.json` — профили подключений (`profilesPath`).
-  - `session.json` — окна/папки/курсоры (`SessionPath`, `WindowGroup.SaveSession`).
-- Секреты (`Password`, `KeyPassphrase`, `HostKey`) имеют тег `json:"-"` и никогда не попадают на диск (тесты `TestHostKeysAndSecrets`, `TestConnectionProfilesPersistWithoutSaveSetup`).
+#### File locations
+- Root: `os.UserConfigDir()` → on macOS `~/Library/Application Support`. The `FarshMac/` directory:
+  - `setup.json` — settings + histories (`setupPath`).
+  - `connections.json` — connection profiles (`profilesPath`).
+  - `session.json` — windows/folders/cursors (`SessionPath`, `WindowGroup.SaveSession`).
+- Secrets (`Password`, `KeyPassphrase`, `HostKey`) carry the tag `json:"-"` and never reach the disk (tests `TestHostKeysAndSecrets`, `TestConnectionProfilesPersistWithoutSaveSetup`).
 
-#### Загрузка setup (`LoadSetup`)
-- Вызывается в `main` после создания `App`. Читает `setup.json` через `readConfigFile`; при ошибке JSON — настройки по умолчанию. Применяет `normalizeSettings`, `panelOptions` обеих панелей и `configurePanel`; **пути панелей из setup не восстанавливаются** (комментарий в коде: восстановление папок — через session.json); истории команд/папок/просмотра — из setup. В конце всегда `loadConnectionProfiles()` (defer), поэтому профили доступны даже без setup.json.
+#### Loading the setup (`LoadSetup`)
+- Called in `main` after the `App` is created. Reads `setup.json` via `readConfigFile`; on a JSON error — default settings. Applies `normalizeSettings`, the `panelOptions` of both panels and `configurePanel`; **panel paths are not restored from the setup** (comment in the code: folder restoration goes through session.json); the command/folder/view histories come from the setup. At the end always `loadConnectionProfiles()` (defer), so the profiles are available even without setup.json.
 
-#### Автосохранение
-- `AutoSave` (`Save setup on exit`) — `saveSetup()` в `App.Close()` для каждого окна (при закрытии окна и при выходе). По умолчанию выключено.
-- Session (`session.json`) сохраняется независимо от Save setup: в каждом `WindowGroup.Poll` не чаще раза в 500 мс и только при изменении содержимого; принудительно при закрытии окна, при завершении (`BeginQuit`), `CloseAll`. Формат: `{Version: 1, Windows: [{Frame{X,Y,Width,Height}, Panels: [{Path, Options, Cursor, Top}], Active}], Focused}`. При запуске с флагами `-left/-right` восстановление сессии отключено. При восстановлении недоступные папки заменяются ближайшим читаемым родителем, затем папкой по умолчанию, домом, `/` (`accessibleFolder`); версия ≠ 1 → `unsupported window session version N`; > 100 окон → `too many saved windows`.
+#### Autosave
+- `AutoSave` (`Save setup on exit`) — `saveSetup()` in `App.Close()` for each window (on window close and on quit). Off by default.
+- The session (`session.json`) is saved independently of Save setup: in every `WindowGroup.Poll` at most once per 500 ms and only when the content has changed; forced on window close, on quit (`BeginQuit`), `CloseAll`. Format: `{Version: 1, Windows: [{Frame{X,Y,Width,Height}, Panels: [{Path, Options, Cursor, Top}], Active}], Focused}`. When started with the `-left/-right` flags session restore is disabled. On restore, unavailable folders are replaced by the nearest readable parent, then the default folder, home, `/` (`accessibleFolder`); version ≠ 1 → `unsupported window session version N`; > 100 windows → `too many saved windows`.
 
-#### Совместимость конфигурации (`config_compat.go`)
-- `readConfigFile(path)`: если файл в `<UserConfigDir>/FarshMac/` отсутствует, читается одноимённый файл из каталога прежнего названия проекта `<UserConfigDir>/Far Go/` (setup.json, session.json, connections.json). Запись всегда идёт в `FarshMac/`; старые файлы не изменяются и не удаляются. Для путей вне стандартного каталога (например, явный путь сессии в тестах) fallback не применяется. Тесты: `TestRenamedConfigFallsBackWithoutOverwriting`, `TestRenamedConfigDoesNotFallbackForCustomPath`.
-- Миграция старых видов панелей (`Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` → `Full`) в `configurePanel`.
-- `normalizeSettings` чинит выходящие за диапазон значения (`CopyWorkers`, `Shell`, `EditorTabSize`, `FontSize`, `HistoryLimit`, `TreeDepth`, `MaskGroups == nil`, `DescriptionFile`).
-- Тест `TestSettingsRoundtrip` проверяет round-trip FontSize/MaskGroups/View/Shortcuts.
+#### Configuration compatibility (`config_compat.go`)
+- `readConfigFile(path)`: if the file in `<UserConfigDir>/FarshMac/` is missing, the file of the same name is read from the directory of the project's former name `<UserConfigDir>/Far Go/` (setup.json, session.json, connections.json). Writing always goes to `FarshMac/`; the old files are neither modified nor deleted. For paths outside the standard directory (for example, an explicit session path in tests) the fallback is not applied. Tests: `TestRenamedConfigFallsBackWithoutOverwriting`, `TestRenamedConfigDoesNotFallbackForCustomPath`.
+- Migration of old panel views (`Descriptions`, `Long descriptions`, `File owners`, `File links`, `Alternative full` → `Full`) in `configurePanel`.
+- `normalizeSettings` repairs out-of-range values (`CopyWorkers`, `Shell`, `EditorTabSize`, `FontSize`, `HistoryLimit`, `TreeDepth`, `MaskGroups == nil`, `DescriptionFile`).
+- The test `TestSettingsRoundtrip` checks the round-trip of FontSize/MaskGroups/View/Shortcuts.
 
 ---
 
-## 5. Сетевые подключения (FTP / FTPS / SFTP)
+## 5. Network connections (FTP / FTPS / SFTP)
 
 #### Network connections…
-- **Вызов:** меню Commands → `Network connections…` (горячей клавиши нет; справка F1: `Network connections: F9 > Commands > Network connections`).
-- **Диалог:** перед показом перечитывается `connections.json` (`loadConnectionProfiles`). Список `Network connections`: `New FTP / SFTP connection…`, затем каждый профиль как `<Label><Directory>` (Label = `sftp://user@host:port`), последний пункт `Disconnect active panel`.
-- **Поведение:** `New…` → форма с заготовкой `{Protocol: sftp, Port: 22, Directory: "/", User: $USER}`; профиль → форма с его значениями; `Disconnect active panel` → `disconnectRemote(Active)` (если панель не удалённая — ничего).
-- **После backlog (P5-13 и др.):** F8/Delete на профиле удаляет его после подтверждения `Delete connection profile`; несколько профилей на один сервер различаются парой сервер + папка; повреждённый `connections.json` переименовывается в `.broken-<время>`. Неизвестный ключ SFTP: `Trust once` / `Trust and save` (дописывает в `~/.ssh/known_hosts`) / `Cancel`; изменённый или отозванный ключ — `SSH host key changed` / `revoked` с отпечатками и `file:line`, только OK; прочие ошибки — `Connection failed` с `Edit` / `Retry` / `Cancel`. Тест с тремя пунктами меню при одном профиле соответствует коду и обновляется вместе с удалением профилей.
-- **Код:** `remote.go` (`networkMenu`), `connection_profiles.go`.
+- **Invocation:** the Commands menu → `Network connections…` (no hotkey; F1 help: `Network connections: F9 > Commands > Network connections`).
+- **Dialog:** before showing, `connections.json` is re-read (`loadConnectionProfiles`). The `Network connections` list: `New FTP / SFTP connection…`, then each profile as `<Label><Directory>` (Label = `sftp://user@host:port`), the last item `Disconnect active panel`.
+- **Behaviour:** `New…` → a form with the template `{Protocol: sftp, Port: 22, Directory: "/", User: $USER}`; a profile → a form with its values; `Disconnect active panel` → `disconnectRemote(Active)` (if the panel is not remote — nothing).
+- **After the backlog (P5-13 and others):** F8/Delete on a profile deletes it after the confirmation `Delete connection profile`; several profiles for one server are distinguished by the server + folder pair; a corrupted `connections.json` is renamed to `.broken-<time>`. Unknown SFTP key: `Trust once` / `Trust and save` (appends to `~/.ssh/known_hosts`) / `Cancel`; a changed or revoked key — `SSH host key changed` / `revoked` with fingerprints and `file:line`, OK only; other errors — `Connection failed` with `Edit` / `Retry` / `Cancel`. The test with three menu items for a single profile matches the code and is updated together with profile deletion.
+- **Code:** `remote.go` (`networkMenu`), `connection_profiles.go`.
 
-#### Форма «FTP / SFTP connection»
-- **Поля (`connectionDialog`):**
-  1. `Server URL (sftp://, ftp://, ftps://)` — текст; для нового подключения `sftp://`, для профиля `c.ServerURL()` (схема://host:port/путь, без пользователя).
-  2. `User` — текст (из профиля / `$USER`).
-  3. `Password (memory only)` — secret, всегда пустое.
-  4. `SSH private key (blank = default keys + agent)` — текст (`KeyFile`).
-  5. `Key passphrase (memory only)` — secret, всегда пустое.
-  - Кнопки: `Connect` (Primary) / `Cancel`.
-- **Разбор URL (`remotefs.Parse`):** `strings.TrimSpace`; схема `ssh` → `sftp`; допустимы только `sftp`/`ftp`/`ftps` (иначе `use sftp://host, ftp://host or ftps://host`); обязателен host, запрещены query/fragment (`invalid server address`); пользователь в URL (`sftp://user@host`) переопределяет поле `User`; пароль в URL → `enter passwords in the password field, not the URL`; порт по умолчанию 22 для sftp, 21 для ftp/ftps, диапазон 1–65535 (`invalid port`); путь пустой → `/`, иначе `path.Clean`; управляющие символы `\x00\r\n` → `invalid control character in address`.
-- **После OK:** `Password`, `KeyPassphrase` берутся из полей; `KeyFile` раскрывается через `expand` (поддержка `~`, относительный путь — от локального пути активной панели). Вызывается `connectRemote(Active, config)`.
+#### The "FTP / SFTP connection" form
+- **Fields (`connectionDialog`):**
+  1. `Server URL (sftp://, ftp://, ftps://)` — text; for a new connection `sftp://`, for a profile `c.ServerURL()` (scheme://host:port/path, without the user).
+  2. `User` — text (from the profile / `$USER`).
+  3. `Password (memory only)` — secret, always empty.
+  4. `SSH private key (blank = default keys + agent)` — text (`KeyFile`).
+  5. `Key passphrase (memory only)` — secret, always empty.
+  - Buttons: `Connect` (Primary) / `Cancel`.
+- **URL parsing (`remotefs.Parse`):** `strings.TrimSpace`; scheme `ssh` → `sftp`; only `sftp`/`ftp`/`ftps` are allowed (otherwise `use sftp://host, ftp://host or ftps://host`); a host is required, query/fragment are forbidden (`invalid server address`); a user in the URL (`sftp://user@host`) overrides the `User` field; a password in the URL → `enter passwords in the password field, not the URL`; the default port is 22 for sftp, 21 for ftp/ftps, range 1–65535 (`invalid port`); an empty path → `/`, otherwise `path.Clean`; control characters `\x00\r\n` → `invalid control character in address`.
+- **After OK:** `Password`, `KeyPassphrase` are taken from the fields; `KeyFile` is expanded via `expand` (supports `~`, a relative path is resolved from the local path of the active panel). `connectRemote(Active, config)` is called.
 
-#### Процесс подключения (`connectRemote`)
-- **Поведение:** фоновая задача `Connecting to <label>` (окно прогресса, Esc отменяет; отмена закрывает все сокеты через `socketSet`): `Dial` + `ReadDir(Directory)` как проверка; соединение закрывается.
-  - Ошибка `remotefs.UnknownHost` → confirm `Unknown SSH host key` с текстом `<host> <SHA256:fingerprint>. Trust for this connection?`, кнопки `Trust once` / `Cancel`. `Trust once` кладёт ключ в `c.HostKey` (только память, только это подключение) и повторяет `connectRemote`.
-  - Другие ошибки — в статус (`a.error`).
-  - Успех (`apply`): панель перенастраивается (`configurePanel`), отменяются фоновые загрузки, запоминается локальный путь панели `RemoteLocalPath` (или `$HOME`), `Remote = &c`, `Archive = nil`, `Async = true`, `View = "Full"`, сброс состояний/выделения, `Path = Directory`, курсор 0. Профиль сохраняется (`saveConnectionProfile`), панель загружается. Статус `Connected: <label> (terminal is local)`; при ошибке сохранения профиля добавляется `; profile not saved: <err>`.
-- **Код:** `remote.go` (`connectRemote`), `remotefs/fs.go`, `sftp.go`, `ftp.go`.
+#### The connection process (`connectRemote`)
+- **Behaviour:** the background task `Connecting to <label>` (progress window, Esc cancels; cancellation closes all sockets via `socketSet`): `Dial` + `ReadDir(Directory)` as a check; the connection is closed.
+  - The error `remotefs.UnknownHost` → confirm `Unknown SSH host key` with the text `<host> <SHA256:fingerprint>. Trust for this connection?`, buttons `Trust once` / `Cancel`. `Trust once` puts the key into `c.HostKey` (memory only, this connection only) and repeats `connectRemote`.
+  - Other errors — into the status (`a.error`).
+  - Success (`apply`): the panel is reconfigured (`configurePanel`), background loads are cancelled, the panel's local path `RemoteLocalPath` (or `$HOME`) is remembered, `Remote = &c`, `Archive = nil`, `Async = true`, `View = "Full"`, states/selection are reset, `Path = Directory`, cursor 0. The profile is saved (`saveConnectionProfile`), the panel is loaded. Status `Connected: <label> (terminal is local)`; on a profile save error `; profile not saved: <err>` is appended.
+- **Code:** `remote.go` (`connectRemote`), `remotefs/fs.go`, `sftp.go`, `ftp.go`.
 
-#### Проверка host key и аутентификация SFTP (`remotefs/sftp.go`, `ssh_defaults.go`)
-- known_hosts: `~/.ssh/known_hosts`, `~/.ssh/known_hosts2`, `/etc/ssh/ssh_known_hosts`, `/etc/ssh/ssh_known_hosts2` (только существующие). Неизвестный хост (нет записей) → `UnknownHost`; **несовпадение с известным ключом или отозванный ключ никогда не принимаются автоматически** (возвращается ошибка knownhosts). Если задан `HostKey` (после `Trust once`) — `ssh.FixedHostKey`. Предпочтение алгоритмов host key — как в OpenSSH: сначала типы, уже известные для хоста (`hostKeyAlgorithms`, тест `TestKnownHostAlgorithmPreference`).
-- Ключи: если указан `KeyFile` — только он (ошибка `cannot read SSH private key <path>: …`); иначе `~/.ssh/id_rsa`, `id_ecdsa`, `id_ed25519` (отсутствующие пропускаются; зашифрованные без passphrase дают подсказку `<name> requires a passphrase or ssh-agent`); введённая passphrase применяется и к default-ключам. Файл ключа > 1 MiB → `SSH key file is too large`. Плюс все identities из `SSH_AUTH_SOCK` (ssh-agent). Пароль добавляется как `ssh.Password`, если непустой. Нет ни одного метода → `no usable SSH identity: provide a password, private key or ssh-agent. <hint>`. При ошибке handshake с hint — `<err> (<hint>)`.
-- Таймауты: dial 15 с, SSH handshake 15 с, дедлайн чтения/записи каждого сокета 30 с. SFTP без concurrent reads/writes. `Rename` использует `posix-rename@openssh.com` при наличии. `Create` — `O_CREATE|O_EXCL|O_WRONLY`.
+#### Host key verification and SFTP authentication (`remotefs/sftp.go`, `ssh_defaults.go`)
+- known_hosts: `~/.ssh/known_hosts`, `~/.ssh/known_hosts2`, `/etc/ssh/ssh_known_hosts`, `/etc/ssh/ssh_known_hosts2` (only existing ones). An unknown host (no entries) → `UnknownHost`; **a mismatch with a known key or a revoked key is never accepted automatically** (the knownhosts error is returned). If `HostKey` is set (after `Trust once`) — `ssh.FixedHostKey`. Host key algorithm preference is as in OpenSSH: first the types already known for the host (`hostKeyAlgorithms`, test `TestKnownHostAlgorithmPreference`).
+- Keys: if `KeyFile` is specified — only it (error `cannot read SSH private key <path>: …`); otherwise `~/.ssh/id_rsa`, `id_ecdsa`, `id_ed25519` (missing ones are skipped; encrypted ones without a passphrase produce the hint `<name> requires a passphrase or ssh-agent`); the entered passphrase is also applied to the default keys. A key file > 1 MiB → `SSH key file is too large`. Plus all identities from `SSH_AUTH_SOCK` (ssh-agent). The password is added as `ssh.Password` if non-empty. No method at all → `no usable SSH identity: provide a password, private key or ssh-agent. <hint>`. On a handshake error with a hint — `<err> (<hint>)`.
+- Timeouts: dial 15 s, SSH handshake 15 s, a read/write deadline of 30 s on each socket. SFTP without concurrent reads/writes. `Rename` uses `posix-rename@openssh.com` when available. `Create` — `O_CREATE|O_EXCL|O_WRONLY`.
 
 #### FTP / FTPS (`remotefs/ftp.go`)
-- Пользователь пустой → `anonymous`. Credentials с `\x00\r\n` → `FTP credentials contain a protocol control character`.
-- FTPS = только explicit TLS (`AUTH TLS`) с `MinVersion TLS1.2`, `ServerName = host`, системные корни (самоподписанный сертификат отвергается — тест `TestExplicitFTPSProtectsDataConnection`); data-соединения тоже оборачиваются в TLS. Implicit FTPS не поддерживается.
-- Таймаут dial 15 с; дедлайны 30 с. `Lstat`: `GetEntry` (MLST), при 550 с текстом `no such file`/`not found`/`does not exist` → `ErrNotExist`, иначе листинг родителя; `/` считается папкой. `Chmod` → `FTP does not provide portable permission preservation`; `Readlink`/`Symlink` → `FTP symbolic links are not supported`. Размер > int64 → `invalid FTP size`.
+- An empty user → `anonymous`. Credentials containing `\x00\r\n` → `FTP credentials contain a protocol control character`.
+- FTPS = explicit TLS only (`AUTH TLS`) with `MinVersion TLS1.2`, `ServerName = host`, system roots (a self-signed certificate is rejected — test `TestExplicitFTPSProtectsDataConnection`); data connections are also wrapped in TLS. Implicit FTPS is not supported.
+- Dial timeout 15 s; deadlines 30 s. `Lstat`: `GetEntry` (MLST), on 550 with the text `no such file`/`not found`/`does not exist` → `ErrNotExist`, otherwise a listing of the parent; `/` is treated as a folder. `Chmod` → `FTP does not provide portable permission preservation`; `Readlink`/`Symlink` → `FTP symbolic links are not supported`. Size > int64 → `invalid FTP size`.
 
-#### Удалённая панель: загрузка и отображение (`loadRemote`)
-- Каждая загрузка открывает новую сессию (`Dial`) и закрывает её; > 100000 записей → `remote folder exceeds 100000 entries`; `.`/`..` пропускаются; имя с `/\\\x00\r\n` или пустое → `server returned an unsafe filename`; применяются `IgnoreDSStore` (`.DS_Store`), `HideHidden` (точка-файлы), фильтр панели (файлы). Сортировка стандартная. `InfoText = "<label>\nRemote filesystem; terminal remains local"` (показывается в инфо-панели напротив).
-- В заголовке командной строки путь выводится как `local:<RemoteLocalPath>`; key bar F8 → `Delete`. Quick view напротив удалённой панели: `Remote file: use F3 to download and view`.
-- Виды `Tree panel`/`Info panel`/`Quick view` для удалённой панели недоступны (`Choose a file view for remote panels`; `Ctrl+L/T` → `This panel view requires a local folder`).
+#### The remote panel: loading and display (`loadRemote`)
+- Every load opens a new session (`Dial`) and closes it; > 100000 entries → `remote folder exceeds 100000 entries`; `.`/`..` are skipped; a name containing `/\\\x00\r\n` or an empty one → `server returned an unsafe filename`; `IgnoreDSStore` (`.DS_Store`), `HideHidden` (dot files), and the panel filter (files) are applied. Sorting is standard. `InfoText = "<label>\nRemote filesystem; terminal remains local"` (shown in the info panel opposite).
+- In the command line header the path is shown as `local:<RemoteLocalPath>`; key bar F8 → `Delete`. Quick view opposite a remote panel: `Remote file: use F3 to download and view`.
+- The views `Tree panel`/`Info panel`/`Quick view` are unavailable for a remote panel (`Choose a file view for remote panels`; `Ctrl+L/T` → `This panel view requires a local folder`).
 
-#### Операции в удалённой панели (кратко; подробности — в разделе файловых операций)
-- `Enter` на папке — переход; на файле / `F3` / `F4` — фоновая задача `Downloading remote file` во временный каталог `farshmac-remote-view-*`, затем просмотр/редактирование; заголовок документа — `<label><remote path>`; не регулярный файл → `viewer requires a regular remote file`; изменился в процессе → `remote file changed during download`. Сохранение (`Saving remote file`): проверка `remote file changed; reopen before saving`, загрузка через временный файл `.farshmac-part-*` + rename; статус `Remote file saved`.
-- `F5` между локальной и удалённой панелями, а также между двумя серверами (через локальный поток) — `remotefs.Copy` с воркерами 1–8, у каждого воркера своя сессия; лимиты 1 000 000 элементов / глубина 256 (`transfer tree limit exceeded`), 100000 записей на каталог (`remote directory exceeds 100000 entries`); метаданные переносятся «портативно» (chmod/chtimes), с вопросами `Cannot preserve metadata`.
-- `F6`: только в пределах одного сервера (`Label` совпадает) — prompt `Remote move / rename` / `Destination on the same server`; иначе статус `Remote move is available within the same server. Between servers use F5 Copy, then Delete.`; несколько элементов в не-папку → `destination must be an existing directory`; вложенность → `destination is inside source`.
-- `F7`: prompt `Make remote folder` / `Folder name`; имя с `/` и т.п. → `enter one folder name`; ошибки показываются и в окне `Creating remote folder failed` (`reportError`); `Folder creation skipped` при skip.
-- `F8`/`Shift+F8`/`Delete`: confirm `Delete remote files permanently` / `Delete N selected item(s) on <label>? No remote Trash is available.` кнопки `Delete`/`Cancel`; удаление рекурсивное (`RemoveTree`, глубина ≤ 256: `remote tree depth exceeds 256`). Корзины нет.
-- `Shift+Enter`, `New file`, `Link`, `File attributes`, `Apply command`, `Describe files`, `Create/Extract archive`, `Find`, `Folder tree`, user menu — заблокированы со статусом `This command requires a local panel. Use F5 to copy remote files first.` (или `Copy remote files to a local panel before opening them with macOS`).
-- Терминал всегда локальный: `showTerminal`/`syncCwd` не синхронизируют cwd для удалённой панели; команды выполняются в `filesystemPath()` (локальный путь панели).
-- `Ctrl+Alt+Insert` копирует полные пути в виде `<label><path>`.
+#### Operations in the remote panel (briefly; details — in the file operations section)
+- `Enter` on a folder — navigate; on a file / `F3` / `F4` — the background task `Downloading remote file` into a temporary directory `farshmac-remote-view-*`, then view/edit; the document title is `<label><remote path>`; a non-regular file → `viewer requires a regular remote file`; changed during the process → `remote file changed during download`. Saving (`Saving remote file`): the check `remote file changed; reopen before saving`, upload via a temporary file `.farshmac-part-*` + rename; status `Remote file saved`.
+- `F5` between a local and a remote panel, and also between two servers (through a local stream) — `remotefs.Copy` with 1–8 workers, each worker has its own session; limits of 1 000 000 items / depth 256 (`transfer tree limit exceeded`), 100000 entries per directory (`remote directory exceeds 100000 entries`); metadata is transferred "portably" (chmod/chtimes), with `Cannot preserve metadata` questions.
+- `F6`: only within one server (`Label` matches) — prompt `Remote move / rename` / `Destination on the same server`; otherwise status `Remote move is available within the same server. Between servers use F5 Copy, then Delete.`; several items into a non-folder → `destination must be an existing directory`; nesting → `destination is inside source`.
+- `F7`: prompt `Make remote folder` / `Folder name`; a name with `/` and the like → `enter one folder name`; errors are also shown in the window `Creating remote folder failed` (`reportError`); `Folder creation skipped` on skip.
+- `F8`/`Shift+F8`/`Delete`: confirm `Delete remote files permanently` / `Delete N selected item(s) on <label>? No remote Trash is available.` with the buttons `Delete`/`Cancel`; deletion is recursive (`RemoveTree`, depth ≤ 256: `remote tree depth exceeds 256`). There is no Trash.
+- `Shift+Enter`, `New file`, `Link`, `File attributes`, `Apply command`, `Describe files`, `Create/Extract archive`, `Find`, `Folder tree`, the user menu — blocked with the status `This command requires a local panel. Use F5 to copy remote files first.` (or `Copy remote files to a local panel before opening them with macOS`).
+- The terminal is always local: `showTerminal`/`syncCwd` do not synchronise the cwd for a remote panel; commands run in `filesystemPath()` (the panel's local path).
+- `Ctrl+Alt+Insert` copies full paths in the form `<label><path>`.
 
 #### Disconnect active panel
-- **Поведение (`disconnectRemote`):** отменяет загрузки, `Remote = nil`, загружает `RemoteLocalPath` (локальная папка до подключения), статус `Disconnected`. Также любое действие, ставящее `Remote = nil` (Change volume, локальный folder shortcut, Same folder in other panel с локальной панели-источника).
+- **Behaviour (`disconnectRemote`):** cancels loads, `Remote = nil`, loads `RemoteLocalPath` (the local folder before the connection), status `Disconnected`. Also any action that sets `Remote = nil` (Change volume, a local folder shortcut, Same folder in other panel from a local source panel).
 
-#### Профили подключений (`connection_profiles.go`)
-- Файл `connections.json` — JSON-массив `remotefs.Config` (`Protocol, Host, User, Directory, KeyFile, Port`; без пароля/passphrase/host key). Записывается после каждого успешного подключения (`saveConnectionProfile`): перечитывает файл, заменяет профиль с тем же `Label()` (`scheme://user@host:port`) или добавляет новый, пишет атомарно (`.connections-*` + rename, `0700`), обновляет `Settings.RemoteConnections`. Доступ под `profilesMu` (общий для окон). Не зависит от Save setup (тест `TestConnectionProfilesPersistWithoutSaveSetup`).
-- `Save setup` дополнительно обновляет `Directory` профилей подключённых панелей, но только в памяти (`setup.json` содержит копию `RemoteConnections` в `Settings`; при старте приоритет у `connections.json`, т.к. `loadConnectionProfiles` вызывается после чтения setup).
-- Удаления/редактирования профиля из UI нет (только повторное подключение с новыми параметрами под тем же label перезаписывает `Directory`/`KeyFile`).
-
----
-
-## 6. Нативное меню macOS (для полноты)
-
-Создаётся в `window_darwin.m`: `FarshMac` → `About FarshMac`, `Full Disk Access…`, `Quit FarshMac ⌘Q`; `File` → `New Window ⌘N`, `Close Window ⌘W`; `Edit` → `Copy ⌘C`, `Cut ⌘X`, `Paste ⌘V`, `Select All ⌘A`; `Window` → `Command History ⌘⇧H` и `Terminal Output History` (активны только в режиме терминала), `Enter Full Screen ⌃⌘F`, `Minimize ⌘M`, `Next Window ⌘\``, `Previous Window ⌘⇧\``, `Bring All to Front`.
-
-Примечание: `⌘M` в панелях обрабатывается Go-кодом как «Restore selection» (пункт меню Files), но на уровне Cocoa тот же `⌘M` назначен `Minimize` — какой обработчик победит, определяется нативным монитором клавиш; в коде Go нет исключения.
+#### Connection profiles (`connection_profiles.go`)
+- The file `connections.json` — a JSON array of `remotefs.Config` (`Protocol, Host, User, Directory, KeyFile, Port`; no password/passphrase/host key). Written after every successful connection (`saveConnectionProfile`): re-reads the file, replaces the profile with the same `Label()` (`scheme://user@host:port`) or adds a new one, writes atomically (`.connections-*` + rename, `0700`), updates `Settings.RemoteConnections`. Access under `profilesMu` (shared between windows). Independent of Save setup (test `TestConnectionProfilesPersistWithoutSaveSetup`).
+- `Save setup` additionally updates the `Directory` of the profiles of connected panels, but only in memory (`setup.json` contains a copy of `RemoteConnections` in `Settings`; at startup `connections.json` takes priority, since `loadConnectionProfiles` is called after the setup is read).
+- There is no profile deletion/editing from the UI (only reconnecting with new parameters under the same label overwrites `Directory`/`KeyFile`).
 
 ---
 
-## 7. Расхождения между кодом, MENU_PARITY.md, README и справкой F1
+## 6. The native macOS menu (for completeness)
 
-> **Закрыто на ветке `backlog-fixes`:** решения по каждому пункту — в разделе «Решения по расхождениям» `docs/IMPLEMENTATION_BACKLOG.md`.
+Created in `window_darwin.m`: `FarshMac` → `About FarshMac`, `Full Disk Access…`, `Quit FarshMac ⌘Q`; `File` → `New Window ⌘N`, `Close Window ⌘W`; `Edit` → `Copy ⌘C`, `Cut ⌘X`, `Paste ⌘V`, `Select All ⌘A`; `Window` → `Command History ⌘⇧H` and `Terminal Output History` (active only in terminal mode), `Enter Full Screen ⌃⌘F`, `Minimize ⌘M`, `Next Window ⌘\``, `Previous Window ⌘⇧\``, `Bring All to Front`.
 
-1. **`Save setup` без шортката в меню**, хотя `Shift+F9` реализован (`far_keys.go`) и указан в справке F1. В README не упомянут.
-2. **Пункты без шортката в меню, но с горячими клавишами в коде и справке:** `Link…` (`Alt+F6` — не упомянут и в справке), `Create archive…`/`Extract archive…`/`Archive commands…` (`Shift+F1/F2/F3` в справке), `File view/edit history`/`Folder history` (`Alt+F11/F12` в справке), `Sort modes…` (`Ctrl+F12` в справке), `Find folder…` нет клавиши нигде.
-3. **Справка F1 называет `Ctrl+L / Ctrl+T` переключением Info/Tree, а `Cmd+L` — Change directory**: код подтверждает (`toggleOtherView` только при `Ctrl` без `Meta`; `⌘L` → `gotoPrompt`). README пишет `Ctrl+Q / Ctrl+L` — согласовано. Но в меню Commands есть только `Quick view on/off`, пункта для `Info panel on/off`/`Tree` нет (они в Left/Right как виды).
-4. **Меню показывает `Ctrl+Q`**, тогда как остальные шорткаты в меню записаны символами (`⌘`, `⇧`) — смешанная нотация (`AltF1`, `ShiftF4`, `⇧F8`, `Ctrl+Q`, `⌃⌘F`).
-5. **MENU_PARITY.md: «Folder shortcuts provide ten slots»** — в коде слоты 1–9 (`Shortcuts[10]`, индекс 0 не используется; диалог `Slot 1–9`).
-6. **MENU_PARITY.md: «Options → General: … dialogs, confirmations»** и перечень Advanced «colors, Info panel, tree depth, descriptions, masks, sorting and encodings» — соответствует; но отдельные диалоги `Dialog settings`, `Confirmations`, `System/Interface/Menu/AutoComplete/Command line settings` существуют в коде и недостижимы из меню.
-7. **MENU_PARITY.md: «Settings are stored in `~/Library/Application Support/FarshMac/setup.json`»** — верно; про `connections.json` и fallback на `Far Go/` документ не упоминает (описано только в коде/тестах).
-8. **Справка F1 первая строка: «persistent zsh terminal»** и абзац «zsh keeps its environment… Your .zshrc is loaded» — shell по умолчанию в коде `bash` (`defaultSettings`, `normalizeSettings`), README говорит «bash, sh, or zsh».
-9. **Справка F1: «Cross-volume move is refused»** — MENU_PARITY.md утверждает «Cross-volume moves copy before removing the source»; за код отвечает раздел файловых операций, здесь фиксируется противоречие документов.
-10. **Справка F1: «F5 / F6 Copy / move or rename (no overwriting)»** — при этом существует `Confirm overwrite` и кнопки `Overwrite / All / Skip…` (MENU_PARITY.md, тесты). Формулировка справки устарела.
-11. **Справка F1: «Copies preserve permissions, timestamps and links, not ACLs/xattrs»** — диалог копирования предлагает `Preserve permissions (mode, owner, group, ACL)` и `Preserve attributes (xattrs, flags, timestamps)`.
-12. **Справка F1 упоминает `File links view`** (`Names, sizes and hard-link counts`), но вид `File links` удалён из меню и нормализуется в `Full` (`configurePanel`, MENU_PARITY.md).
-13. **README «Ctrl+Shift+1…9 / Ctrl+1…9 Save / open folder bookmarks»** — верно; меню `Folder shortcuts…` шортката не показывает.
-14. **Справка: «Cmd+1 … Cmd+9 Alternatives to F1 … F9»** — верно (`function(n)` при `Meta`+цифра); `⌘9` открывает меню (также закрывает его в `menuKey`).
-15. **`Full screen ⌃⌘F`** в меню Commands дублирует нативный пункт Window → Enter Full Screen; в справке F1 не упомянут.
-16. **Нотация `AltF1`/`AltF2`, `ShiftF4`** в меню против `Alt+F1 / Alt+F2` в справке — только косметика.
-17. **Тест `TestConnectionProfilesPersistWithoutSaveSetup` ожидает 3 пункта** в `Network connections` при одном профиле — соответствует коду (`New…`, профиль, `Disconnect active panel`).
-18. **`RestoreFolders`** в `Settings` нигде не читается и не редактируется (мёртвое поле; попадает в setup.json).
-19. **`Describe files…`, `Edit sort groups…`** — в MENU_PARITY.md «Edit sort groups» описан в Commands; в коде пункт ведёт в ту же prompt-форму, что Advanced → `Sort groups` (дублирование).
+Note: `⌘M` in the panels is handled by the Go code as "Restore selection" (the Files menu item), but at the Cocoa level the same `⌘M` is assigned to `Minimize` — which handler wins is determined by the native key monitor; there is no exception in the Go code.
 
+---
 
-<a id="сводка-расхождений"></a>
-# Сводка расхождений
+## 7. Discrepancies between the code, MENU_PARITY.md, README and the F1 help
 
-> **Закрыто.** Все расхождения ниже разрешены на ветке `backlog-fixes` (см. «Решения по расхождениям» в `docs/IMPLEMENTATION_BACKLOG.md`). Раздел сохранён как история.
+> **Closed on the `backlog-fixes` branch:** the decisions on each item are in the "Decisions on discrepancies" section of `docs/IMPLEMENTATION_BACKLOG.md`.
 
-Списки расхождений между кодом и README / справкой F1 / parity-документами приведены в конце каждой части:
-
-- Часть 1. Файловые панели и навигация: 13 пунктов.
-- Часть 2. Файловые операции, архивы, запуск программ: 13 пунктов.
-- Часть 3. Внутренний просмотрщик и редактор: 19 пунктов.
-- Часть 4. Терминал, командная строка, окна, нативная оболочка, renderer: 13 пунктов.
-- Часть 5. Меню F9, диалоги, настройки, сетевые подключения, справка: 19 пунктов.
-
-Самые важные для пользователя (встречаются в нескольких частях):
-
-- Справка F1 называет терминал «persistent zsh» и обещает загрузку `.zshrc`; shell по умолчанию — bash, выбор в настройках.
-- Справка F1 утверждает «Cross-volume move is refused» и «not ACLs/xattrs»; код перемещает между томами через копирование с удалением и сохраняет ACL и xattr.
-- Ряд работающих клавиш не задокументирован: Alt+F3/Alt+F4, Cmd+Shift+F3/F4, Ctrl+J, Ctrl+[ ], Ctrl+Shift+Enter, Shift+F11, Alt+F6, Alt+F11/F12, Cmd+Shift+S.
-- Ряд пунктов меню показан без шортката, хотя шорткат есть в коде: Save setup (Shift+F9), Create link (Alt+F6), архивные команды (Shift+F1–F3), истории (Alt+F11/F12).
-- Семь диалогов из `settingsMenu` (Dialog, Confirmations, System, Interface, Menu, AutoComplete, Command line settings) недостижимы из меню.
-- Cmd+=/−/0 и Cmd+Shift+? в коде отсутствуют: размер шрифта меняется только через настройки, история вывода открывается через меню Window или колесо.
-- Вероятный дефект: закладки документа Cmd+Shift+0..9 разбирают `m.Key` через `Atoi`, тогда как renderer при Shift шлёт `!@#…`; панельные закладки используют `m.Code`.
-- Ctrl+PgDn считает `.gz/.bz2/.xz` архивами по списку `isArchiveName`, но `ArchiveFormat` их не открывает.
+1. **`Save setup` has no shortcut in the menu**, although `Shift+F9` is implemented (`far_keys.go`) and listed in the F1 help. Not mentioned in the README.
+2. **Items without a shortcut in the menu but with hotkeys in the code and the help:** `Link…` (`Alt+F6` — not mentioned in the help either), `Create archive…`/`Extract archive…`/`Archive commands…` (`Shift+F1/F2/F3` in the help), `File view/edit history`/`Folder history` (`Alt+F11/F12` in the help), `Sort modes…` (`Ctrl+F12` in the help), `Find folder…` has no key anywhere.
+3. **The F1 help calls `Ctrl+L / Ctrl+T` the Info/Tree toggle, and `Cmd+L` — Change directory**: the code confirms this (`toggleOtherView` only with `Ctrl` without `Meta`; `⌘L` → `gotoPrompt`). The README writes `Ctrl+Q / Ctrl+L` — consistent. But the Commands menu has only `Quick view on/off`; there is no item for `Info panel on/off`/`Tree` (they are in Left/Right as views).
+4. **The menu shows `Ctrl+Q`**, while the other shortcuts in the menu are written with symbols (`⌘`, `⇧`) — mixed notation (`AltF1`, `ShiftF4`, `⇧F8`, `Ctrl+Q`, `⌃⌘F`).
+5. **MENU_PARITY.md: "Folder shortcuts provide ten slots"** — in the code the slots are 1–9 (`Shortcuts[10]`, index 0 is unused; the dialog says `Slot 1–9`).
+6. **MENU_PARITY.md: "Options → General: … dialogs, confirmations"** and the Advanced list "colors, Info panel, tree depth, descriptions, masks, sorting and encodings" — matches; but the separate dialogs `Dialog settings`, `Confirmations`, `System/Interface/Menu/AutoComplete/Command line settings` exist in the code and are unreachable from the menu.
+7. **MENU_PARITY.md: "Settings are stored in `~/Library/Application Support/FarshMac/setup.json`"** — correct; the document does not mention `connections.json` and the fallback to `Far Go/` (described only in the code/tests).
+8. **F1 help first line: "persistent zsh terminal"** and the paragraph "zsh keeps its environment… Your .zshrc is loaded" — the default shell in the code is `bash` (`defaultSettings`, `normalizeSettings`), the README says "bash, sh, or zsh".
+9. **F1 help: "Cross-volume move is refused"** — MENU_PARITY.md states "Cross-volume moves copy before removing the source"; the file operations section is responsible for the code, here the contradiction between the documents is recorded.
+10. **F1 help: "F5 / F6 Copy / move or rename (no overwriting)"** — yet `Confirm overwrite` and the buttons `Overwrite / All / Skip…` exist (MENU_PARITY.md, tests). The help wording is outdated.
+11. **F1 help: "Copies preserve permissions, timestamps and links, not ACLs/xattrs"** — the copy dialog offers `Preserve permissions (mode, owner, group, ACL)` and `Preserve attributes (xattrs, flags, timestamps)`.
+12. **The F1 help mentions `File links view`** (`Names, sizes and hard-link counts`), but the `File links` view has been removed from the menu and is normalised to `Full` (`configurePanel`, MENU_PARITY.md).
+13. **README "Ctrl+Shift+1…9 / Ctrl+1…9 Save / open folder bookmarks"** — correct; the `Folder shortcuts…` menu item shows no shortcut.
+14. **Help: "Cmd+1 … Cmd+9 Alternatives to F1 … F9"** — correct (`function(n)` with `Meta`+digit); `⌘9` opens the menu (and also closes it in `menuKey`).
+15. **`Full screen ⌃⌘F`** in the Commands menu duplicates the native item Window → Enter Full Screen; not mentioned in the F1 help.
+16. **The notation `AltF1`/`AltF2`, `ShiftF4`** in the menu versus `Alt+F1 / Alt+F2` in the help — cosmetic only.
+17. **The test `TestConnectionProfilesPersistWithoutSaveSetup` expects 3 items** in `Network connections` with one profile — matches the code (`New…`, the profile, `Disconnect active panel`).
+18. **`RestoreFolders`** in `Settings` is neither read nor edited anywhere (a dead field; it ends up in setup.json).
+19. **`Describe files…`, `Edit sort groups…`** — in MENU_PARITY.md "Edit sort groups" is described under Commands; in the code the item leads to the same prompt form as Advanced → `Sort groups` (duplication).
 
 
-<a id="приложения"></a>
-# Приложения. Дополнения по результатам gap analysis
+<a id="discrepancy-summary"></a>
+# Summary of discrepancies
 
-Варианты поведения, которые код обрабатывает, но основной текст частей не описывал. Таблицы сгруппированы по частям; колонка «Код» указывает, где проверить. Случаи, которые код не обрабатывает, вынесены в `docs/IMPLEMENTATION_BACKLOG.md`.
+> **Closed.** All discrepancies below have been resolved on the `backlog-fixes` branch (see "Decisions on discrepancies" in `docs/IMPLEMENTATION_BACKLOG.md`). The section is kept as history.
 
-## Приложение 1. Файловые панели и навигация
+The lists of discrepancies between the code and the README / F1 help / parity documents are given at the end of each part:
 
-Код обрабатывает вариант, спецификация его не описывает.
+- Part 1. File panels and navigation: 13 items.
+- Part 2. File operations, archives, launching programs: 13 items.
+- Part 3. Built-in viewer and editor: 19 items.
+- Part 4. Terminal, command line, windows, native shell, renderer: 13 items.
+- Part 5. The F9 menu, dialogs, settings, network connections, help: 19 items.
 
-| Функция | Вариант | Что делает код | Код (файл:функция) |
+The most important ones for the user (appearing in several parts):
+
+- The F1 help calls the terminal "persistent zsh" and promises to load `.zshrc`; the default shell is bash, selectable in the settings.
+- The F1 help claims "Cross-volume move is refused" and "not ACLs/xattrs"; the code moves between volumes via copy-and-delete and preserves ACLs and xattrs.
+- A number of working keys are undocumented: Alt+F3/Alt+F4, Cmd+Shift+F3/F4, Ctrl+J, Ctrl+[ ], Ctrl+Shift+Enter, Shift+F11, Alt+F6, Alt+F11/F12, Cmd+Shift+S.
+- A number of menu items are shown without a shortcut although the shortcut exists in the code: Save setup (Shift+F9), Create link (Alt+F6), archive commands (Shift+F1–F3), histories (Alt+F11/F12).
+- Seven dialogs from `settingsMenu` (Dialog, Confirmations, System, Interface, Menu, AutoComplete, Command line settings) are unreachable from the menu.
+- Cmd+=/−/0 and Cmd+Shift+? are absent from the code: the font size changes only through the settings, the output history opens through the Window menu or the wheel.
+- A probable defect: document bookmarks Cmd+Shift+0..9 parse `m.Key` via `Atoi`, whereas the renderer sends `!@#…` with Shift; panel bookmarks use `m.Code`.
+- Ctrl+PgDn treats `.gz/.bz2/.xz` as archives by the `isArchiveName` list, but `ArchiveFormat` does not open them.
+
+
+<a id="appendices"></a>
+# Appendices. Additions from the gap analysis
+
+Behaviour variants that the code handles but the main text of the parts did not describe. The tables are grouped by part; the "Code" column indicates where to check. Cases the code does not handle are moved to `docs/IMPLEMENTATION_BACKLOG.md`.
+
+## Appendix 1. File panels and navigation
+
+The code handles the case, the specification does not describe it.
+
+| Function | Case | What the code does | Code (file:function) |
 |---|---|---|---|
-| Panel.Load | Esc во время асинхронного чтения | После отмены панель откатывается к предыдущему состоянию, в футере остаётся `operation cancelled` (текст `fsops.ErrCancelled`) до следующей загрузки; «Stopping folder scan…» показывается только до прихода результата | `internal/ui/panel_load.go:pollPanelLoad`, `internal/fsops/progress.go:Check` |
-| Panel.Load | Ошибка самой первой загрузки (стартовая папка `-left`/`-right` недоступна) | `job.previous.Path == ""` → отката нет: панель остаётся на недоступном пути с единственной записью `..` и текстом ошибки в футере | `internal/ui/panel_load.go:pollPanelLoad` |
-| Panel.Load | Нет прав на чтение (EACCES/EPERM) | `readDirectory` идёт через `o.Attempt("read folder", …)`; без обработчика вопросов ошибка возвращается как есть: `open <path>: permission denied` в футере, курсор остаётся в прежней папке | `internal/fsops/walk.go:readDirectory` |
-| Panel.Load | Ошибка `e.Info()` для отдельной записи (файл исчез между ReadDir и stat) | Запись молча пропускается | `internal/ui/app.go:Load` (`if info, err := e.Info(); err != nil { return nil }`) |
-| Panel.Load | Esc при непустой командной строке во время чтения | `cancelReads()` возвращает true → командная строка не очищается, статус не сбрасывается | `internal/ui/app.go:key` (`case "Escape"`) |
-| Сессия | Папки из session.json не существуют / не читаются | `accessibleFolder` поднимается к ближайшему читаемому родителю; затем fallback на папку первого окна, домашний каталог, `/` | `internal/ui/session.go:accessibleFolder` |
-| Save setup | Битый setup.json | `LoadSetup` молча возвращается при ошибке `json.Unmarshal`; используются значения по умолчанию, пользователю ничего не сообщается | `internal/ui/settings.go:LoadSetup` |
-| Save setup | Запись не удалась (нет прав, диск полон) | `a.Status = "Setup saved"` затем `a.error(err)` переопределяет статус текстом ошибки; значения в памяти сохраняются | `internal/ui/settings.go:saveSetup` |
-| Закладки | saveSetup не удался при Ctrl+Shift+N | Слот всё равно заполнен в памяти; статус показывает ошибку записи, а не `Folder shortcut N saved` | `internal/ui/folder_shortcuts.go:saveFolderShortcut` |
-| Закладки | Ctrl+Shift+N при раскладке, где Shift+цифра даёт символ (`!`, `@`) | Номер берётся из `m.Code` (`Digit1`…`Digit9`) | `internal/ui/folder_shortcuts.go:folderShortcutKey` |
-| Закладки | Удалённая закладка, когда какая-либо панель уже подключена к тому же серверу | Переподключается **активная** панель с живой конфигурацией другой панели (включая пароль в памяти) | `internal/ui/folder_shortcuts.go:goFolderShortcut` |
-| Folder history | История пуста | `choose` выводит статус `Folder history: empty` (общий механизм `<title>: empty`) | `internal/ui/form.go:choose` |
-| F3 на папке | Курсор на `..` без пометок | Считается размер **текущей** папки (`name == ".." → root = base`), результат показывается в строке `..` вместо `<DIR>`; спецификация ошибочно пишет «не `..`» | `internal/ui/folder_sizes.go:calculateFolderSizes, measureFolders` |
-| F3 на папке | Панель сменила путь/источник до конца подсчёта | Результат молча отбрасывается, статус остаётся пустым | `internal/ui/folder_sizes.go:calculateFolderSizes` (apply: `if p.Path != base … return`) |
-| F3 на папке | Tree panel активна | Имена узлов — относительные пути; `filepath.Join(base, "a/b")` считается корректно; пометки в дереве учитываются | `internal/ui/folder_sizes.go:calculateFolderSizes` |
-| Human-readable sizes | Переключение ⌘Shift+S | Футер панели пересчитывается **сразу** (`drawPanel` берёт `a.Settings.HumanReadableSizes`); устаревает только `InfoText`, который нигде не отображается. Спецификация утверждает обратное | `internal/ui/panel_draw.go:drawPanel` |
-| Quick view | Курсор источника на `..` | Показывается листинг **родительской** папки (`Current()` = `Join(Path, "..")`) | `internal/ui/commands.go:updatePreview` |
-| Quick view | Битая/циклическая символическая ссылка | `os.Stat` следует ссылке → текст ошибки (`too many levels of symbolic links` и т.п.); ссылка на папку → листинг папки | `internal/ui/commands.go:updatePreview` |
-| Quick view | Helper-процесс отсутствует/упал/превысил 4 с | `preview.Run` возвращает ошибку → `Preview unavailable (unsupported, damaged or limit exceeded)` | `internal/preview/preview.go:Run` |
-| Quick view | Esc, пока превью грузится | `cancelReads` отменяет превью и пишет `Preview cancelled`; команда/статус не очищаются; текст остаётся до смены курсора | `internal/ui/panel_load.go:cancelReads`, `commands.go:updatePreview` |
-| Quick view | Содержимое с управляющими символами/бинарное | `Grid.Text` заменяет control-символы пробелом; `\r` тоже становится пробелом; одна длинная строка обрезается по ширине | `internal/ui/grid.go:Text` |
-| Quick view / Info | Ctrl+Q/Ctrl+L, когда режим восстановлен из setup.json и `viewReturns` пуст | Возврат к нулевой паре `{View:"", Hidden:false}`; пустой View трактуется как Full | `internal/ui/far_keys.go:toggleOtherView` |
-| Info panel | Источник — удалённая панель | `sysinfo.Read` вызывается для `RemoteLocalPath` (локальная папка терминала); секция `Filesystem panel` показывает `Label()+Path` | `internal/ui/info_panel.go:updateInfoPanels` |
-| Info panel | Папка источника исчезла | `statfs` падает молча: секция `Disk  ()` с пустыми `Mount`/`Filesystem`, нулевыми размерами | `internal/sysinfo/info_darwin.go:Read` |
-| Info panel | Файла описания нет | `infoDescriptionPaths` = первый кандидат; F4 создаёт его, F3 даёт ошибку открытия в статус | `internal/ui/info_panel.go:readInfoPanel, infoPanelKey` |
-| Info panel | Описание > 4096 байт / обрезанная UTF-8 последовательность | Читается `LimitReader(4096)`; недопустимые байты рисуются как U+FFFD | `internal/ui/info_panel.go:readInfoPanel`, `grid.go:Text` |
-| Tree panel | Корень недоступен/не папка/не существует | `result.err` → футер с текстом ошибки, список только `..`, путь панели = недоступный (отката нет, см. P1-08) | `internal/ui/tree.go:scanTree, pollTree` |
-| Tree panel | Пометки | Футер в режиме дерева **никогда** не показывает `N selected`/`[filter]`: поле `Err` занято строкой статуса дерева | `internal/ui/tree.go:pollTree`, `panel_draw.go:drawPanel` |
-| Tree panel | matchOtherPanel из дерева | Другая панель грузит корень дерева; курсор не совпадает (имя узла — относительный путь `a/b`) | `internal/ui/archive_panel.go:matchOtherPanel` |
-| Enter | Файл/папка исчезли | `os.Stat` → ошибка в статус, курсор не двигается, панель не перечитывается | `internal/ui/launch.go:enterFile` |
-| Enter | Исполняемый файл, shell занят | `execute()` → `Shell is busy; ⌘O to return to it` и терминал показывается | `internal/ui/app.go:execute` |
-| Enter | Символическая ссылка на папку | Загружается путь ссылки (не цель); `..` возвращает в папку ссылки | `internal/ui/launch.go:enterFile`, `app.go:beginLoad` |
-| Ctrl+PgDn | Курсор на `..` | `Dir == true` → `enterFile` → переход в родителя | `internal/ui/far_keys.go:farPanelKey` |
-| Ctrl+PgUp | В `/` или в корне remote | `filepath.Dir("/") == "/"` → перечитывание той же папки | `internal/ui/far_keys.go:farPanelKey` |
-| Cmd+L | Удалённая панель, ввод `~` или относительного пути | `expand` подставляет **локальный** домашний каталог / относительно удалённого пути; результат идёт на сервер | `internal/ui/app.go:gotoPrompt, expand` |
-| Cmd+L | Архивная панель | Путь внутри архива → каталог архива; вне → выход из архива в локальную папку | `internal/ui/app.go:Load` |
-| Remote | Каждая навигация | На каждый `Load` открывается новое соединение (`Remote.Dial`) и закрывается после чтения | `internal/ui/remote.go:loadRemote` |
-| Remote | Сервер вернул небезопасное имя / > 100000 записей | Вся загрузка завершается ошибкой `server returned an unsafe filename` / `remote folder exceeds 100000 entries`, панель откатывается | `internal/ui/remote.go:loadRemote` |
-| Remote | Разрыв соединения при навигации | Асинхронный откат к предыдущему листингу, ошибка в футере; ⌘R повторяет попытку | `internal/ui/panel_load.go:pollPanelLoad` |
-| Архив | Файл архива изменён/удалён во время просмотра | `ArchiveIndex.Check` → `archive changed on disk; leave and reopen it` при следующей навигации/F3 | `internal/fsops/archive_index.go:Check` |
-| Архив | Файл с архивным расширением повреждён | Задача `Opening archive` завершается ошибкой в статусе (без диалога: `reportError` false), панель не меняется | `internal/ui/task.go:pollTask`, `archive_panel.go:openArchiveAt` |
-| Архив | Расширение в верхнем регистре (`.ZIP`) | `ArchiveFormat` приводит к нижнему регистру | `internal/fsops/formats.go:ArchiveFormat` |
-| Архив | Открытие в панели в режиме Tree/Info/Quick view | Режим принудительно `Full` | `internal/ui/archive_panel.go:openArchiveAt` |
-| Alt+F1/F2 | `/Volumes` не читается | Ошибка `os.ReadDir` игнорируется: список содержит только `/` и домашний каталог | `internal/ui/panel_options.go:volumes` |
-| Мышь | Клик по Quick view | `panelItem` возвращает false → панель **не** активируется (в отличие от Info panel) | `internal/ui/mouse.go:panelItem`, `info_panel.go:infoPanelClick` |
-| Мышь | Shift+клик | Всегда помечает диапазон (`markRange(…, true)`), снять пометку Shift+кликом нельзя | `internal/ui/mouse.go:panelMouse` |
-| Мышь | Колесо над Form/Menu | Перемещает фокус/выбор на `delta` | `internal/ui/mouse.go:scrollMouse` |
-| Статусная строка | Длинное сообщение | Обрезается справа по `Cols` без переноса; длинные пути в ошибках недоступны целиком | `internal/ui/draw.go:Draw` |
-| Имена | Длиннее колонки / CJK / комбинирующие знаки | Обрезка без `…`; широкие руны занимают 2 ячейки (`runewidth`); руны нулевой ширины приклеиваются к предыдущей ячейке | `internal/ui/grid.go:Text` |
-| Имена | Управляющие символы (`\n`) | В файловых панелях заменяются пробелом; в Tree panel экранируются (`\n`, `\uXXXX`) — разное поведение режимов | `internal/ui/grid.go:Text`, `tree.go:treeDisplayName` |
-| Геометрия | Ширина колонки < 12 (узкое окно + `panelSplit` 20%) | Колонка метаданных не рисуется, только имена; Brief при w=12 даёт 1–2 символа имени | `internal/ui/panel_draw.go:drawPanel` |
-| Заголовок окна | Удалённая панель | `Update.Title` = удалённый путь без имени сервера | `internal/ui/app.go:Poll` |
-| Выделение | Quick view/Info/Tree активна, нажаты `+`/`-`/`*` (в т.ч. Numpad) | `selectionKey` возвращает false → символ добавляется в командную строку | `internal/ui/selection_keys.go:selectionKey`, `app.go:key` |
-| Сортировка | Битая маска в `SortGroups` (из setup.json) | `matchesMask` игнорирует ошибку `filepath.Match` → группа никогда не совпадает, сообщения нет | `internal/ui/panel_options.go:matchesMask, sortEntries` |
-| Панели скрыты | ⌘F1 при уже скрытой правой | Обе панели скрыты, `Active` не меняется; клавиши продолжают действовать на невидимую панель (см. P1-01) | `internal/ui/archive_panel.go:togglePanel` |
-| Panel settings | Форма `Show hidden files` | Тоже сбрасывает `ForcedVisiblePath` обеих панелей | `internal/ui/settings.go:settingsMenu("Panel settings")` |
-| Несколько окон | Cmd+N | Новое окно получает JSON-копию `Settings` и `panelOptions` родителя; `LoadSetup` вызывается только для окна без родителя | `internal/ui/windows.go:NewWindow` |
-| Закрытие окна/Cmd+Q во время чтения | — | `Close()` отменяет загрузки панелей, дерево, превью, операцию; подтверждения нет (чтение панели не считается `Busy`) | `internal/ui/app.go:Close, RequestQuit` |
-| Busy | Клавиши во время фоновой задачи | Принимаются только Esc / Alt+C (отмена) и клавиши формы вопросов; клик левой по `Cancel` прогресса | `internal/ui/app.go:key, click` |
-| Сессия | Снимок во время загрузки/в архиве | Курсор берётся из ожидающего состояния; для архива сохраняется `Cursor = Base(Archive.Path)`, `Top = ""` | `internal/ui/session.go:windowSnapshot` |
-| Fast find | Пустая панель | Первый символ принимается, окно `Find` появляется, курсор не меняется | `internal/ui/fastfind.go:fastFindText, findPrefix` |
-| ⌘C (copyPanelCommand) | Курсор на `..`, пометок нет | Копируется строка `..`; пустая панель — буфер не меняется (в отличие от Ctrl+Insert, который копирует путь панели) | `internal/ui/mouse.go:copyPanelCommand` |
+| Panel.Load | Esc during an asynchronous read | After cancellation the panel rolls back to the previous state; `operation cancelled` (the text of `fsops.ErrCancelled`) stays in the footer until the next load; "Stopping folder scan…" is shown only until the result arrives | `internal/ui/panel_load.go:pollPanelLoad`, `internal/fsops/progress.go:Check` |
+| Panel.Load | Error on the very first load (the `-left`/`-right` start folder is unavailable) | `job.previous.Path == ""` → no rollback: the panel stays on the unavailable path with a single `..` entry and the error text in the footer | `internal/ui/panel_load.go:pollPanelLoad` |
+| Panel.Load | No read permission (EACCES/EPERM) | `readDirectory` goes through `o.Attempt("read folder", …)`; without a question handler the error is returned as is: `open <path>: permission denied` in the footer, the cursor stays in the previous folder | `internal/fsops/walk.go:readDirectory` |
+| Panel.Load | `e.Info()` error for an individual entry (the file disappeared between ReadDir and stat) | The entry is silently skipped | `internal/ui/app.go:Load` (`if info, err := e.Info(); err != nil { return nil }`) |
+| Panel.Load | Esc with a non-empty command line during a read | `cancelReads()` returns true → the command line is not cleared, the status is not reset | `internal/ui/app.go:key` (`case "Escape"`) |
+| Session | Folders from session.json do not exist / are not readable | `accessibleFolder` climbs to the nearest readable parent; then falls back to the first window's folder, the home directory, `/` | `internal/ui/session.go:accessibleFolder` |
+| Save setup | Corrupt setup.json | `LoadSetup` silently returns on a `json.Unmarshal` error; default values are used, the user is told nothing | `internal/ui/settings.go:LoadSetup` |
+| Save setup | Write failed (no permission, disk full) | `a.Status = "Setup saved"` then `a.error(err)` overrides the status with the error text; the in-memory values are kept | `internal/ui/settings.go:saveSetup` |
+| Bookmarks | saveSetup failed on Ctrl+Shift+N | The slot is filled in memory anyway; the status shows the write error rather than `Folder shortcut N saved` | `internal/ui/folder_shortcuts.go:saveFolderShortcut` |
+| Bookmarks | Ctrl+Shift+N on a layout where Shift+digit produces a symbol (`!`, `@`) | The number is taken from `m.Code` (`Digit1`…`Digit9`) | `internal/ui/folder_shortcuts.go:folderShortcutKey` |
+| Bookmarks | Remote bookmark when some panel is already connected to the same server | The **active** panel is reconnected with the live configuration of the other panel (including the password in memory) | `internal/ui/folder_shortcuts.go:goFolderShortcut` |
+| Folder history | History is empty | `choose` shows the status `Folder history: empty` (the generic `<title>: empty` mechanism) | `internal/ui/form.go:choose` |
+| F3 on a folder | Cursor on `..` with no marks | The size of the **current** folder is calculated (`name == ".." → root = base`), the result is shown in the `..` row instead of `<DIR>`; the specification wrongly says "not `..`" | `internal/ui/folder_sizes.go:calculateFolderSizes, measureFolders` |
+| F3 on a folder | The panel changed its path/source before the calculation finished | The result is silently discarded, the status stays empty | `internal/ui/folder_sizes.go:calculateFolderSizes` (apply: `if p.Path != base … return`) |
+| F3 on a folder | Tree panel is active | Node names are relative paths; `filepath.Join(base, "a/b")` computes correctly; marks in the tree are taken into account | `internal/ui/folder_sizes.go:calculateFolderSizes` |
+| Human-readable sizes | Toggling ⌘Shift+S | The panel footer is recalculated **immediately** (`drawPanel` reads `a.Settings.HumanReadableSizes`); only `InfoText`, which is not displayed anywhere, becomes stale. The specification claims the opposite | `internal/ui/panel_draw.go:drawPanel` |
+| Quick view | Source cursor on `..` | The listing of the **parent** folder is shown (`Current()` = `Join(Path, "..")`) | `internal/ui/commands.go:updatePreview` |
+| Quick view | Broken/cyclic symbolic link | `os.Stat` follows the link → error text (`too many levels of symbolic links` etc.); a link to a folder → folder listing | `internal/ui/commands.go:updatePreview` |
+| Quick view | Helper process missing/crashed/exceeded 4 s | `preview.Run` returns an error → `Preview unavailable (unsupported, damaged or limit exceeded)` | `internal/preview/preview.go:Run` |
+| Quick view | Esc while the preview is loading | `cancelReads` cancels the preview and writes `Preview cancelled`; the command/status are not cleared; the text stays until the cursor moves | `internal/ui/panel_load.go:cancelReads`, `commands.go:updatePreview` |
+| Quick view | Content with control characters/binary | `Grid.Text` replaces control characters with a space; `\r` also becomes a space; a single long line is truncated to the width | `internal/ui/grid.go:Text` |
+| Quick view / Info | Ctrl+Q/Ctrl+L when the mode was restored from setup.json and `viewReturns` is empty | Returns to the zero pair `{View:"", Hidden:false}`; an empty View is treated as Full | `internal/ui/far_keys.go:toggleOtherView` |
+| Info panel | Source is a remote panel | `sysinfo.Read` is called for `RemoteLocalPath` (the terminal's local folder); the `Filesystem panel` section shows `Label()+Path` | `internal/ui/info_panel.go:updateInfoPanels` |
+| Info panel | The source folder disappeared | `statfs` fails silently: a `Disk  ()` section with empty `Mount`/`Filesystem` and zero sizes | `internal/sysinfo/info_darwin.go:Read` |
+| Info panel | No description file | `infoDescriptionPaths` = first candidate; F4 creates it, F3 puts an open error in the status | `internal/ui/info_panel.go:readInfoPanel, infoPanelKey` |
+| Info panel | Description > 4096 bytes / truncated UTF-8 sequence | Read via `LimitReader(4096)`; invalid bytes are drawn as U+FFFD | `internal/ui/info_panel.go:readInfoPanel`, `grid.go:Text` |
+| Tree panel | Root unavailable/not a folder/does not exist | `result.err` → footer with the error text, the list contains only `..`, the panel path = the unavailable one (no rollback, see P1-08) | `internal/ui/tree.go:scanTree, pollTree` |
+| Tree panel | Marks | The footer in tree mode **never** shows `N selected`/`[filter]`: the `Err` field is occupied by the tree status line | `internal/ui/tree.go:pollTree`, `panel_draw.go:drawPanel` |
+| Tree panel | matchOtherPanel from the tree | The other panel loads the tree root; the cursor does not match (the node name is a relative path `a/b`) | `internal/ui/archive_panel.go:matchOtherPanel` |
+| Enter | File/folder disappeared | `os.Stat` → error in the status, the cursor does not move, the panel is not re-read | `internal/ui/launch.go:enterFile` |
+| Enter | Executable file, shell busy | `execute()` → `Shell is busy; ⌘O to return to it` and the terminal is shown | `internal/ui/app.go:execute` |
+| Enter | Symbolic link to a folder | The link path is loaded (not the target); `..` returns to the link's folder | `internal/ui/launch.go:enterFile`, `app.go:beginLoad` |
+| Ctrl+PgDn | Cursor on `..` | `Dir == true` → `enterFile` → goes to the parent | `internal/ui/far_keys.go:farPanelKey` |
+| Ctrl+PgUp | In `/` or in the root of a remote | `filepath.Dir("/") == "/"` → re-reads the same folder | `internal/ui/far_keys.go:farPanelKey` |
+| Cmd+L | Remote panel, entering `~` or a relative path | `expand` substitutes the **local** home directory / resolves relative to the remote path; the result is sent to the server | `internal/ui/app.go:gotoPrompt, expand` |
+| Cmd+L | Archive panel | A path inside the archive → archive directory; outside → leaves the archive into a local folder | `internal/ui/app.go:Load` |
+| Remote | Every navigation | Every `Load` opens a new connection (`Remote.Dial`) and closes it after reading | `internal/ui/remote.go:loadRemote` |
+| Remote | Server returned an unsafe name / > 100000 entries | The whole load fails with `server returned an unsafe filename` / `remote folder exceeds 100000 entries`, the panel rolls back | `internal/ui/remote.go:loadRemote` |
+| Remote | Connection dropped during navigation | Asynchronous rollback to the previous listing, error in the footer; ⌘R retries | `internal/ui/panel_load.go:pollPanelLoad` |
+| Archive | The archive file was modified/deleted while being browsed | `ArchiveIndex.Check` → `archive changed on disk; leave and reopen it` on the next navigation/F3 | `internal/fsops/archive_index.go:Check` |
+| Archive | A file with an archive extension is corrupt | The `Opening archive` task ends with an error in the status (no dialog: `reportError` false), the panel does not change | `internal/ui/task.go:pollTask`, `archive_panel.go:openArchiveAt` |
+| Archive | Upper-case extension (`.ZIP`) | `ArchiveFormat` lower-cases it | `internal/fsops/formats.go:ArchiveFormat` |
+| Archive | Opening in a panel in Tree/Info/Quick view mode | The mode is forced to `Full` | `internal/ui/archive_panel.go:openArchiveAt` |
+| Alt+F1/F2 | `/Volumes` is not readable | The `os.ReadDir` error is ignored: the list contains only `/` and the home directory | `internal/ui/panel_options.go:volumes` |
+| Mouse | Click on Quick view | `panelItem` returns false → the panel is **not** activated (unlike the Info panel) | `internal/ui/mouse.go:panelItem`, `info_panel.go:infoPanelClick` |
+| Mouse | Shift+click | Always marks the range (`markRange(…, true)`); a Shift+click cannot unmark | `internal/ui/mouse.go:panelMouse` |
+| Mouse | Wheel over a Form/Menu | Moves the focus/selection by `delta` | `internal/ui/mouse.go:scrollMouse` |
+| Status line | Long message | Truncated on the right to `Cols` without wrapping; long paths in errors are not fully available | `internal/ui/draw.go:Draw` |
+| Names | Longer than the column / CJK / combining marks | Truncated without `…`; wide runes take 2 cells (`runewidth`); zero-width runes are glued to the previous cell | `internal/ui/grid.go:Text` |
+| Names | Control characters (`\n`) | In file panels they are replaced with a space; in the Tree panel they are escaped (`\n`, `\uXXXX`) — the modes behave differently | `internal/ui/grid.go:Text`, `tree.go:treeDisplayName` |
+| Geometry | Column width < 12 (narrow window + `panelSplit` 20%) | The metadata column is not drawn, names only; Brief at w=12 yields 1–2 characters of the name | `internal/ui/panel_draw.go:drawPanel` |
+| Window title | Remote panel | `Update.Title` = the remote path without the server name | `internal/ui/app.go:Poll` |
+| Selection | Quick view/Info/Tree active, `+`/`-`/`*` pressed (including Numpad) | `selectionKey` returns false → the character is appended to the command line | `internal/ui/selection_keys.go:selectionKey`, `app.go:key` |
+| Sorting | Broken mask in `SortGroups` (from setup.json) | `matchesMask` ignores the `filepath.Match` error → the group never matches, no message | `internal/ui/panel_options.go:matchesMask, sortEntries` |
+| Panels hidden | ⌘F1 when the right panel is already hidden | Both panels are hidden, `Active` does not change; keys keep acting on the invisible panel (see P1-01) | `internal/ui/archive_panel.go:togglePanel` |
+| Panel settings | The `Show hidden files` form | Also resets `ForcedVisiblePath` of both panels | `internal/ui/settings.go:settingsMenu("Panel settings")` |
+| Multiple windows | Cmd+N | The new window gets a JSON copy of the parent's `Settings` and `panelOptions`; `LoadSetup` is called only for a window without a parent | `internal/ui/windows.go:NewWindow` |
+| Closing the window/Cmd+Q during a read | — | `Close()` cancels the panel loads, the tree, the preview, the operation; no confirmation (a panel read does not count as `Busy`) | `internal/ui/app.go:Close, RequestQuit` |
+| Busy | Keys during a background task | Only Esc / Alt+C (cancel) and the question form's keys are accepted; left click on the progress `Cancel` | `internal/ui/app.go:key, click` |
+| Session | Snapshot during a load/inside an archive | The cursor is taken from the pending state; for an archive `Cursor = Base(Archive.Path)`, `Top = ""` is saved | `internal/ui/session.go:windowSnapshot` |
+| Fast find | Empty panel | The first character is accepted, the `Find` window appears, the cursor does not change | `internal/ui/fastfind.go:fastFindText, findPrefix` |
+| ⌘C (copyPanelCommand) | Cursor on `..`, no marks | The string `..` is copied; for an empty panel the clipboard is not changed (unlike Ctrl+Insert, which copies the panel path) | `internal/ui/mouse.go:copyPanelCommand` |
 
-## Приложение 2. Файловые операции, архивы, запуск программ
+## Appendix 2. File operations, archives, launching programs
 
-| Функция | Вариант | Что делает код | Код (файл:функция) |
+| Function | Case | What the code does | Code (file:function) |
 |---|---|---|---|
-| F5 Copy | Диск полон (ENOSPC), файл исчез, нет прав на чтение — на каждом файле | Для local→local каждый файл идёт через отдельный `fsops.Transfer` → `Attempt("copy")` → диалог `Error` (`Cannot copy\n<src>\nTo: <dst>\n\n<err>`) Retry/Skip/Skip all/Cancel; временный `.farshmac-copy-*` удаляется `defer os.Remove`; при Skip остальные файлы продолжаются | `remotefs/transfer.go:Copy` (worker loop), `fsops/files.go:copyRegularStream` |
-| F5 Copy | `fclonefileat` вернул ошибку, не входящую в список ENOTSUP/EXDEV/EINVAL/ENOSYS/EPERM (например ENOSPC, EACCES) | Ошибка возвращается как есть без попытки потокового копирования → диалог `Error` | `fsops/files.go:copyEntry` |
-| F5 Copy | Источник исчез между обходом и копированием (`read attributes`) | `Attempt("read attributes")` → Skip пропускает элемент, обход продолжается (`IgnoreSkipped`) | `remotefs/transfer.go:Copy.walk` |
-| F5 Copy | Ошибка в одном воркере при `workers > 1` | После ответа `Cancel` первый error через `fail()` отменяет `ctx` всех воркеров; остальные воркеры завершают текущий файл (temp удаляется) и выходят; в статусе — первая ошибка с суффиксом ` (copy <src> to <dst>)` | `remotefs/transfer.go:Copy.fail` |
-| F5 Copy | Файл на себя (оба панели в одной папке, предложенный путь) | `remotefs.Copy` для одинакового endpoint сравнивает `path.Clean` и возвращает `destination is inside source` даже для файла (локальный `fsops.transfer` вернул бы `source and destination are the same file`) | `remotefs/transfer.go:Copy` (цикл по `pairs`) |
-| F5 Copy | Жёсткие ссылки внутри копируемого дерева (не move) | Копируются как независимые файлы (`copyHardlink` работает только при `o.moving`) | `fsops/hardlinks.go:copyHardlink` |
-| F5 Copy | remote → local, флажок Permissions выключен | Файл создаётся `O_EXCL 0666` минус umask; `Chmod` не вызывается; локальный ACL родителя применяется | `remotefs/local.go:Local.Create`, `transfer.go:portableMetadata` |
-| F5 Copy | Прогресс: проценты/ETA | `o.Streaming()` до конца обхода, `o.Ready()` сразу после `close(queue)` — для большого дерева проценты появляются, когда обход закончен, а файлы ещё копируются; для одного большого файла — почти сразу | `remotefs/transfer.go:Copy` |
-| F5 из архива | Прогресс | Счётчики извлечения (`o.Add/Complete` по именам членов) и последующего копирования складываются → `N items` в окне примерно вдвое больше реального | `fsops/formats.go:extractArchive`, `transfers.go:transferDialog` |
-| F5 Copy | Enter на архиве в **удалённой** панели | Не открывает архивную панель: файл скачивается во временный каталог и открывается внутренним viewer как бинарный документ | `launch.go:enterFile` → `remote_document.go:openRemoteDocument` |
-| F6 Move | Каталог перемещается на себя | Сообщение `destination is inside source` (а не «same file») — проверка `rel == "."` срабатывает раньше `SameFile` | `fsops/transfer.go:transfer` |
-| F6 Move | Esc при слиянии каталога (same volume) | Уже перемещённые элементы остаются в назначении, источник сохраняет остальные; `delete source` не выполняется | `fsops/transfer.go:transfer` (ветка `si.IsDir() && di.IsDir()`) |
-| F6 Move | Esc на стадии копирования cross-volume | Незавершённый каталог назначения удаляется целиком (`RemoveAll(dst)` в defer `copyEntry`), источник не тронут | `fsops/files.go:copyEntry` |
-| F6 Move | Esc на стадии `delete source` cross-volume | Копия в назначении полная, источник удалён частично (прерванный `Remove`); сообщения об этом нет, только `operation cancelled` | `fsops/transfer.go:moveAcrossVolumes` |
-| F6 Move | Источник — симлинк | Переименовывается сама ссылка; симлинк → существующий каталог даёт диалог коллизии (`Existing: Folder`) и после `Overwrite` ошибку `cannot replace a file with a directory or a directory with a file` | `fsops/transfer.go:transfer` |
-| Коллизия | Esc/пустое имя в форме `Rename` | Отменяет **всю** операцию (`Resolution{Cancel}`), а не возвращает к диалогу коллизии | `operation_questions.go:collisionQuestions` |
-| Коллизия | Overwrite при изменившемся назначении | `destination changed during copy/move/append` → диалог `Error`; Retry запускает `transfer` заново → новый диалог коллизии с актуальными данными | `fsops/transfer.go`, `append.go` |
-| F7 | Имя `.`/`..`/`~`, абсолютный путь | `expand` → `MkdirAll` на существующий каталог не ошибка; панель переходит к родителю этого каталога и ставит курсор; имя, совпадающее с файлом → `Cannot create folder … not a directory` Retry/Cancel | `app.go:function case 7` |
-| F8/Shift+F8 | Симлинк на каталог | Удаляется/отправляется в Trash сама ссылка (`Lstat`, без обхода) | `fsops/progress.go:removeTreeStep`, `trash_darwin.go` |
-| Shift+F8 | Файл с флагом `uchg`, файл на read-only томе | `os.Remove` → EPERM/EROFS → диалог `Error` Retry/Skip; обхода флагов нет (политика) | `fsops/progress.go:removeTreeStep` |
-| Shift+F8 | Esc в середине | Уже удалённые элементы не восстанавливаются; родительский каталог остаётся | `fsops/progress.go:removeTreeStep` |
-| Remote delete | Сервер вернул небезопасное имя в подкаталоге | `unsafe server filename` прерывает всю операцию (не Skip) | `remotefs/transfer.go:removeTreeStep` |
-| Общее | `Cmd+Q` / закрытие окна во время операции (в т. ч. из другого окна) | `WindowGroup.advanceQuit`: `RequestQuit` ставит статус `Wait for the file operation to finish`, групповой quit прерывается; другие окна получают `Finish the quit dialog in the other window`; реальное `Close()` отменяет операцию и дожидается `cleanup` в goroutine | `windows.go:advanceQuit`, `app.go:Close` |
-| Общее | Вопрос воркера после отмены | `operationChoice` проверяет `o.Check()` внутри queued closure — диалог не открывается, если операция уже отменена | `operation_questions.go:operationChoice` |
-| Shift+Enter / Enter | Esc во время `Opening <name>` | `exec.CommandContext` убивает `/usr/bin/open`, но уже запущенное приложение не закрывается | `launch.go:launch` |
-| Enter | Ассоциация с несуществующей программой; внешний редактор завершился с ошибкой | Команда уходит в терминал; «command not found»/код возврата виден только в терминале, диалога нет | `launch.go:launch` (`plan.Command`) |
-| Enter | Файл без расширения и без exec-бита | `/usr/bin/open` → при отсутствии приложения `open` возвращает код 1 → диалог `Opening <name> failed` | `launch.go:enterFile` |
-| Shift+F1 | Расширение в верхнем регистре (`.ZIP`) | `ArchiveFormat` приводит к нижнему регистру — создаётся zip | `fsops/formats.go:ArchiveFormat` |
-| Shift+F1 | Отмена | Временный `.farshmac-zip-*`/`.farshmac-archive-*` удаляется, bsdtar убивается `SIGKILL` по группе | `fsops/formats.go:CreateArchive`, `archive.go:CreateZIP` |
-| Shift+F2 | Назначение — несуществующий родитель | `MkdirTemp` ошибка → `Error` Retry/Skip (Skip → `Done — 1 item(s) skipped`) | `fsops/formats.go:extractArchive` |
-| Archive F3 | ZIP с нестандартным методом сжатия (bzip2/lzma) | `withArchiveSelection` падает обратно на полный проход bsdtar | `fsops/archive_zip_selection.go` |
-| Apply command | Пустая/пробельная команда | Ничего не выполняется, диалог закрывается | `commands.go:applyCommand` |
+| F5 Copy | Disk full (ENOSPC), file disappeared, no read permission — on every file | For local→local every file goes through a separate `fsops.Transfer` → `Attempt("copy")` → `Error` dialog (`Cannot copy\n<src>\nTo: <dst>\n\n<err>`) Retry/Skip/Skip all/Cancel; the temporary `.farshmac-copy-*` is removed by `defer os.Remove`; on Skip the remaining files continue | `remotefs/transfer.go:Copy` (worker loop), `fsops/files.go:copyRegularStream` |
+| F5 Copy | `fclonefileat` returned an error not in the ENOTSUP/EXDEV/EINVAL/ENOSYS/EPERM list (for example ENOSPC, EACCES) | The error is returned as is without attempting a streaming copy → `Error` dialog | `fsops/files.go:copyEntry` |
+| F5 Copy | The source disappeared between the walk and the copy (`read attributes`) | `Attempt("read attributes")` → Skip skips the item, the walk continues (`IgnoreSkipped`) | `remotefs/transfer.go:Copy.walk` |
+| F5 Copy | Error in one worker with `workers > 1` | After a `Cancel` answer the first error cancels the `ctx` of all workers via `fail()`; the other workers finish their current file (temp is removed) and exit; the status shows the first error with the suffix ` (copy <src> to <dst>)` | `remotefs/transfer.go:Copy.fail` |
+| F5 Copy | File onto itself (both panels in the same folder, the suggested path) | `remotefs.Copy` for the same endpoint compares `path.Clean` and returns `destination is inside source` even for a file (the local `fsops.transfer` would return `source and destination are the same file`) | `remotefs/transfer.go:Copy` (loop over `pairs`) |
+| F5 Copy | Hard links inside the copied tree (not move) | Copied as independent files (`copyHardlink` works only when `o.moving`) | `fsops/hardlinks.go:copyHardlink` |
+| F5 Copy | remote → local, Permissions checkbox off | The file is created with `O_EXCL 0666` minus umask; `Chmod` is not called; the parent's local ACL is applied | `remotefs/local.go:Local.Create`, `transfer.go:portableMetadata` |
+| F5 Copy | Progress: percentages/ETA | `o.Streaming()` until the walk ends, `o.Ready()` right after `close(queue)` — for a large tree the percentages appear when the walk is done while files are still being copied; for a single large file — almost immediately | `remotefs/transfer.go:Copy` |
+| F5 from an archive | Progress | The extraction counters (`o.Add/Complete` by member names) and the subsequent copy are added together → `N items` in the window is roughly twice the real number | `fsops/formats.go:extractArchive`, `transfers.go:transferDialog` |
+| F5 Copy | Enter on an archive in a **remote** panel | Does not open an archive panel: the file is downloaded to a temporary directory and opened by the internal viewer as a binary document | `launch.go:enterFile` → `remote_document.go:openRemoteDocument` |
+| F6 Move | A directory is moved onto itself | The message `destination is inside source` (not "same file") — the `rel == "."` check fires before `SameFile` | `fsops/transfer.go:transfer` |
+| F6 Move | Esc while merging a directory (same volume) | Already moved items remain in the destination, the source keeps the rest; `delete source` is not performed | `fsops/transfer.go:transfer` (the `si.IsDir() && di.IsDir()` branch) |
+| F6 Move | Esc at the copy stage of a cross-volume move | The unfinished destination directory is removed entirely (`RemoveAll(dst)` in the `copyEntry` defer), the source is untouched | `fsops/files.go:copyEntry` |
+| F6 Move | Esc at the `delete source` stage of a cross-volume move | The copy in the destination is complete, the source is partially deleted (interrupted `Remove`); there is no message about this, only `operation cancelled` | `fsops/transfer.go:moveAcrossVolumes` |
+| F6 Move | The source is a symlink | The link itself is renamed; symlink → existing directory gives a collision dialog (`Existing: Folder`) and after `Overwrite` the error `cannot replace a file with a directory or a directory with a file` | `fsops/transfer.go:transfer` |
+| Collision | Esc/empty name in the `Rename` form | Cancels the **whole** operation (`Resolution{Cancel}`) rather than returning to the collision dialog | `operation_questions.go:collisionQuestions` |
+| Collision | Overwrite when the destination has changed | `destination changed during copy/move/append` → `Error` dialog; Retry runs `transfer` again → a new collision dialog with current data | `fsops/transfer.go`, `append.go` |
+| F7 | Name `.`/`..`/`~`, absolute path | `expand` → `MkdirAll` on an existing directory is not an error; the panel goes to the parent of that directory and places the cursor; a name matching a file → `Cannot create folder … not a directory` Retry/Cancel | `app.go:function case 7` |
+| F8/Shift+F8 | Symlink to a directory | The link itself is deleted/sent to the Trash (`Lstat`, no walk) | `fsops/progress.go:removeTreeStep`, `trash_darwin.go` |
+| Shift+F8 | File with the `uchg` flag, file on a read-only volume | `os.Remove` → EPERM/EROFS → `Error` dialog Retry/Skip; flags are not bypassed (policy) | `fsops/progress.go:removeTreeStep` |
+| Shift+F8 | Esc in the middle | Already deleted items are not restored; the parent directory remains | `fsops/progress.go:removeTreeStep` |
+| Remote delete | The server returned an unsafe name in a subdirectory | `unsafe server filename` aborts the whole operation (not Skip) | `remotefs/transfer.go:removeTreeStep` |
+| General | `Cmd+Q` / closing the window during an operation (including from another window) | `WindowGroup.advanceQuit`: `RequestQuit` sets the status `Wait for the file operation to finish`, the group quit is interrupted; other windows get `Finish the quit dialog in the other window`; the real `Close()` cancels the operation and waits for `cleanup` in a goroutine | `windows.go:advanceQuit`, `app.go:Close` |
+| General | A worker question after cancellation | `operationChoice` checks `o.Check()` inside the queued closure — the dialog is not opened if the operation is already cancelled | `operation_questions.go:operationChoice` |
+| Shift+Enter / Enter | Esc during `Opening <name>` | `exec.CommandContext` kills `/usr/bin/open`, but an already launched application is not closed | `launch.go:launch` |
+| Enter | Association with a non-existent program; the external editor exited with an error | The command goes to the terminal; "command not found"/the exit code is visible only in the terminal, there is no dialog | `launch.go:launch` (`plan.Command`) |
+| Enter | File without an extension and without the exec bit | `/usr/bin/open` → when there is no application `open` returns code 1 → `Opening <name> failed` dialog | `launch.go:enterFile` |
+| Shift+F1 | Upper-case extension (`.ZIP`) | `ArchiveFormat` lower-cases it — a zip is created | `fsops/formats.go:ArchiveFormat` |
+| Shift+F1 | Cancel | The temporary `.farshmac-zip-*`/`.farshmac-archive-*` is removed, bsdtar is killed with `SIGKILL` by process group | `fsops/formats.go:CreateArchive`, `archive.go:CreateZIP` |
+| Shift+F2 | Destination — a non-existent parent | `MkdirTemp` error → `Error` Retry/Skip (Skip → `Done — 1 item(s) skipped`) | `fsops/formats.go:extractArchive` |
+| Archive F3 | ZIP with a non-standard compression method (bzip2/lzma) | `withArchiveSelection` falls back to a full bsdtar pass | `fsops/archive_zip_selection.go` |
+| Apply command | Empty/whitespace-only command | Nothing is executed, the dialog closes | `commands.go:applyCommand` |
 
-## Приложение 3. Внутренний просмотрщик и редактор
+## Appendix 3. Internal viewer and editor
 
-| Функция | Вариант | Что делает код | Код (файл:функция) |
+| Function | Case | What the code does | Code (file:function) |
 |---|---|---|---|
-| F3/F4 открытие | Файл ровно 64 MiB / 64 MiB + 1 | `info.Size() > maxTextBytes` — ровно 64 MiB читается в память (`LimitReader(maxTextBytes+1)`, прочитано = лимиту — ОК); на 1 байт больше — постраничный hex | `document.go: openDocument` |
-| F3/F4 открытие | FIFO, сокет, устройство, папка через `Alt+F11` | `!info.Mode().IsRegular()` → `Choose a regular file`; битая символическая ссылка → `lstat …: no such file or directory` из `EvalSymlinks` | `document.go: openDocument` |
-| F3/F4 открытие | Файл 0 байт | `Detect` → `UTF-8` (пустой срез валиден), буфер из одной пустой строки; hex/dump рисуют пусто, заголовок `Offset 0 / 0`; Go to `0` допустим (`v >= max(1, Size)`), End = 0 | `document.go: openDocument, gotoDocument`; `document_keys.go: viewerKey` |
-| F3/F4 открытие | UTF-16 без BOM | NUL валиден для `utf8.Valid` → `Codepage = UTF-8`, `binary = true` → просмотрщик в hex, редактор `Binary data: open with F3 in hex/dump mode`. Текст виден только через Shift+F8 → `UTF-16LE/BE` | `textfile/encoding.go: Detect`; `document.go: openDocument` |
-| F3/F4 открытие | Невалидный UTF-8 (один «битый» байт в UTF-8 файле) | `Detect` → `Windows-1251` всегда; charmap-декодер не ошибается (неопределённые байты → U+FFFD), файл показывается как кириллическая «каша»; для F4 roundtrip не совпадает → `Encoding is not lossless; …` | `textfile/encoding.go: Detect, Decode`; `document.go: openDocument` |
-| Сохранение | Смешанные EOL после правки | Байт-точное сохранение (`SavedRaw`) только если ничего не менялось; после любой правки `Endings(Text, EOL)` унифицирует все окончания в определённый при открытии EOL (CRLF, если был хоть один CRLF) | `document.go: saveDocument`; `textfile/encoding.go: Normalize, Endings, DetectEOL` |
-| Сохранение | Файл без завершающего `\n` | Сохраняется как есть (Normalize ничего не добавляет); `Lines()` даёт последнюю строку без `\n` | `textfile/buffer.go: New, Lines` |
-| Сохранение | Файл стал 0444 после открытия (папка записываема) | `fsops.Save` сравнивает только inode/размер/mtime, не mode → временный файл + `chmod 0444` + `rename` — **сохранение проходит**, права сохраняются. Файл другого владельца в каталоге со sticky-bit → `rename …: operation not permitted` | `fsops/files.go: Save` |
-| Сохранение | Диск полон | `copyProgress` → `write …: no space left on device`, временный файл удалён `defer os.Remove`, целевой файл не тронут, буфер/Dirty сохранены | `fsops/files.go: Save`; `document_tasks.go: saveDocumentThen` |
-| Сохранение | Файл с `uchg` / quarantine / hardlink / xattr | `uchg` → `rename …: operation not permitted` (буфер цел); quarantine-xattr **теряется** (новый inode), т.е. сохранение снимает карантин; hardlink разрывается; xattr/ACL теряются (см. B P3-10) | `fsops/files.go: Save` |
-| Сохранение (Async) | Esc после фактического `rename`, но до применения | `applyCompleted = true` → apply всё равно выполняется (`Saved`, `markSaved`), но `done` (закрытие/выход) пропускается при `o.Check() != nil` | `document_tasks.go: saveDocumentThen`; `task.go: pollTask`; тест `cancel_test.go: TestAsyncDocumentReadReplaceSaveAndCancel` |
-| Сохранение | Paste/selectAll во время фоновой задачи | `Handle` отбрасывает все сообщения кроме key/click/resize/quit/input при `Busy`; клавиши при `Busy` — только Esc/Alt+C; клики — `click` при `Busy` → return. Поэтому гонки «правка во время `*d = *copy`» нет | `app.go: Handle (строка 546), key (632), click (1136)` |
-| Save as | Активная панель удалённая | `base = p.filesystemPath()` = `RemoteLocalPath` (последний локальный путь панели); сохранение на сервер через Save as невозможно (подпись `Local file name`) | `document.go: saveAs`; `archive_panel.go: filesystemPath` |
-| Save as | Тот же файл под другим написанием (относительный путь, `..`) | `path != d.Path` → `Lstat` → confirm `Overwrite` → `fsops.Save` с `SameFile` → проходит; `d.Path` становится новым написанием | `document.go: saveAs, saveDocument` |
-| Shift+F4 | Введён путь существующей папки | `os.Stat` OK → `openDocument(path, true)` → `Choose a regular file` | `document.go: newFile, openDocument` |
-| Shift+F4 | Новый файл, папка без прав на запись | Ошибка только при сохранении (`fsops.Create` → `open <dir>/.farshmac-new-…: permission denied`) | `document.go: newFile`; `fsops/files.go: Create` |
-| Удалённый документ | Обрыв соединения при скачивании | Ошибка задачи → статус; `cleanup` удаляет временный каталог; документ не открывается | `remote_document.go: openRemoteDocument` |
-| Удалённый документ | Обрыв/ошибка сервера при сохранении | `Dial`/`Lstat`/`remotefs.Copy` → ошибка → статус; клон отбрасывается, буфер и Dirty целы, F2 повторяет. Загрузка идёт в `.farshmac-part-<random>` + `Rename` — на сервере замена атомарна; `ExpectedDestination` повторно сверяет цель | `remote_document.go: saveRemoteDocument`; `remotefs/transfer.go: copyFile` |
-| Удалённый документ | Права на запись на сервере отсутствуют | Предварительной проверки нет; ошибка приходит от сервера при `Create(tmp)`/`Rename` (`550 …`, `permission denied`) и уходит в усечённый статус | `remote_document.go: saveRemoteDocument` |
-| Alt+F11 история | Удалённые и архивные документы | В историю попадают только локальные открытия (`openDocument`/`openDocumentAsync`); `openRemoteDocument`/`viewArchiveMember` имеют собственный apply без записи | `document_tasks.go: openDocumentAsync`; `remote_document.go`; `archive_panel.go` |
-| Закрытие окна | Красная кнопка окна / Cmd+W с несохранёнными документами | `windowShouldClose` → `{"Type":"close"}` → `WindowGroup.Handle` → `RequestQuit()` → тот же диалог `Save changes` / `Save all`, `Discard`, `Cancel`; `App.Close` закрывает `File`, удаляет `TempDir` всех документов | `window_darwin.m:150`; `windows.go:150`; `app.go: Close` |
-| Cmd+Q | `Save all` завершилось ошибкой | `saveAllThen` прерывает цепочку, выход отменяется, причина — только усечённый статус | `document_tasks.go: saveAllThen`; `app.go: RequestQuit` |
-| Ввод текста | Вставка больших блоков | Верхнего предела размера буфера в редакторе нет (можно вырастить > 64 MiB и сохранить); правка > 32 MiB очищает весь undo и сама не откатывается; > 1 MiB отключает подсветку | `textfile/buffer.go: Replace`; `document_syntax.go: pollSyntax` |
-| Ввод текста | Ввод «за концом строки» | Виртуального пространства нет: `At(row, col)` зажимает колонку длиной строки; в Overwrite в конце строки символы вставляются (не затирают `\n`) | `textfile/buffer.go: At, Insert` |
-| Undo | Undo после сохранения | Стек не очищается при `markSaved`; undo делает документ Dirty, а возврат к тексту, равному `SavedText`, снимает Dirty (`modified()`) | `textfile/buffer.go: Undo`; `document.go: documentKey ("z")` |
-| Закладки / Cmd+Z позиции | После удаления/вставки строк | Смещения не корректируются; `restore` зажимает только `Cursor` по `len(Text)`; `Offset` зажимается при отрисовке, `ViewStart` — в `visualRows`. Закладка указывает «куда-то», но не падает | `document.go: restore`; `document_draw.go: drawDoc (157), visualRows` |
-| Поиск | Regex с пустым совпадением (`^`, `a*`) | `Matches` возвращает нулевые совпадения; `Find` при пустом выделении стартует с `Next(start)` → Shift+F7 продвигается по позициям; `Replace all` вставляет замену в каждой позиции (`Replaced N matches`) | `textfile/buffer.go: Find, ReplaceAll` |
-| Поиск | Пустая строка; `Hex bytes` в dump | `enter search text`; в dump-режиме `Hex bytes` по умолчанию выключен (только `Mode == "hex"`), hex-поиск из dump переключает в hex | `textfile/buffer.go: Compile`; `document.go: searchDocument, findDocument` |
-| Hex-поиск | Нечётная/не-hex строка, `0x`-префикс | `hex.DecodeString` после удаления пробелов → `Enter pairs of hex digits, e.g. 48 65 6c 6c 6f` (префикс `0x` не поддерживается — та же ошибка) | `document.go: searchDocument` |
-| Кодировки | BOM при однобайтовой кодировке | `Encode` пишет BOM только для UTF-8/UTF-16; F9 `Write BOM` для `Windows-1251` и т.п. молча не действует; при смене UTF-8+BOM → 1251 BOM теряется без сообщения | `textfile/encoding.go: Encode` |
-| Кодировки | Сохранение в UTF-16 без BOM | Файл при следующем открытии определится как UTF-8 с NUL → «бинарный», hex-режим | `textfile/encoding.go: Detect` |
-| Кодировки | F8 в редакторе vs Shift+F8 | F8 проверяет `Encode(d.Text, …)` без `Endings`, Shift+F8 — с `Endings`; на результат не влияет (`\r` кодируется везде) | `document.go: documentKey (F8), chooseCodepage` |
-| Внешние программы | `/usr/bin/open` вернул ошибку | `workProgress("Opening <name>")` → статус `<err>: <вывод open>` (например `exit status 1: Unable to …`) | `launch.go: launch` |
-| Внешние программы | Команда не найдена / shell занят / нет shell | Непустая команда уходит в shell: «не найдена» видна только в терминале, приложение об этом не знает; shell занят → `Shell is busy; ⌘O to return to it` + показ терминала; `Term == nil` → `Shell unavailable`. После внешнего редактирования файл в панели не перечитывается автоматически | `launch.go: launch, submitCommand`; `app.go: execute` |
-| Подсветка | Helper упал / ненулевой exit / завис | `cmd.Run` error (в т.ч. kill по таймауту 2 с через `CommandContext`) → `syntax paused (limit/error)`; повторная попытка не делается, пока текст/путь не изменятся (`attempted = true`) | `highlight/highlight.go: Run`; `document_syntax.go: pollSyntax` |
-| Подсветка | Нет свободного слота (2 helper'а на все окна) | `Run` блокируется в `select` на `slots` без таймаута, пока не освободится слот или не отменится ctx (Esc/смена текста/закрытие) | `highlight/highlight.go: Run` |
-| Подсветка | Язык не определён | `lexers.Match`/`Analyse` → nil → пустой `Result`, статус пустой (без `[…]`) | `highlight/highlight.go: Parse` |
-| Подсветка | Смена темы во время задачи | Цвета подменяются на каждом `Draw` по всей сетке; задача подсветки не перезапускается | `draw.go: Draw` |
-| UI | Узкое окно | `Cols` зажат 60..300, `Rows` 15..120; ячейки key bar `W/10` → при 60 колонках подписи усечены (`9Optio`, `8Codep`); заголовок обрезается `g.Text(…, g.W)`; статус-сообщение — до `min(32, W/3)` рун | `app.go: Handle (resize)`; `document_draw.go: drawDoc` |
-| UI | Полоса прокрутки при 1 строке / клик в колонку W-1 без полосы | Полоса рисуется только при `lines > height`; но клик в `X == Cols-1` при `Scrollbar == true` всегда трактуется как drag полосы (`Offset = 0`, `ManualScroll = true`), даже если полосы нет | `document_draw.go: drawDoc, documentClick` |
-| UI | Клик ниже последней строки / в hex / правой кнопкой | `row >= len(rows)` → игнор (курсор в конец не ставится); hex/dump — игнор (кроме key bar); правая кнопка при открытом документе — игнор | `document_draw.go: documentClick`; `app.go: click (1128)` |
-| Help (F1) | `+`/`-`, Cmd+L, F12 в справке | `+`/`-` заменяют документ справки соседним файлом панели; Cmd+L ставит `RO` (бессмысленно, но безвредно); в `Screens` справка видна как `View Viewer / editor help` | `document_keys.go: adjacentFile`; `document.go: screenMenu` |
-| Несколько документов | Тот же файл открыт дважды | Дубликаты не объединяются; у второго экрана `Info` устаревает после сохранения первого → `file changed on disk; reopen it before saving` (см. B P3-04) | `document.go: showDocument, saveDocument` |
+| F3/F4 open | File exactly 64 MiB / 64 MiB + 1 | `info.Size() > maxTextBytes` — exactly 64 MiB is read into memory (`LimitReader(maxTextBytes+1)`, bytes read = limit — OK); one byte more — paged hex | `document.go: openDocument` |
+| F3/F4 open | FIFO, socket, device, folder via `Alt+F11` | `!info.Mode().IsRegular()` → `Choose a regular file`; a broken symbolic link → `lstat …: no such file or directory` from `EvalSymlinks` | `document.go: openDocument` |
+| F3/F4 open | 0-byte file | `Detect` → `UTF-8` (an empty slice is valid), a buffer of one empty line; hex/dump draw nothing, the header is `Offset 0 / 0`; Go to `0` is allowed (`v >= max(1, Size)`), End = 0 | `document.go: openDocument, gotoDocument`; `document_keys.go: viewerKey` |
+| F3/F4 open | UTF-16 without BOM | NUL is valid for `utf8.Valid` → `Codepage = UTF-8`, `binary = true` → the viewer in hex, the editor `Binary data: open with F3 in hex/dump mode`. The text is visible only via Shift+F8 → `UTF-16LE/BE` | `textfile/encoding.go: Detect`; `document.go: openDocument` |
+| F3/F4 open | Invalid UTF-8 (a single "bad" byte in a UTF-8 file) | `Detect` → `Windows-1251` always; the charmap decoder never fails (undefined bytes → U+FFFD), the file is shown as Cyrillic "garbage"; for F4 the roundtrip does not match → `Encoding is not lossless; …` | `textfile/encoding.go: Detect, Decode`; `document.go: openDocument` |
+| Saving | Mixed EOL after an edit | Byte-exact saving (`SavedRaw`) only if nothing changed; after any edit `Endings(Text, EOL)` unifies all line endings to the EOL detected at open (CRLF if there was at least one CRLF) | `document.go: saveDocument`; `textfile/encoding.go: Normalize, Endings, DetectEOL` |
+| Saving | File without a trailing `\n` | Saved as is (Normalize adds nothing); `Lines()` yields the last line without `\n` | `textfile/buffer.go: New, Lines` |
+| Saving | The file became 0444 after opening (folder writable) | `fsops.Save` compares only inode/size/mtime, not mode → temporary file + `chmod 0444` + `rename` — **the save succeeds**, permissions are preserved. A file owned by another user in a sticky-bit directory → `rename …: operation not permitted` | `fsops/files.go: Save` |
+| Saving | Disk full | `copyProgress` → `write …: no space left on device`, the temporary file is removed by `defer os.Remove`, the target file is untouched, the buffer/Dirty are preserved | `fsops/files.go: Save`; `document_tasks.go: saveDocumentThen` |
+| Saving | File with `uchg` / quarantine / hardlink / xattr | `uchg` → `rename …: operation not permitted` (the buffer is intact); the quarantine xattr **is lost** (new inode), i.e. saving removes the quarantine; the hardlink is broken; xattr/ACL are lost (see B P3-10) | `fsops/files.go: Save` |
+| Saving (Async) | Esc after the actual `rename` but before apply | `applyCompleted = true` → apply runs anyway (`Saved`, `markSaved`), but `done` (close/quit) is skipped when `o.Check() != nil` | `document_tasks.go: saveDocumentThen`; `task.go: pollTask`; test `cancel_test.go: TestAsyncDocumentReadReplaceSaveAndCancel` |
+| Saving | Paste/selectAll during a background task | `Handle` discards all messages except key/click/resize/quit/input while `Busy`; keys while `Busy` — only Esc/Alt+C; clicks — `click` while `Busy` → return. Therefore there is no "edit during `*d = *copy`" race | `app.go: Handle (line 546), key (632), click (1136)` |
+| Save as | The active panel is remote | `base = p.filesystemPath()` = `RemoteLocalPath` (the panel's last local path); saving to the server via Save as is impossible (label `Local file name`) | `document.go: saveAs`; `archive_panel.go: filesystemPath` |
+| Save as | The same file under a different spelling (relative path, `..`) | `path != d.Path` → `Lstat` → confirm `Overwrite` → `fsops.Save` with `SameFile` → succeeds; `d.Path` becomes the new spelling | `document.go: saveAs, saveDocument` |
+| Shift+F4 | The path of an existing folder is entered | `os.Stat` OK → `openDocument(path, true)` → `Choose a regular file` | `document.go: newFile, openDocument` |
+| Shift+F4 | New file, folder without write permission | Error only on save (`fsops.Create` → `open <dir>/.farshmac-new-…: permission denied`) | `document.go: newFile`; `fsops/files.go: Create` |
+| Remote document | Connection dropped during download | Task error → status; `cleanup` removes the temporary directory; the document is not opened | `remote_document.go: openRemoteDocument` |
+| Remote document | Connection drop/server error during save | `Dial`/`Lstat`/`remotefs.Copy` → error → status; the clone is discarded, the buffer and Dirty are intact, F2 retries. The upload goes to `.farshmac-part-<random>` + `Rename` — the replacement on the server is atomic; `ExpectedDestination` re-checks the target | `remote_document.go: saveRemoteDocument`; `remotefs/transfer.go: copyFile` |
+| Remote document | No write permission on the server | There is no preliminary check; the error comes from the server at `Create(tmp)`/`Rename` (`550 …`, `permission denied`) and goes into the truncated status | `remote_document.go: saveRemoteDocument` |
+| Alt+F11 history | Remote and archive documents | Only local opens (`openDocument`/`openDocumentAsync`) get into the history; `openRemoteDocument`/`viewArchiveMember` have their own apply without a record | `document_tasks.go: openDocumentAsync`; `remote_document.go`; `archive_panel.go` |
+| Closing the window | The red window button / Cmd+W with unsaved documents | `windowShouldClose` → `{"Type":"close"}` → `WindowGroup.Handle` → `RequestQuit()` → the same dialog `Save changes` / `Save all`, `Discard`, `Cancel`; `App.Close` closes `File`, removes the `TempDir` of all documents | `window_darwin.m:150`; `windows.go:150`; `app.go: Close` |
+| Cmd+Q | `Save all` ended with an error | `saveAllThen` breaks the chain, the quit is cancelled, the reason is only the truncated status | `document_tasks.go: saveAllThen`; `app.go: RequestQuit` |
+| Text input | Pasting large blocks | There is no upper limit on the buffer size in the editor (it can be grown beyond 64 MiB and saved); an edit > 32 MiB clears the whole undo and cannot itself be undone; > 1 MiB disables highlighting | `textfile/buffer.go: Replace`; `document_syntax.go: pollSyntax` |
+| Text input | Typing "past the end of the line" | There is no virtual space: `At(row, col)` clamps the column to the line length; in Overwrite at the end of the line characters are inserted (they do not overwrite `\n`) | `textfile/buffer.go: At, Insert` |
+| Undo | Undo after saving | The stack is not cleared on `markSaved`; undo makes the document Dirty, and returning to text equal to `SavedText` clears Dirty (`modified()`) | `textfile/buffer.go: Undo`; `document.go: documentKey ("z")` |
+| Bookmarks / Cmd+Z positions | After deleting/inserting lines | Offsets are not adjusted; `restore` clamps only `Cursor` by `len(Text)`; `Offset` is clamped at draw time, `ViewStart` — in `visualRows`. The bookmark points "somewhere" but does not crash | `document.go: restore`; `document_draw.go: drawDoc (157), visualRows` |
+| Search | Regex with an empty match (`^`, `a*`) | `Matches` returns zero-length matches; `Find` with an empty selection starts from `Next(start)` → Shift+F7 advances through positions; `Replace all` inserts the replacement at every position (`Replaced N matches`) | `textfile/buffer.go: Find, ReplaceAll` |
+| Search | Empty string; `Hex bytes` in dump | `enter search text`; in dump mode `Hex bytes` is off by default (only `Mode == "hex"`), a hex search from dump switches to hex | `textfile/buffer.go: Compile`; `document.go: searchDocument, findDocument` |
+| Hex search | Odd-length/non-hex string, `0x` prefix | `hex.DecodeString` after removing spaces → `Enter pairs of hex digits, e.g. 48 65 6c 6c 6f` (the `0x` prefix is not supported — same error) | `document.go: searchDocument` |
+| Encodings | BOM with a single-byte encoding | `Encode` writes a BOM only for UTF-8/UTF-16; F9 `Write BOM` for `Windows-1251` and the like silently has no effect; when switching UTF-8+BOM → 1251 the BOM is lost without a message | `textfile/encoding.go: Encode` |
+| Encodings | Saving as UTF-16 without BOM | On the next open the file is detected as UTF-8 with NUL → "binary", hex mode | `textfile/encoding.go: Detect` |
+| Encodings | F8 in the editor vs Shift+F8 | F8 checks `Encode(d.Text, …)` without `Endings`, Shift+F8 — with `Endings`; this does not affect the result (`\r` is encodable everywhere) | `document.go: documentKey (F8), chooseCodepage` |
+| External programs | `/usr/bin/open` returned an error | `workProgress("Opening <name>")` → status `<err>: <open output>` (for example `exit status 1: Unable to …`) | `launch.go: launch` |
+| External programs | Command not found / shell busy / no shell | A non-empty command goes to the shell: "not found" is visible only in the terminal, the application does not know about it; shell busy → `Shell is busy; ⌘O to return to it` + the terminal is shown; `Term == nil` → `Shell unavailable`. After external editing the file in the panel is not re-read automatically | `launch.go: launch, submitCommand`; `app.go: execute` |
+| Highlighting | Helper crashed / non-zero exit / hung | `cmd.Run` error (including kill by the 2 s timeout via `CommandContext`) → `syntax paused (limit/error)`; no retry is made until the text/path changes (`attempted = true`) | `highlight/highlight.go: Run`; `document_syntax.go: pollSyntax` |
+| Highlighting | No free slot (2 helpers for all windows) | `Run` blocks in `select` on `slots` without a timeout until a slot frees up or the ctx is cancelled (Esc/text change/close) | `highlight/highlight.go: Run` |
+| Highlighting | Language not detected | `lexers.Match`/`Analyse` → nil → empty `Result`, empty status (no `[…]`) | `highlight/highlight.go: Parse` |
+| Highlighting | Theme change during the task | Colors are substituted on every `Draw` across the whole grid; the highlighting task is not restarted | `draw.go: Draw` |
+| UI | Narrow window | `Cols` is clamped to 60..300, `Rows` to 15..120; key bar cells are `W/10` → at 60 columns the labels are truncated (`9Optio`, `8Codep`); the title is truncated with `g.Text(…, g.W)`; the status message — up to `min(32, W/3)` runes | `app.go: Handle (resize)`; `document_draw.go: drawDoc` |
+| UI | Scrollbar with 1 line / click in column W-1 without a scrollbar | The scrollbar is drawn only when `lines > height`; but a click at `X == Cols-1` with `Scrollbar == true` is always treated as a scrollbar drag (`Offset = 0`, `ManualScroll = true`) even if there is no scrollbar | `document_draw.go: drawDoc, documentClick` |
+| UI | Click below the last line / in hex / right button | `row >= len(rows)` → ignored (the cursor is not placed at the end); hex/dump — ignored (except the key bar); right button with a document open — ignored | `document_draw.go: documentClick`; `app.go: click (1128)` |
+| Help (F1) | `+`/`-`, Cmd+L, F12 in the help | `+`/`-` replace the help document with the adjacent panel file; Cmd+L sets `RO` (pointless but harmless); in `Screens` the help appears as `View Viewer / editor help` | `document_keys.go: adjacentFile`; `document.go: screenMenu` |
+| Multiple documents | The same file opened twice | Duplicates are not merged; the second screen's `Info` becomes stale after the first is saved → `file changed on disk; reopen it before saving` (see B P3-04) | `document.go: showDocument, saveDocument` |
 
-## Приложение 4. Терминал, командная строка, окна, нативная оболочка, renderer
+## Appendix 4. Terminal, command line, windows, native shell, renderer
 
-| Функция | Вариант | Что делает код | Код (файл:функция) |
+| Function | Case | What the code does | Code (file:function) |
 | --- | --- | --- | --- |
-| Ввод в командную строку (paste) | Вставка многострочного текста | Управляющие символы (включая `\n`) заменяются пробелом ДО `ReplaceAll("\n","")`, т.е. строки склеиваются через пробел, а не удаляются переводы строк; второй шаг — мёртвый код. | `app.go:Handle` case `"paste"` |
-| Ввод в командную строку (paste) | Вставка во время `Busy` | Сообщение `paste` отбрасывается молча (гейт `a.Busy && m.Type != key/click/resize/quit/input`). | `app.go:Handle` |
-| История команд Ctrl+E/X | Пустая история | Ctrl+E — no-op; Ctrl+X очищает `Command` (`a.Command = ""` до проверки индекса). ⌘↑/Ctrl+↑ при пустой истории ничего не меняют. | `far_keys.go` case `"e","x"`; `app.go:key` |
-| История команд | Изменение `HistoryLimit` в настройках | Существующая история не усекается до следующего `appendUnique` (при следующем выполнении команды). | `settings.go` Terminal settings; `commands.go:appendUnique` |
-| История команд | Ошибка записи setup.json (диск/права) | `saveSetup` выставляет `Setup saved`, затем `a.error(err)` перезаписывает статус текстом ошибки; история остаётся только в памяти. | `settings.go:saveSetup` |
-| Автодополнение ⌘Space | Очень много совпадений | Ограничения нет: форма-список `Complete filename` получает все совпадения (тысячи записей в большом каталоге). | `completion.go:applyCompletion`, `form.go:choose` |
-| Вставка имени ⌘Enter | Курсор на `..` | Вставляется литерал `.. ` (имя проходит фильтр `[A-Za-z0-9_./-]`, без кавычек). | `app.go:insertFilename` |
-| Выполнение команды | Команда длиннее 1 MiB | `Session.request` возвращает `invalid panel command or directory` (то же сообщение, что и для NUL/не-абсолютного cwd); команда остаётся в строке. | `session.go:request` |
-| Выполнение команды | Enter в терминале при незавершённой строке (PS2: `echo "` + Enter) | `input` с `\r` ставит `ShellReady=false`; preexec/precmd не срабатывают, поэтому до завершения/Ctrl+C панельный Enter даёт `Shell is busy; ⌘O to return to it`, футер — `⌘.  Interrupt`. Ctrl+C возвращает prompt → Ready. | `app.go:Handle` case `"input"` |
-| Выполнение команды | Ввод во время паузы перезапуска (`Term == nil`) | `input`/`inputBinary` молча игнорируются (нажатые клавиши теряются); статус в футере `Shell exited; restarting…`. | `app.go:Handle` |
-| Протокол готовности | `$PWD` содержит `;` | `SplitN(…, ";", 2)` — cwd с `;` разбирается верно. Символ BEL (0x07) в имени каталога обрежет маркер (cwd усечётся, хвост попадёт в вывод) — не обрабатывается, но практически не встречается. | `session.go:parser.feed` |
-| Протокол готовности | cwd — симлинк (`cd /tmp` → `$PWD=/tmp`, панель `/private/tmp`) | Сравнение строк `target == a.ShellCwd` даёт промах → лишний `ChangeDir` при каждом ⌘O (безвредно; PWD становится `/private/tmp`). | `app.go:syncShellCwd` |
-| Протокол готовности | Shell убит извне (`kill -9`) | Чтение PTY → `EIO` → `Event{Exit:true, Err:nil}` → `Shell exited; restarting…` (как обычный `exit`). | `session.go:read` |
-| Протокол готовности | Shell не читает stdin (SIGSTOP, XOFF/Ctrl+S) | Очередь `input` (32 буфера) переполняется → статус `terminal input queue is full`; writer-горутина блокируется в `f.Write` до закрытия PTY. | `session.go:Write`, `StartConfigured` writer goroutine |
-| Протокол готовности | `Session.Write` после `Close` | `select` между `s.input <-` (буферизованный канал) и `<-s.done` выбирается случайно — запись может «успешно» попасть в буфер и быть потеряна; в `App` после `Close` всегда `Term=nil`, поэтому не проявляется. | `session.go:Write` |
-| Старт терминала | `/bin/<shell>` не существует/не исполняемый | Путь жёстко `/bin/bash|sh|zsh`; ошибка `pty.StartWithSize` → `Shell: fork/exec …`, temp-каталог удаляется. Повтора нет (см. P4-03). | `session.go:StartConfigured`; `native_darwin.go:Run`; `windows.go:NewWindow`; `session.go:EnableSession` |
-| Старт терминала | Хуки других инструментов (starship, direnv, nvm) в custom prompt | bash: пользовательский `PROMPT_COMMAND` выполняется внутри `_farshmac_before_prompt` до маркера, `$?` сохраняется в `farshmac_status` до eval; zsh: `_farshmac_precmd` добавляется в конец `precmd_functions` после `.zshrc`, т.е. выполняется после пользовательских хуков. Многострочный PS1 в bash при directoryKey печатается дважды (принятие пустой строки для пересчёта PS1). | `bourne.go`, `session.go` rc |
-| Старт терминала | cwd длиннее `PATH_MAX` / недоступный для `cd` | Панель не может находиться в таком каталоге; при `Run` shell делает `builtin cd` → неудача → `Cannot enter directory: …` (zle -M) / bash: только маркер статуса 1, без сообщения в терминале. | `session.go` rc `_farshmac_panel_command`; `bourne.go` |
-| Перезапуск shell | Во время `Busy` (файловая операция) или при открытом документе/диалоге | `Poll` не зависит от `Busy`/документа: Exit обрабатывается, `[Restarting shell]` дописывается, `a.Status` перезаписывается (`Shell exited; restarting…`) даже при открытой форме. | `app.go:Poll`, `shell_restart.go` |
-| Перезапуск shell | Exit при открытом диалоге `Quit` / `A command is running. Close the application?` | Диалог остаётся, хотя команды уже нет; `No` → shell перезапускается, `Yes` → `Quit=true`, `restartShellIfDue` не запускает shell. | `app.go:confirmQuitShell`, `shell_restart.go` |
-| Синхронизация shell → панель | Shell перешёл в каталог, недоступный панели (`x` без `r`) | `Panel.Load` падает в `fsops.ReadDirectory` до `beginLoad` → панель не меняется, ошибка в `a.Status`. | `app.go:syncCwd`, `finishPanelReturn`; `app.go:Panel.Load` |
-| Scrollback/спулинг | Temp-каталог недоступен/переполнен | `NewHistory` или `Append` → `historyStatus.Error` навсегда для этого окна (футер `History: <err> · …`, `archive.enabled=false`); восстановления нет, уже записанные страницы читаются. | `terminal_history.go:appendTerminalHistory`, `history.go:Append` |
-| Scrollback/спулинг | Сегмент `.rows/.idx` удалён извне | `Append` продолжает писать в открытый (unlinked) fd — байты учитываются, строки недоступны; `Page` возвращает `open …: no such file or directory` в подписи оверлея. Детекции нет. | `history.go:Append`, `Page`; `history_view.js:update` |
-| Scrollback/спулинг | `History writer is overloaded` | Практически недостижимо: кадры отправляются только при `len(queue) < 2`, поэтому `len(queue) >= 8` невозможен; но состояние ошибки — постоянное. | `terminal_history.go:terminalCanDrain` |
-| Клавиатура в терминале | Option+буква (dead keys, `€`, `ß`, `~` на некоторых раскладках) | `macOptionIsMeta: true` — Option всегда ESC-префикс; ввести символы через Option в терминале невозможно (только через IME/вставку). | `app.js` опции `term` |
-| Клавиатура в терминале | Fn/медиа-клавиши при выключенном «Use F1, F2… as standard function keys» | Системные медиа-функции перехватывают клавишу; xterm получает F1–F12 только с зажатым Fn (README). Кода нет. | — |
-| Клавиатура в терминале | Caps Lock | Go сравнивает `EqualFold`/`ToLower` для ⌘O/N/Q/E/X/Y; renderer — `e.key.toLowerCase()`; ввод символов в командную строку — как есть. | `app.go:key`, `far_keys.go`, `app.js` |
-| Копирование/вставка | ⌘V при не-текстовом содержимом буфера (файл, картинка) | `stringForType:NSPasteboardTypeString` → nil → `return` без сообщения. | `window_darwin.m:pasteText:` |
-| Копирование/вставка | Вставка > 1 MiB в терминал | xterm `paste` (bracketed) → один `input` → `Session.Write` → статус `paste exceeds 1 MiB`; текст не вставляется целиком (без частичной вставки). | `app.js:farshmacPaste`; `session.go:Write` |
-| Мышь в терминале | Control+клик | Генерирует `contextmenu` → показывается `.clipboard-menu` (если нет mouse tracking); xterm при `rightClickSelectsWord` выделяет слово. | `app.js` `contextmenu` |
-| Renderer | Крах web-процесса WebKit | `webViewWebContentProcessDidTerminate` → `reload`; shell продолжает работать, но содержимое экрана xterm и резидентный scrollback теряются (на экране пусто до следующего вывода/Ctrl+L); дисковый архив цел, `history.total` приходит из `Update`. | `window_darwin.m` |
-| Новое окно | ⌘N при 10+ окнах | Лимита нет (ограничение 100 — только при восстановлении сессии). Точка каскада `(100+24*n, 850-24*n)` при n > 35 уходит за экран — Cocoa `cascadeTopLeftFromPoint` сама подгоняет. | `windows.go:NewWindow`, `window_darwin.m:open` |
-| Сессия | Панель на удалённом сервере | В `session.json` пишется `filesystemPath()` = `RemoteLocalPath`; после перезапуска окно открывается на локальном пути, соединение не восстанавливается. | `session.go:windowSnapshot` |
-| Сессия | Битый `session.json` | Помимо статуса `cannot read window session: …` файл перезаписывается значениями по умолчанию на первом же `Poll` (≤ 500 мс), резервной копии не делается. | `windows.go:Poll` → `SaveSession` |
-| Выход ⌘Q | Отмена на любом шаге | `quitting=false`, `approved` не очищается до следующего `BeginQuit`, где создаётся заново → при повторном ⌘Q все окна спрашиваются снова (включая ранее одобренные). | `windows.go:BeginQuit`, `advanceQuit` |
-| Нативное меню | Edit → Copy/Cut/Paste/Select All при диалоге/форме | Всегда enabled (`validateMenuItem` возвращает YES); действие уходит в `copyDocument`/`formPaste` и т.д. Services, Zoom в меню отсутствуют; `Minimize` — стандартный `performMiniaturize:` по цепочке respondent'ов. | `window_darwin.m:validateMenuItem`, `startWindows` |
-| Full Disk Access | Выдача без перезапуска | TCC применяется к новым процессам; код доступ не проверяет и не перечитывает панели; в тексте диалога — «quit and reopen». | `disk_access_darwin.m` |
+| Command line input (paste) | Pasting multi-line text | Control characters (including `\n`) are replaced with a space BEFORE `ReplaceAll("\n","")`, i.e. the lines are joined with a space rather than the line breaks being removed; the second step is dead code. | `app.go:Handle` case `"paste"` |
+| Command line input (paste) | Pasting while `Busy` | The `paste` message is silently discarded (the gate `a.Busy && m.Type != key/click/resize/quit/input`). | `app.go:Handle` |
+| Command history Ctrl+E/X | Empty history | Ctrl+E — no-op; Ctrl+X clears `Command` (`a.Command = ""` before the index check). ⌘↑/Ctrl+↑ with an empty history change nothing. | `far_keys.go` case `"e","x"`; `app.go:key` |
+| Command history | Changing `HistoryLimit` in settings | The existing history is not truncated until the next `appendUnique` (on the next command execution). | `settings.go` Terminal settings; `commands.go:appendUnique` |
+| Command history | setup.json write error (disk/permissions) | `saveSetup` sets `Setup saved`, then `a.error(err)` overwrites the status with the error text; the history remains only in memory. | `settings.go:saveSetup` |
+| Completion ⌘Space | Very many matches | No limit: the `Complete filename` list form receives all matches (thousands of entries in a large directory). | `completion.go:applyCompletion`, `form.go:choose` |
+| Insert name ⌘Enter | Cursor on `..` | The literal `.. ` is inserted (the name passes the `[A-Za-z0-9_./-]` filter, no quotes). | `app.go:insertFilename` |
+| Command execution | Command longer than 1 MiB | `Session.request` returns `invalid panel command or directory` (the same message as for NUL/non-absolute cwd); the command stays in the line. | `session.go:request` |
+| Command execution | Enter in the terminal with an unfinished line (PS2: `echo "` + Enter) | `input` with `\r` sets `ShellReady=false`; preexec/precmd do not fire, so until completion/Ctrl+C a panel Enter gives `Shell is busy; ⌘O to return to it`, the footer — `⌘.  Interrupt`. Ctrl+C returns the prompt → Ready. | `app.go:Handle` case `"input"` |
+| Command execution | Input during the restart pause (`Term == nil`) | `input`/`inputBinary` are silently ignored (the pressed keys are lost); the footer status is `Shell exited; restarting…`. | `app.go:Handle` |
+| Readiness protocol | `$PWD` contains `;` | `SplitN(…, ";", 2)` — a cwd with `;` is parsed correctly. A BEL character (0x07) in a directory name would cut the marker (the cwd gets truncated, the tail ends up in the output) — not handled, but practically never occurs. | `session.go:parser.feed` |
+| Readiness protocol | cwd is a symlink (`cd /tmp` → `$PWD=/tmp`, panel `/private/tmp`) | The string comparison `target == a.ShellCwd` misses → an extra `ChangeDir` on every ⌘O (harmless; PWD becomes `/private/tmp`). | `app.go:syncShellCwd` |
+| Readiness protocol | Shell killed externally (`kill -9`) | PTY read → `EIO` → `Event{Exit:true, Err:nil}` → `Shell exited; restarting…` (as for a normal `exit`). | `session.go:read` |
+| Readiness protocol | Shell does not read stdin (SIGSTOP, XOFF/Ctrl+S) | The `input` queue (32 buffers) overflows → status `terminal input queue is full`; the writer goroutine blocks in `f.Write` until the PTY is closed. | `session.go:Write`, `StartConfigured` writer goroutine |
+| Readiness protocol | `Session.Write` after `Close` | The `select` between `s.input <-` (a buffered channel) and `<-s.done` is chosen randomly — a write may "successfully" land in the buffer and be lost; in `App` after `Close` it is always `Term=nil`, so this does not manifest. | `session.go:Write` |
+| Terminal start | `/bin/<shell>` does not exist/is not executable | The path is hard-coded `/bin/bash|sh|zsh`; a `pty.StartWithSize` error → `Shell: fork/exec …`, the temp directory is removed. No retry (see P4-03). | `session.go:StartConfigured`; `native_darwin.go:Run`; `windows.go:NewWindow`; `session.go:EnableSession` |
+| Terminal start | Hooks of other tools (starship, direnv, nvm) in a custom prompt | bash: the user's `PROMPT_COMMAND` runs inside `_farshmac_before_prompt` before the marker, `$?` is preserved in `farshmac_status` before eval; zsh: `_farshmac_precmd` is appended to the end of `precmd_functions` after `.zshrc`, i.e. it runs after the user's hooks. A multi-line PS1 in bash is printed twice on directoryKey (accepting an empty line to recompute PS1). | `bourne.go`, `session.go` rc |
+| Terminal start | cwd longer than `PATH_MAX` / not enterable with `cd` | The panel cannot be in such a directory; on `Run` the shell does `builtin cd` → failure → `Cannot enter directory: …` (zle -M) / bash: only the status marker 1, no message in the terminal. | `session.go` rc `_farshmac_panel_command`; `bourne.go` |
+| Shell restart | While `Busy` (file operation) or with a document/dialog open | `Poll` does not depend on `Busy`/document: Exit is processed, `[Restarting shell]` is appended, `a.Status` is overwritten (`Shell exited; restarting…`) even with a form open. | `app.go:Poll`, `shell_restart.go` |
+| Shell restart | Exit while the `Quit` / `A command is running. Close the application?` dialog is open | The dialog stays although the command is gone; `No` → the shell restarts, `Yes` → `Quit=true`, `restartShellIfDue` does not start the shell. | `app.go:confirmQuitShell`, `shell_restart.go` |
+| Shell → panel sync | The shell entered a directory the panel cannot access (`x` without `r`) | `Panel.Load` fails in `fsops.ReadDirectory` before `beginLoad` → the panel does not change, the error is in `a.Status`. | `app.go:syncCwd`, `finishPanelReturn`; `app.go:Panel.Load` |
+| Scrollback/spooling | Temp directory unavailable/full | `NewHistory` or `Append` → `historyStatus.Error` forever for this window (footer `History: <err> · …`, `archive.enabled=false`); no recovery, already written pages are readable. | `terminal_history.go:appendTerminalHistory`, `history.go:Append` |
+| Scrollback/spooling | A `.rows/.idx` segment deleted externally | `Append` keeps writing to the open (unlinked) fd — the bytes are counted, the lines are unavailable; `Page` returns `open …: no such file or directory` in the overlay caption. There is no detection. | `history.go:Append`, `Page`; `history_view.js:update` |
+| Scrollback/spooling | `History writer is overloaded` | Practically unreachable: frames are sent only when `len(queue) < 2`, so `len(queue) >= 8` is impossible; but the error state is permanent. | `terminal_history.go:terminalCanDrain` |
+| Keyboard in the terminal | Option+letter (dead keys, `€`, `ß`, `~` on some layouts) | `macOptionIsMeta: true` — Option is always an ESC prefix; characters cannot be entered via Option in the terminal (only via IME/paste). | `app.js` `term` options |
+| Keyboard in the terminal | Fn/media keys with "Use F1, F2… as standard function keys" turned off | The system media functions intercept the key; xterm receives F1–F12 only with Fn held (README). There is no code. | — |
+| Keyboard in the terminal | Caps Lock | Go compares with `EqualFold`/`ToLower` for ⌘O/N/Q/E/X/Y; the renderer — `e.key.toLowerCase()`; character input into the command line — as is. | `app.go:key`, `far_keys.go`, `app.js` |
+| Copy/paste | ⌘V with non-text clipboard content (file, image) | `stringForType:NSPasteboardTypeString` → nil → `return` without a message. | `window_darwin.m:pasteText:` |
+| Copy/paste | Pasting > 1 MiB into the terminal | xterm `paste` (bracketed) → a single `input` → `Session.Write` → status `paste exceeds 1 MiB`; the text is not pasted at all (no partial paste). | `app.js:farshmacPaste`; `session.go:Write` |
+| Mouse in the terminal | Control+click | Generates `contextmenu` → the `.clipboard-menu` is shown (if there is no mouse tracking); xterm with `rightClickSelectsWord` selects the word. | `app.js` `contextmenu` |
+| Renderer | WebKit web process crash | `webViewWebContentProcessDidTerminate` → `reload`; the shell keeps running, but the xterm screen content and the resident scrollback are lost (the screen is empty until the next output/Ctrl+L); the on-disk archive is intact, `history.total` comes from `Update`. | `window_darwin.m` |
+| New window | ⌘N with 10+ windows | There is no limit (the limit of 100 applies only to session restore). The cascade point `(100+24*n, 850-24*n)` goes off-screen at n > 35 — Cocoa's `cascadeTopLeftFromPoint` adjusts it itself. | `windows.go:NewWindow`, `window_darwin.m:open` |
+| Session | Panel on a remote server | `filesystemPath()` = `RemoteLocalPath` is written to `session.json`; after a restart the window opens on the local path, the connection is not restored. | `session.go:windowSnapshot` |
+| Session | Corrupt `session.json` | Besides the status `cannot read window session: …`, the file is overwritten with default values on the very first `Poll` (≤ 500 ms), no backup copy is made. | `windows.go:Poll` → `SaveSession` |
+| Quit ⌘Q | Cancel at any step | `quitting=false`, `approved` is not cleared until the next `BeginQuit`, where it is created anew → on a repeated ⌘Q all windows are asked again (including previously approved ones). | `windows.go:BeginQuit`, `advanceQuit` |
+| Native menu | Edit → Copy/Cut/Paste/Select All with a dialog/form open | Always enabled (`validateMenuItem` returns YES); the action goes to `copyDocument`/`formPaste` etc. Services and Zoom are absent from the menu; `Minimize` is the standard `performMiniaturize:` through the responder chain. | `window_darwin.m:validateMenuItem`, `startWindows` |
+| Full Disk Access | Granted without a restart | TCC applies to new processes; the code does not check access and does not re-read the panels; the dialog text says "quit and reopen". | `disk_access_darwin.m` |
 
-## Приложение 5. Меню F9, диалоги, настройки, сетевые подключения, справка
+## Appendix 5. F9 menu, dialogs, settings, network connections, help
 
-| Функция | Вариант | Что делает код | Код (файл:функция) |
+| Function | Case | What the code does | Code (file:function) |
 | --- | --- | --- | --- |
-| Главное меню F9 | `Shift+F10`, если ни один пункт ещё не выполнялся | `lastMenu` — нулевой `MenuState` → открывается раздел `Left`, строка 0 | `app.go:key` (`F10 && Shift`) |
-| Главное меню F9 | `F12`, `Alt+F1/F2/F7/F8/F10`, `Shift+F4` при открытом меню | Открывают список/форму поверх меню; форма получает клавиши первой; после её закрытия меню остаётся открытым | `app.go:key` (проверки идут до `if a.Menu != nil`) |
-| Главное меню F9 | `F1`, `⌘1…9`, печатные клавиши при открытом меню | Попадают в `menuKey` и игнорируются (нет в `switch`); справка по `F1` из меню недоступна | `menu.go:menuKey` |
-| Главное меню F9 | Длинная подпись пункта | Обрезается до `w-4-len(shortcut)` колонок; шорткат рисуется в фиксированных 9 правых колонках | `menu.go:drawMenu` |
-| Главное меню F9 | Клик вне рамки / по разделителю / по заголовку другого раздела | Вне рамки — закрыть; по разделителю — ничего; по заголовку в строке 0 — переключить раздел (обрабатывается в `click` до `menuClick`) | `menu.go:menuClick`, `app.go:click` |
-| Главное меню F9 | `PageUp/PageDown` | Шаг `Rows-5`, курсор потом «перепрыгивает» разделитель | `menu.go:menuKey` |
-| Главное меню F9 | Открытие при документе/форме/диалоге/Busy/терминале | Недостижимо: `key` маршрутизирует в `Form`/`Dialog`/`Doc`/`Busy` раньше; `click` по строке 0 блокируется `a.Doc != nil`; клик мышью при `Busy`/`Doc` отвергается | `app.go:key`, `app.go:click` |
-| Form (поля) | `Enter` на toggle-поле или в любом текстовом поле | Отправляет форму (`Submit`), не переключает флажок | `form.go:formKey` |
-| Form (поля) | `Esc` при изменённых полях | Закрывает без вопроса, изменения теряются | `form.go:formKey` |
-| Form / Dialog | Клик мышью вне окна | Игнорируется, окно остаётся (нет закрытия по клику вне) | `form.go:formClick`, `draw.go:promptClick` |
-| Form (поля) | `Alt+буква` без совпадения с мнемоникой | `App.key` нормализует `m.Key` к латинской букве по `m.Code` → в поле вставляется латинская буква; Option-символы (`ø`, `ß`, `€`) ввести в поле формы/диалога нельзя | `app.go:key` (первая строка), `form.go:formKey` |
-| Form (поля) | `⌘C`/`⌘X` в текстовом поле | Копирует/вырезает **всё** значение поля в системный буфер (без учёта выделения); в Dialog — весь `Input` | `document.go:copyDocument` |
-| Form (поля) | Очень длинное значение | Поле показывает окно вокруг каретки (`editWindow`); прокрутки по словам нет | `modal.go:editWindow`, `modalInput` |
-| Form (поля) | Поля не помещаются по высоте | Прокрутка следует за фокусом, индикатор `▲`; разделители вне видимой области не рисуются | `form.go:formGeometry`, `drawForm` |
-| Form (список) | Больше 26 пунктов / повторяющиеся первые буквы | Акселераторы назначаются первой ещё не занятой букве; когда буквы кончились — пункт без акселератора (`key == 0`) | `modal.go:mnemonicKeys` |
-| Form (список) | Клик по строке | Одинарный клик сразу выбирает (`Enter`), двойной не нужен | `form.go:formClick` |
-| Form (confirm) | Перенос текста | По количеству рун, не по словам и не по ширине CJK | `form.go:confirmationLayout` |
-| Dialog (prompt) | Сообщение длиннее 3 строк | Обрезается молча; перенос по символам | `draw.go:drawDialog`, `promptBounds` |
-| Dialog (prompt) | Вставка многострочного текста | Управляющие символы → пробел (переводы строк тоже становятся пробелами) | `app.go:Handle` (`paste`) |
-| Make folder (F7) | Пустое/пробельное имя | Молча игнорируется, без сообщения | `app.go:function(7)` |
-| General settings | `Font size` = `+14`, ` 14` | `strconv.Atoi` принимает `+14`, отвергает пробелы (`Font size must be 10–24`) | `settings.go:settingsMenu` |
-| Terminal settings | `Shell` с пробелами; уменьшение `HistoryLimit` | `TrimSpace`; история не обрезается немедленно, только при следующем `appendUnique` | `settings.go`, `commands.go:appendUnique` |
-| Editor settings | `Tab width` вне 1–16 в setup.json | `normalizeSettings` сбрасывает на 4 (не clamp, в отличие от FontSize/HistoryLimit/TreeDepth, которые clamp-ятся) | `settings.go:normalizeSettings` |
-| Все настройки | Отсутствующие поля в setup.json | `Unmarshal` поверх `defaultSettings()` → отсутствующие поля получают defaults, а не нули | `settings.go:LoadSetup` |
-| Все настройки | Строка вместо числа / массив >10 для `Shortcuts` | `json.Unmarshal` возвращает ошибку → **все** настройки и истории заменяются defaults, молча (см. P5-04) | `settings.go:LoadSetup` |
-| Colors / Code pages | Неизвестное значение `ColorTheme`/`DefaultCodepage` в setup.json | Не нормализуется: `Draw` применяет палитру только для `Dark`/`Light` (иначе классика); `textfile.codec` возвращает `nil` для неизвестного имени | `draw.go:Draw`, `textfile/encoding.go:codec` |
-| General settings | Применение `FontSize`/`ColorTheme`/`ShowKeys` | Немедленно в этом окне (`Update.FontSize` каждый `Poll`, палитра — в каждом `Draw`); другие окна не затрагиваются | `app.go:Poll`, `draw.go:Draw` |
-| New window (⌘N) | Копирование настроек | `Settings` сериализуются в JSON и десериализуются в новое окно → секреты (`json:"-"`) не копируются; `dialogValues`, истории — не копируются | `windows.go:NewWindow` |
-| Save setup | Каталог конфигурации не создаётся / временный файл не пишется | Статус = текст ошибки ОС (`a.error` поверх `Setup saved`); `saveFolderShortcut` проверяет `Status == "Setup saved"` | `settings.go:saveSetup`, `folder_shortcuts.go` |
-| Save setup | `DescriptionFile` = `.`/`..` | Проходят `filepath.Base(s) == s`, сохраняются; запись `descript.ion` потом завершится ошибкой rename | `settings.go` (`File descriptions`, `normalizeSettings`) |
-| Network connections | URL без схемы, `host:22`, `user@host` | `url.Parse` даёт пустую схему → `use sftp://host, ftp://host or ftps://host` | `remotefs/fs.go:Parse` |
-| Network connections | Пробел внутри URL, `@` в имени пользователя внутри URL, `sftp://::1` без скобок | `url.Parse` → `invalid server address`; IPv6 в скобках (`sftp://[::1]:22/`) поддерживается через `JoinHostPort` | `remotefs/fs.go:Parse`, `Address` |
-| Network connections | Ключ без прав 0600 | Не проверяется (в отличие от OpenSSH); читается любой файл ≤ 1 MiB | `remotefs/ssh_defaults.go:readPrivateKey` |
-| Network connections | `SSH_AUTH_SOCK` не задан / агент недоступен | Молча пропускается; при отсутствии других методов — `no usable SSH identity…` | `remotefs/sftp.go:dialSFTP` |
-| Network connections | known_hosts без прав чтения | `os.Stat` успешен → `knownhosts.New` возвращает ошибку открытия → в статус, без диалога | `remotefs/sftp.go:HostKeyCallback` |
-| Network connections | Несколько ключей хоста в known_hosts | Предпочтение алгоритмов уже известных типов (`hostKeyAlgorithms`), RSA расширяется до `rsa-sha2-256/512` | `remotefs/ssh_defaults.go` |
-| Удалённая панель | Сервер упал после подключения | Каждая загрузка — новый `Dial`; при `Async` ошибка попадает в `p.Err` и рисуется в строке статуса панели, содержимое панели откатывается к предыдущему снимку | `panel_load.go:pollPanelLoad`, `panel_draw.go` |
-| FTP | Режим передачи | Только пассивный (EPSV/PASV библиотеки); активного режима нет | `remotefs/ftp.go:dialFTPWithTLS` |
-| FTP | Пароль с пробелами/не-ASCII | Передаётся как есть; отвергаются только `\x00\r\n` | `remotefs/ftp.go` |
-| Change volume… | Панель удалённая/архивная | `Remote = nil` без `cancelPanelLoad`/`cancelTree`/сброса `states`/`RemoteLocalPath`; гонки нет, т.к. `loadPanel` сам отменяет предыдущую загрузку | `panel_options.go:volumes` |
-| Disconnect active panel | Панель не удалённая | Молча ничего | `remote.go:disconnectRemote` |
-| Профили | connections.json повреждён | `loadConnectionProfiles` молча оставляет профили из setup.json; `saveConnectionProfile` возвращает ошибку → `; profile not saved: <err>` при каждом подключении | `connection_profiles.go` |
-| Справка F1 | Внутри документа | `F1` в Help-документе — no-op; в обычном документе — `Viewer / editor help`; `F9` в документе открывает `documentSettings`, а не главное меню | `document.go:documentKey` |
-| Строка статуса | Обрезка / перезапись | Обрезается по ширине без «…»; перезаписывается `backgroundTask` (label), `pollTask` (`""`), событием готовности shell (`Exit N · ⌘O panels / terminal`) даже в режиме панелей | `draw.go:Draw`, `task.go`, `app.go:Poll` |
+| Main menu F9 | `Shift+F10` when no item has been executed yet | `lastMenu` is a zero `MenuState` → the `Left` section opens, row 0 | `app.go:key` (`F10 && Shift`) |
+| Main menu F9 | `F12`, `Alt+F1/F2/F7/F8/F10`, `Shift+F4` with the menu open | Open a list/form on top of the menu; the form receives keys first; after it closes the menu stays open | `app.go:key` (the checks come before `if a.Menu != nil`) |
+| Main menu F9 | `F1`, `⌘1…9`, printable keys with the menu open | Go to `menuKey` and are ignored (not in the `switch`); help via `F1` is not available from the menu | `menu.go:menuKey` |
+| Main menu F9 | Long item label | Truncated to `w-4-len(shortcut)` columns; the shortcut is drawn in the fixed 9 rightmost columns | `menu.go:drawMenu` |
+| Main menu F9 | Click outside the frame / on a separator / on another section's title | Outside the frame — close; on a separator — nothing; on a title in row 0 — switch section (handled in `click` before `menuClick`) | `menu.go:menuClick`, `app.go:click` |
+| Main menu F9 | `PageUp/PageDown` | Step `Rows-5`, then the cursor "jumps over" the separator | `menu.go:menuKey` |
+| Main menu F9 | Opening with a document/form/dialog/Busy/terminal | Unreachable: `key` routes to `Form`/`Dialog`/`Doc`/`Busy` earlier; a `click` on row 0 is blocked by `a.Doc != nil`; a mouse click while `Busy`/`Doc` is rejected | `app.go:key`, `app.go:click` |
+| Form (fields) | `Enter` on a toggle field or in any text field | Submits the form (`Submit`), does not toggle the checkbox | `form.go:formKey` |
+| Form (fields) | `Esc` with modified fields | Closes without asking, the changes are lost | `form.go:formKey` |
+| Form / Dialog | Mouse click outside the window | Ignored, the window stays (no close on outside click) | `form.go:formClick`, `draw.go:promptClick` |
+| Form (fields) | `Alt+letter` not matching a mnemonic | `App.key` normalizes `m.Key` to a Latin letter by `m.Code` → the Latin letter is inserted into the field; Option characters (`ø`, `ß`, `€`) cannot be typed into a form/dialog field | `app.go:key` (first line), `form.go:formKey` |
+| Form (fields) | `⌘C`/`⌘X` in a text field | Copies/cuts the **entire** field value to the system clipboard (ignoring the selection); in a Dialog — the whole `Input` | `document.go:copyDocument` |
+| Form (fields) | Very long value | The field shows a window around the caret (`editWindow`); there is no word-wise scrolling | `modal.go:editWindow`, `modalInput` |
+| Form (fields) | Fields do not fit in height | Scrolling follows the focus, `▲` indicator; separators outside the visible area are not drawn | `form.go:formGeometry`, `drawForm` |
+| Form (list) | More than 26 items / repeated first letters | Accelerators are assigned to the first letter not yet taken; when the letters run out — an item without an accelerator (`key == 0`) | `modal.go:mnemonicKeys` |
+| Form (list) | Click on a row | A single click selects immediately (`Enter`), a double click is not needed | `form.go:formClick` |
+| Form (confirm) | Text wrapping | By rune count, not by words and not by CJK width | `form.go:confirmationLayout` |
+| Dialog (prompt) | Message longer than 3 lines | Truncated silently; wrapped by characters | `draw.go:drawDialog`, `promptBounds` |
+| Dialog (prompt) | Pasting multi-line text | Control characters → space (line breaks also become spaces) | `app.go:Handle` (`paste`) |
+| Make folder (F7) | Empty/whitespace-only name | Silently ignored, no message | `app.go:function(7)` |
+| General settings | `Font size` = `+14`, ` 14` | `strconv.Atoi` accepts `+14`, rejects spaces (`Font size must be 10–24`) | `settings.go:settingsMenu` |
+| Terminal settings | `Shell` with spaces; decreasing `HistoryLimit` | `TrimSpace`; the history is not trimmed immediately, only on the next `appendUnique` | `settings.go`, `commands.go:appendUnique` |
+| Editor settings | `Tab width` outside 1–16 in setup.json | `normalizeSettings` resets it to 4 (not clamped, unlike FontSize/HistoryLimit/TreeDepth, which are clamped) | `settings.go:normalizeSettings` |
+| All settings | Missing fields in setup.json | `Unmarshal` on top of `defaultSettings()` → missing fields get defaults rather than zeros | `settings.go:LoadSetup` |
+| All settings | A string instead of a number / an array >10 for `Shortcuts` | `json.Unmarshal` returns an error → **all** settings and histories are replaced with defaults, silently (see P5-04) | `settings.go:LoadSetup` |
+| Colors / Code pages | Unknown `ColorTheme`/`DefaultCodepage` value in setup.json | Not normalized: `Draw` applies the palette only for `Dark`/`Light` (otherwise classic); `textfile.codec` returns `nil` for an unknown name | `draw.go:Draw`, `textfile/encoding.go:codec` |
+| General settings | Applying `FontSize`/`ColorTheme`/`ShowKeys` | Immediately in this window (`Update.FontSize` on every `Poll`, the palette — on every `Draw`); other windows are not affected | `app.go:Poll`, `draw.go:Draw` |
+| New window (⌘N) | Copying settings | `Settings` are serialized to JSON and deserialized into the new window → secrets (`json:"-"`) are not copied; `dialogValues` and histories are not copied | `windows.go:NewWindow` |
+| Save setup | The configuration directory cannot be created / the temporary file cannot be written | Status = the OS error text (`a.error` on top of `Setup saved`); `saveFolderShortcut` checks `Status == "Setup saved"` | `settings.go:saveSetup`, `folder_shortcuts.go` |
+| Save setup | `DescriptionFile` = `.`/`..` | They pass `filepath.Base(s) == s` and are saved; writing `descript.ion` later fails with a rename error | `settings.go` (`File descriptions`, `normalizeSettings`) |
+| Network connections | URL without a scheme, `host:22`, `user@host` | `url.Parse` yields an empty scheme → `use sftp://host, ftp://host or ftps://host` | `remotefs/fs.go:Parse` |
+| Network connections | A space inside the URL, `@` in the user name inside the URL, `sftp://::1` without brackets | `url.Parse` → `invalid server address`; IPv6 in brackets (`sftp://[::1]:22/`) is supported via `JoinHostPort` | `remotefs/fs.go:Parse`, `Address` |
+| Network connections | Key without 0600 permissions | Not checked (unlike OpenSSH); any file ≤ 1 MiB is read | `remotefs/ssh_defaults.go:readPrivateKey` |
+| Network connections | `SSH_AUTH_SOCK` not set / agent unavailable | Silently skipped; when no other methods exist — `no usable SSH identity…` | `remotefs/sftp.go:dialSFTP` |
+| Network connections | known_hosts without read permission | `os.Stat` succeeds → `knownhosts.New` returns an open error → to the status, no dialog | `remotefs/sftp.go:HostKeyCallback` |
+| Network connections | Several host keys in known_hosts | Algorithms of already known types are preferred (`hostKeyAlgorithms`), RSA is expanded to `rsa-sha2-256/512` | `remotefs/ssh_defaults.go` |
+| Remote panel | The server went down after connecting | Every load is a new `Dial`; with `Async` the error goes into `p.Err` and is drawn in the panel status line, the panel content rolls back to the previous snapshot | `panel_load.go:pollPanelLoad`, `panel_draw.go` |
+| FTP | Transfer mode | Passive only (the library's EPSV/PASV); there is no active mode | `remotefs/ftp.go:dialFTPWithTLS` |
+| FTP | Password with spaces/non-ASCII | Sent as is; only `\x00\r\n` are rejected | `remotefs/ftp.go` |
+| Change volume… | The panel is remote/archive | `Remote = nil` without `cancelPanelLoad`/`cancelTree`/resetting `states`/`RemoteLocalPath`; there is no race, since `loadPanel` itself cancels the previous load | `panel_options.go:volumes` |
+| Disconnect active panel | The panel is not remote | Silently does nothing | `remote.go:disconnectRemote` |
+| Profiles | connections.json is corrupt | `loadConnectionProfiles` silently keeps the profiles from setup.json; `saveConnectionProfile` returns an error → `; profile not saved: <err>` on every connection | `connection_profiles.go` |
+| Help F1 | Inside a document | `F1` in the Help document — no-op; in a regular document — `Viewer / editor help`; `F9` in a document opens `documentSettings`, not the main menu | `document.go:documentKey` |
+| Status line | Truncation / overwriting | Truncated to the width without "…"; overwritten by `backgroundTask` (label), `pollTask` (`""`), by the shell readiness event (`Exit N · ⌘O panels / terminal`) even in panels mode | `draw.go:Draw`, `task.go`, `app.go:Poll` |

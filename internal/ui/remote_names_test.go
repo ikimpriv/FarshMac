@@ -37,7 +37,7 @@ func TestRemoteInvalidUTF8NamesAreDisplayedButNotCopied(t *testing.T) {
 		t.Fatal(a.Status)
 	}
 	o := fsops.NewOperation("copy")
-	err = remotefs.Copy(remotefs.Endpoint{Remote: &c}, remotefs.Endpoint{}, []remotefs.Pair{{Source: "/bad\xff.txt", Destination: filepath.Join(t.TempDir(), "bad.txt")}}, remotefs.CopyOptions{Workers: 1}, o)
+	err = remotefs.Copy(remotefs.RemoteEndpoint(&c), remotefs.Endpoint{}, []remotefs.Pair{{Source: "/bad\xff.txt", Destination: filepath.Join(t.TempDir(), "bad.txt")}}, remotefs.CopyOptions{Workers: 1}, o)
 	if err == nil || !strings.Contains(err.Error(), "filename is not valid UTF-8: 626164ff2e747874") {
 		t.Fatal("invalid name copied", err)
 	}

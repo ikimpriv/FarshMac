@@ -84,10 +84,10 @@ func (d *Document) checkSaveAccess() {
 	if d.Help || d.ArchiveSource {
 		return
 	}
-	if d.Remote != nil {
-		if d.RemoteInfo != nil && d.RemoteInfo.Mode().Perm()&0222 == 0 {
+	if d.Source != nil {
+		if blocked := d.Source.Blocked(d.SourceInfo); blocked != "" {
 			d.SaveStrategy = fsops.SaveNone
-			d.saveBlocked = fmt.Sprintf("mode %v", d.RemoteInfo.Mode().Perm())
+			d.saveBlocked = blocked
 		} else {
 			d.SaveStrategy = fsops.SaveReplace
 		}
@@ -109,9 +109,9 @@ func (a *App) saveWarning(d *Document, first string, choose func(int)) {
 	if first == "" {
 		message = filepath.Base(d.Path) + " cannot be saved here: " + d.saveBlocked
 	}
-	if d.Remote != nil {
+	if d.Source != nil {
 		title = "Remote file is read-only"
-		message = d.RemotePath + " has " + d.saveBlocked + ". Saving will probably fail."
+		message = d.Source.Display() + " has " + d.saveBlocked + ". Saving will probably fail."
 	}
 	a.confirm(title, message, buttons, func(i int) {
 		if first == "" {
@@ -134,7 +134,7 @@ func (a *App) presentDocument(d *Document, show func(*Document)) {
 		return
 	}
 	first := "View"
-	if d.Info == nil && d.Remote == nil {
+	if d.Info == nil && d.Source == nil {
 		first = "" // A new file has nothing to view.
 	}
 	a.saveWarning(d, first, func(i int) {
@@ -195,7 +195,7 @@ func (a *App) saveFailed(d *Document, path string, overwrite bool, done func(), 
 		display = d.displayPath()
 		name = filepath.Base(display)
 	}
-	remote := d.Remote != nil && path == d.Path
+	remote := d.Source != nil && path == d.Path
 	switch {
 	case !remote && errors.Is(err, fsops.ErrInPlaceRequired):
 		a.confirm("Save in place", fmt.Sprintf("%s is not writable, so %s will be rewritten in place (not atomically). Continue?", filepath.Dir(path), name), []string{"Save", "Cancel"}, func(i int) {
@@ -210,7 +210,7 @@ func (a *App) saveFailed(d *Document, path string, overwrite bool, done func(), 
 		a.confirm("File changed on disk", name+" was modified on the server.\nOverwrite it with your text?", []string{"Overwrite", "Save as…", "Cancel"}, func(i int) {
 			switch i {
 			case 0:
-				a.saveRemoteDocument(d, done, true)
+				a.saveSourceDocument(d, done, true)
 			case 1:
 				a.saveAsThen(d, done)
 			default:
@@ -298,8 +298,8 @@ func (a *App) reloadDocument() {
 	}
 	reload := func() {
 		replace := func(n *Document) { a.replaceReloaded(d, n) }
-		if d.Remote != nil {
-			a.downloadRemoteDocument(*d.Remote, d.RemotePath, d.Edit, replace, nil)
+		if d.Source != nil {
+			a.openSourceDocument(d.Source, d.Edit, replace, nil)
 			return
 		}
 		if a.Async {

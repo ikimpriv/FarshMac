@@ -375,3 +375,74 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Kubernetes client (added with the Kubernetes panel)
+
+The Kubernetes panel uses the official Go client and kubectl's describe
+library. The modules below are compiled into the executable; their license
+texts are in their module directories (go mod download). All are permissive
+(Apache-2.0, BSD, MIT, ISC).
+
+github.com/blang/semver/v4 v4.0.0 — MIT
+github.com/davecgh/go-spew v1.1.1 — ISC
+github.com/emicklei/go-restful/v3 v3.12.2 — MIT
+github.com/fatih/camelcase v1.0.0 — MIT
+github.com/fxamacker/cbor/v2 v2.9.0 — MIT
+github.com/go-errors/errors v1.4.2 — MIT (LICENSE.MIT upstream)
+github.com/go-logr/logr v1.4.3 — Apache-2.0
+github.com/go-openapi/jsonpointer v0.21.0 — Apache-2.0
+github.com/go-openapi/jsonreference v0.20.2 — Apache-2.0
+github.com/go-openapi/swag v0.23.0 — Apache-2.0
+github.com/google/btree v1.1.3 — Apache-2.0
+github.com/google/gnostic-models v0.7.0 — Apache-2.0
+github.com/google/uuid v1.6.0 — BSD-3-Clause
+github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 — BSD-2-Clause
+github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 — MIT
+github.com/josharian/intern v1.0.0 — MIT
+github.com/json-iterator/go v1.1.12 — MIT
+github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de — BSD-3-Clause
+github.com/mailru/easyjson v0.7.7 — MIT
+github.com/moby/spdystream v0.5.1 — Apache-2.0
+github.com/moby/term v0.5.0 — Apache-2.0
+github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd — Apache-2.0
+github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee — Apache-2.0
+github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 — MIT
+github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 — BSD-3-Clause
+github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f — BSD-3-Clause
+github.com/peterbourgon/diskv v2.0.1+incompatible — MIT
+github.com/pmezard/go-difflib v1.0.0 — BSD-2-Clause
+github.com/spf13/cobra v1.10.0 — Apache-2.0
+github.com/spf13/pflag v1.0.9 — BSD-3-Clause
+github.com/x448/float16 v0.8.4 — MIT
+github.com/xlab/treeprint v1.2.0 — MIT
+go.yaml.in/yaml/v2 v2.4.3 — Apache-2.0
+go.yaml.in/yaml/v3 v3.0.5 — Apache-2.0
+golang.org/x/net v0.56.0 — BSD-3-Clause
+golang.org/x/oauth2 v0.30.0 — BSD-3-Clause
+golang.org/x/sync v0.22.0 — BSD-3-Clause
+golang.org/x/term v0.45.0 — BSD-3-Clause
+golang.org/x/time v0.9.0 — BSD-3-Clause
+google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af — BSD-3-Clause
+gopkg.in/evanphx/json-patch.v4 v4.13.0 — BSD-3-Clause
+gopkg.in/inf.v0 v0.9.1 — BSD-3-Clause
+gopkg.in/yaml.v3 v3.0.1 — Apache-2.0
+k8s.io/api v0.35.10 — Apache-2.0
+k8s.io/apimachinery v0.35.10 — Apache-2.0
+k8s.io/cli-runtime v0.35.10 — Apache-2.0
+k8s.io/client-go v0.35.10 — Apache-2.0
+k8s.io/component-helpers v0.35.10 — Apache-2.0
+k8s.io/klog/v2 v2.130.1 — Apache-2.0
+k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 — Apache-2.0
+k8s.io/kubectl v0.35.10 — Apache-2.0
+k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 — Apache-2.0
+sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 — Apache-2.0
+sigs.k8s.io/kustomize/api v0.20.1 — Apache-2.0
+sigs.k8s.io/kustomize/kyaml v0.20.1 — Apache-2.0
+sigs.k8s.io/randfill v1.0.0 — Apache-2.0
+sigs.k8s.io/structured-merge-diff/v6 v6.3.0 — Apache-2.0
+sigs.k8s.io/yaml v1.6.0 — Apache-2.0
+
+Apache License 2.0 modules carry the full text at
+https://www.apache.org/licenses/LICENSE-2.0 and, where present, a NOTICE file
+that is reproduced by the module.

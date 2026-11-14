@@ -173,7 +173,7 @@ func (a *App) sortMenu(index int) {
 	a.choose("Sort mode", labels, func(i int) {
 		switch i {
 		case 9, 10, 11, 12:
-			if p.Remote != nil {
+			if !p.can(capMetadataSort) {
 				a.Status = "This sort mode requires local file metadata"
 				return
 			}
@@ -355,21 +355,28 @@ func writeConfigFile(path string, data []byte, ops ...*fsops.Operation) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+func (p *Panel) rememberFileView() {
+	if p.Kube == nil && p.Remote == nil && p.Archive == nil && p.View != "Quick view" && p.View != "Info panel" && p.View != "Tree panel" {
+		p.lastFileView = p.View
+	}
+}
+
 func (a *App) setView(index int, view string) {
 	// Quick view only previews the other panel, so it works for remote
 	// panels like Ctrl+Q; Tree and Info panel need a local folder.
-	if a.Panels[index].Remote != nil && (view == "Tree panel" || view == "Info panel") {
-		a.Status = "Choose a file view for remote panels"
-		return
-	}
 	p := &a.Panels[index]
-	if p.Archive != nil && view == "Tree panel" {
+	if view == "Tree panel" && !p.can(capTree) && p.kind() == backendArchive {
 		a.Status = "Tree view is unavailable inside archives"
 		return
 	}
+	if view == "Tree panel" && !p.can(capTree) || view == "Info panel" && !p.can(capInfo) {
+		a.Status = "Choose a file view for remote panels"
+		return
+	}
+	p.rememberFileView()
 	p.View = view
 	p.Hidden = false
-	if p.Remote == nil || view != "Quick view" {
+	if !p.served() || view != "Quick view" {
 		a.error(p.Load(p.Path))
 	}
 	a.previewKey = ""
@@ -407,6 +414,19 @@ func (a *App) openVolume(index int, path string) {
 	p.cancelPanelLoad()
 	p.cancelTree()
 	previous := *p
-	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
+	p.rememberFileView()
+	p.Remote, p.RemoteLocalPath, p.Archive, p.Kube = nil, "", nil, nil
+	p.View = p.lastFileView
+	if p.View == "" {
+		p.View = "Full"
+	}
+	p.viewReturns = nil
+	if previous.Kube != nil && previous.Kube != a.Panels[1-index].Kube {
+		previous.Kube.stopWatches()
+	}
+	a.previewKey, a.previewImage = "", ""
+	if a.previewOperation != nil {
+		a.previewOperation.Cancel()
+	}
 	a.error(p.loadSource(path, previous, ""))
 }

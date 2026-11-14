@@ -33,7 +33,7 @@ func TestShellRestartBackoffStopsAfterRepeatedStartupFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.Shell = "zsh"
 	a.Settings.ShellCustomPrompt = false
 	a.TermVisible = true
@@ -88,7 +88,7 @@ func TestShellRestartFallsBackToHomeWhenCwdNotExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.ShellCustomPrompt = false
 	if err = os.Chmod(locked, 0600); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestInitialShellStartFailureIsRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.Shell = "fish"
 	a.Settings.ShellCustomPrompt = false
 	a.StartTerminalOrRetry()
@@ -145,7 +145,7 @@ func TestShellIntegrationWatchdogRestoresReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Settings.Shell = "bash"
 	a.Settings.ShellCustomPrompt = false
 	if err = a.StartTerminal(); err != nil {
@@ -182,7 +182,7 @@ func TestCommandHistoryRequestFailureReportsToOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Handle(`{"Type":"commandHistory"}`)
 	u := a.Poll()
 	if u.Commands == nil || len(*u.Commands) != 0 || u.CommandsError != "Cannot read shell history: shell unavailable" {
@@ -204,10 +204,26 @@ func TestWhitespaceCommandIsNotExecuted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer closeAndWait(a)
 	a.Command = " \t "
 	a.Handle(`{"Type":"key","Key":"Enter"}`)
 	if a.Command != "" || len(a.history) != 0 || strings.HasPrefix(a.Status, "Shell unavailable") {
 		t.Fatalf("whitespace command executed: %q %v %q", a.Command, a.history, a.Status)
+	}
+}
+
+// closeAndWait closes the app and waits for its shell to exit. Session.Close
+// does not wait (the UI must not block), but an exiting shell still writes
+// ~/.bash_history; with HOME in a test's temporary folder that write would
+// race the folder's removal ("directory not empty").
+func closeAndWait(a *App) {
+	term := a.Term
+	a.Close()
+	if term == nil {
+		return
+	}
+	select {
+	case <-term.Exited():
+	case <-time.After(5 * time.Second):
 	}
 }

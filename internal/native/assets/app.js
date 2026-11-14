@@ -107,7 +107,18 @@ function toggleHistory(){if(mode!=='terminal')return false;if(historyView.visibl
 window.farshmacToggleOutputHistory=toggleHistory;
 function toggleCommands(){if(mode!=='terminal')return false;if(commandHistory.visible)commandHistory.close();else {if(historyView.visible)historyView.close();commandHistory.open();}return true;}
 window.farshmacToggleHistory=toggleCommands;
+// Held modifiers drive the key bar rows (Shift/Ctrl/Alt/Cmd) like Far Manager.
+// Only changes are reported; losing focus releases everything.
+let heldModifiers='';
+function reportModifiers(e){
+ const m={Type:'modifiers',Shift:!!e.shiftKey,Ctrl:!!e.ctrlKey,Alt:!!e.altKey,Meta:!!e.metaKey};
+ const state=[m.Shift,m.Ctrl,m.Alt,m.Meta].join();
+ if(state===heldModifiers)return;heldModifiers=state;send(m);
+}
+document.addEventListener('keyup',reportModifiers,true);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)reportModifiers({});});
 document.addEventListener('keydown',e=>{
+ reportModifiers(e);
  if(e.metaKey&&e.shiftKey&&!e.ctrlKey&&!e.altKey&&(e.code==='KeyH'||e.key.toLowerCase()==='h')&&mode==='terminal'){
   e.preventDefault();e.stopImmediatePropagation();toggleCommands();return;
  }
@@ -154,7 +165,7 @@ panelEl.addEventListener('pointermove',e=>{
 });
 function endDrag(e){if(dragTimer)clearTimeout(dragTimer);flushDrag();dragging=false;dragEvent=null;if(dragTimer)clearTimeout(dragTimer);dragTimer=null;send({Type:'mouseUp'});if(panelEl.hasPointerCapture(e.pointerId))panelEl.releasePointerCapture(e.pointerId);}
 panelEl.addEventListener('pointerup',endDrag);panelEl.addEventListener('pointercancel',endDrag);
-window.addEventListener('blur',()=>{dragging=false;dragEvent=null;send({Type:'mouseUp'});});
+window.addEventListener('blur',()=>{dragging=false;dragEvent=null;send({Type:'mouseUp'});reportModifiers({});});
 panelEl.addEventListener('wheel',e=>{e.preventDefault();const m=pointer(e,'wheel');m.Delta=Math.sign(e.deltaY)*Math.max(1,Math.min(12,Math.ceil(Math.abs(e.deltaY)/20)));send(m);},{passive:false});
 // Browser navigation/context actions must never replace the file-manager UI.
 const menu=document.createElement('div');menu.className='clipboard-menu';menu.hidden=true;document.body.append(menu);

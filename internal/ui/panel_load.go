@@ -1,6 +1,9 @@
 package ui
 
-import "farshmac/internal/fsops"
+import (
+	"farshmac/internal/fsops"
+	"time"
+)
 
 type panelLoad struct {
 	o        *fsops.Operation
@@ -8,6 +11,7 @@ type panelLoad struct {
 	previous Panel
 	failure  string
 	done     chan panelResult
+	started  time.Time
 }
 
 // panelRollback is the panel as it was before a caller switched its source
@@ -62,7 +66,7 @@ func (p *Panel) loadPanel(path string) error {
 	p.cancelPanelLoad()
 	p.cancelTree()
 	o := fsops.NewOperation("Reading folder")
-	job := &panelLoad{o: o, state: state, previous: previous, failure: failure, done: make(chan panelResult, 1)}
+	job := &panelLoad{o: o, state: state, previous: previous, failure: failure, done: make(chan panelResult, 1), started: time.Now()}
 	p.load = job
 	p.Err = "Reading folder… Esc stops"
 	worker := *p

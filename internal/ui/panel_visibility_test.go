@@ -286,3 +286,21 @@ func TestFolderShortcutKeepsRememberedPositions(t *testing.T) {
 		t.Fatal("bookmark jump forgot cursor/marks", p.Entries[p.Cursor].Name, p.Marked)
 	}
 }
+
+func TestVolumeRestoresOrdinaryViewFromSpecialPanels(t *testing.T) {
+	for _, view := range []string{"Quick view", "Info panel", "Tree panel"} {
+		t.Run(view, func(t *testing.T) {
+			a, _ := visibilityFixture(t)
+			a.setView(1, "Detailed")
+			a.setView(1, view)
+			a.Panels[1].Hidden = true
+			target := t.TempDir()
+			a.openVolume(1, target)
+			waitNetwork(t, a)
+			p := &a.Panels[1]
+			if p.View != "Detailed" || p.Hidden || p.Path != target {
+				t.Fatalf("view=%s hidden=%v path=%s", p.View, p.Hidden, p.Path)
+			}
+		})
+	}
+}

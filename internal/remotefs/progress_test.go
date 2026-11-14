@@ -45,7 +45,7 @@ func TestRemoteMoveProgressShowsPath(t *testing.T) {
 	o := fsops.NewOperation("Move")
 	defer o.Cancel()
 	o.Streaming()
-	if err = remotefs.Move(f, remotefs.Endpoint{Remote: &c}, "/from", "/to", o); err != nil {
+	if err = remotefs.Move(f, remotefs.RemoteEndpoint(&c), "/from", "/to", o); err != nil {
 		t.Fatal(err)
 	}
 	p := o.Snapshot()
