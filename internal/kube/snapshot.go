@@ -16,6 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// ClusterScope is a virtual path segment, never an API namespace.
+const ClusterScope = "@cluster"
+
+// NodeScopePrefix identifies a lazily loaded, server-filtered pod snapshot.
+const NodeScopePrefix = "@node:"
+
 // tableAccept asks the server for printer columns plus the row's metadata.
 const tableAccept = "application/json;as=Table;v=v1;g=meta.k8s.io, application/json"
 
@@ -66,7 +72,16 @@ func tableObjectPolicy(r Resource) string {
 }
 
 func (c *Client) listTable(ctx context.Context, r Resource, ns string) ([]*Object, string, error) {
-	raw, err := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).SetHeader("Accept", tableAccept).Param("includeObject", tableObjectPolicy(r)).Do(ctx).Raw()
+	node := strings.TrimPrefix(ns, NodeScopePrefix)
+	isNode := strings.HasPrefix(ns, NodeScopePrefix)
+	if ns == ClusterScope || isNode {
+		ns = ""
+	}
+	req := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).SetHeader("Accept", tableAccept).Param("includeObject", tableObjectPolicy(r))
+	if isNode {
+		req = req.Param("fieldSelector", "spec.nodeName="+node)
+	}
+	raw, err := req.Do(ctx).Raw()
 	if err != nil {
 		return nil, "", err
 	}
@@ -141,6 +156,7 @@ func decodeTableRows(table *metav1.Table, r Resource, ns string, defs []metav1.T
 }
 
 func applyMetadata(o *Object, m metav1.ObjectMeta) {
+	o.Deleting = m.DeletionTimestamp != nil
 	o.Name = m.Name
 	o.UID = m.UID
 	o.ResourceVersion = m.ResourceVersion
@@ -150,8 +166,12 @@ func applyMetadata(o *Object, m metav1.ObjectMeta) {
 	o.Created = m.CreationTimestamp.Time
 	o.Labels = m.Labels
 	o.Owners = nil
+	o.ControllerOwner = ""
 	for _, owner := range m.OwnerReferences {
 		o.Owners = append(o.Owners, owner.UID)
+		if owner.Controller != nil && *owner.Controller {
+			o.ControllerOwner = owner.UID
+		}
 	}
 }
 
@@ -228,10 +248,20 @@ func sortObjects(objects []*Object) {
 // Types that cannot be listed are recorded in Skipped; the call fails only
 // when the namespace itself cannot be read or the context ends.
 func (c *Client) LoadSnapshot(ctx context.Context, ns string, hidden map[string]bool) (*Snapshot, error) {
-	if _, err := c.core.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err != nil {
-		return nil, err
+	node := strings.HasPrefix(ns, NodeScopePrefix)
+	cluster := ns == ClusterScope
+	if !cluster && !node {
+		if _, err := c.core.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err != nil {
+			return nil, err
+		}
 	}
-	resources, err := c.Resources(ctx)
+	resources, err := c.resourcesForScope(ctx, !cluster)
+	if node {
+		resources = nil
+		if r, ok := c.ResourceByFolder("pods"); ok {
+			resources = []Resource{r}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

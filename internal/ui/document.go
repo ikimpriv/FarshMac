@@ -168,6 +168,7 @@ func (a *App) finishCloseDocument() {
 		a.Documents = a.Documents[:len(a.Documents)-1]
 	}
 	a.refresh()
+	a.restoreSearchResults()
 }
 func (a *App) open(edit bool) {
 	path := a.Panels[a.Active].Current()

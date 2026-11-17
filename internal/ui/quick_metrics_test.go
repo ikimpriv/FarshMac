@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"farshmac/internal/docker"
 	"farshmac/internal/kube"
+	"farshmac/internal/kube/kubetest"
 	"farshmac/internal/metrics"
 	"fmt"
 	"math"
@@ -212,5 +213,72 @@ func TestQuickMemorySelection(t *testing.T) {
 	catalog = append(catalog, metrics.Descriptor{ID: "fallback", Name: "kubernetes_container_memory_usage_bytes", Target: "app"})
 	if ids := quickSeriesIDs(catalog[3:]); len(ids) != 1 || ids[0] != "fallback" {
 		t.Fatal(ids)
+	}
+}
+
+func TestQuickNodeCapacityAndDevices(t *testing.T) {
+	labels := map[string]string{"farshmac_pod": "Node worker · pods"}
+	d := metrics.Descriptor{Name: "kubernetes_container_cpu_usage_cores", Kind: "gauge", Labels: labels}
+	value := 2.0
+	panel := &compactMetricsPanel{enabled: [3]bool{true, true, false}, packet: &metrics.Packet{Series: []metrics.Series{{Descriptor: d, Points: []metrics.Point{{Time: time.Now().UnixMilli(), Value: &value}}}}}}
+	panel.packet.References = []metrics.Reference{
+		{Descriptor: metrics.Descriptor{Name: "farshmac_node_capacity_cpu_cores", Labels: labels}, Resource: "cpu_cores", Bound: "capacity", Value: 8},
+		{Descriptor: metrics.Descriptor{Name: "farshmac_node_allocatable_cpu_cores", Labels: labels}, Resource: "cpu_cores", Bound: "allocatable", Value: 7},
+	}
+	deviceLabels := map[string]string{"farshmac_pod": "Node worker · pods", "device": "nvidia.com/gpu"}
+	for _, r := range []struct {
+		bound string
+		value float64
+	}{{"allocated", 0}, {"allocatable", 4}, {"capacity", 8}} {
+		panel.packet.References = append(panel.packet.References, metrics.Reference{Descriptor: metrics.Descriptor{Labels: deviceLabels}, Resource: "device", Bound: r.bound, Value: r.value})
+	}
+	for _, theme := range []string{"Classic", "Dark", "Light"} {
+		svg := quickMetricsSVG(panel, theme, 800, 640)
+		for _, want := range []string{"28.6% allocatable", "Allocatable 7 cores", "nvidia.com/gpu", "0 / 4 allocated", "device-allocation"} {
+			if !strings.Contains(svg, want) {
+				t.Fatal(want, svg)
+			}
+		}
+		var root struct{ XMLName xml.Name }
+		if err := xml.Unmarshal([]byte(svg), &root); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestQuickNodeMetricsLaunch(t *testing.T) {
+	a, f := kubeApp(t)
+	f.Add("/api/v1/nodes", kubetest.Obj("Node", "", "worker", "worker-uid", nil, nil, nil))
+	a.error(a.Panels[0].Load("/@cluster/nodes"))
+	waitNetwork(t, a)
+	selectEntry(t, &a.Panels[0], "worker")
+	a.key(Message{Key: "q", Ctrl: true, Shift: true})
+	waitWork(t, a)
+	if a.compactMetrics == nil || a.compactMetrics.title != "Nodes · pod usage" {
+		t.Fatal("node monitor did not open", a.Status)
+	}
+	if a.compactMetrics.enabled[2] {
+		t.Fatal("storage must not masquerade as node usage")
+	}
+	packet := a.compactMetrics.session.Packet(true)
+	if len(packet.Endpoints) != 2 {
+		t.Fatal("usage and capacity must be independent", packet.Endpoints)
+	}
+}
+
+func TestNodeAllocatableScale(t *testing.T) {
+	for _, tc := range []struct {
+		usage, allocatable, capacity, want float64
+		bytes                              bool
+	}{
+		{3.12, 12, 12, 12, false},
+		{42.8, 163.5, 163.6, 163.5, true},
+		{13, 12, 16, 20, false},
+	} {
+		refs := []metrics.Reference{{Bound: "allocatable", Value: tc.allocatable}, {Bound: "capacity", Value: tc.capacity}}
+		maximum, shown := quickMetricScale(tc.usage, refs, tc.bytes)
+		if maximum != tc.want || len(shown) != 1 || shown[0].Bound != "allocatable" {
+			t.Fatal(tc, maximum, shown)
+		}
 	}
 }

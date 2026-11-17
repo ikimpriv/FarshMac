@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -102,9 +103,17 @@ func expired(err error) bool {
 // watchOnce runs one watch request until the stream ends; it returns the
 // last resourceVersion seen, so the next request continues from there.
 func (c *Client) watchOnce(ctx context.Context, r Resource, ns, rv string, defs *[]metav1.TableColumnDefinition, events chan<- Event) (string, error) {
+	node := strings.TrimPrefix(ns, NodeScopePrefix)
+	isNode := strings.HasPrefix(ns, NodeScopePrefix)
+	if ns == ClusterScope || isNode {
+		ns = ""
+	}
 	req := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).
 		SetHeader("Accept", tableAccept).
 		Param("watch", "true").Param("allowWatchBookmarks", "true").Param("includeObject", tableObjectPolicy(r))
+	if isNode {
+		req = req.Param("fieldSelector", "spec.nodeName="+node)
+	}
 	if rv != "" {
 		req = req.Param("resourceVersion", rv)
 	}

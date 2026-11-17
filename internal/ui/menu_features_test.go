@@ -13,11 +13,14 @@ import (
 func waitWork(t *testing.T, a *App) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for a.Busy && time.Now().Before(deadline) {
+	pending := func() bool {
+		return a.Busy || a.searchSession != nil && (!a.searchSession.done || a.searchSession.tree && (a.searchSession.treeDone != nil || a.searchSession.treeRevision != a.searchSession.revision))
+	}
+	for pending() && time.Now().Before(deadline) {
 		a.Poll()
 		time.Sleep(time.Millisecond)
 	}
-	if a.Busy {
+	if pending() {
 		t.Fatal("operation did not finish")
 	}
 }
@@ -99,7 +102,7 @@ func TestMenuScrollClickAndViews(t *testing.T) {
 		t.Fatal("menu exceeds window")
 	}
 	a.click(Message{X: x + 3, Y: y + h - 2})
-	if a.Form == nil || !strings.Contains(a.Form.Title, "Kubernetes") {
+	if a.Form == nil || a.Form.Title != "Network connections" {
 		t.Fatal("scrolled click dispatched wrong command")
 	}
 	a.Form = nil

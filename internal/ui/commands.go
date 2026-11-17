@@ -8,7 +8,6 @@ import (
 	"farshmac/internal/terminal"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,14 +45,12 @@ func (a *App) backgroundProgress(label string, fn func(*fsops.Operation) (func()
 	})
 }
 func (a *App) findFiles(folders bool) {
-	if a.remoteUnsupported() {
-		return
-	}
+	index := a.Active
+	source := a.Panels[index]
 	title := "Find file"
 	if folders {
 		title = "Find folder"
 	}
-	root := a.Panels[a.Active].Path
 	a.form(title, []Field{{Label: "Name masks", Value: "*"}, {Label: "Containing text"}, {Label: "Search subfolders", Toggle: true, Checked: true}, {Label: "Case sensitive text", Toggle: true}}, func(f []Field) {
 		mask, needle := f[0].Value, f[1].Value
 		groups := a.Settings.MaskGroups
@@ -61,78 +58,17 @@ func (a *App) findFiles(folders bool) {
 			a.error(err)
 			return
 		}
+		if source.Archive != nil && needle != "" {
+			a.reopenForm(f, 1, "Archive search supports names; extract files to search their contents")
+			return
+		}
 		if !f[3].Checked {
 			needle = strings.ToLower(needle)
 		}
-		a.backgroundProgress("Searching "+root, func(o *fsops.Operation) (func(), error) {
-			var paths []string
-			skipped := 0
-			limit := false
-			err := fsops.WalkDir(root, o, func(path string, d fs.DirEntry, e error) error {
-				if err := o.Check(); err != nil {
-					return err
-				}
-				o.Add(path, 0)
-				if e != nil {
-					skipped++
-					if d != nil && d.IsDir() {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if path == root {
-					return nil
-				}
-				if d.IsDir() && !f[2].Checked && filepath.Dir(path) != root {
-					return filepath.SkipDir
-				}
-				if matchesMask(d.Name(), mask, groups) && (!folders || d.IsDir()) {
-					match := needle == ""
-					if !match && !d.IsDir() {
-						info, e := d.Info()
-						if e == nil && info.Mode().IsRegular() {
-							match, e = fileContains(path, needle, f[3].Checked, o)
-							if e != nil {
-								if o.Check() != nil {
-									return fsops.ErrCancelled
-								}
-								skipped++
-							}
-						}
-					}
-					if match {
-						paths = append(paths, path)
-						if len(paths) >= 10000 {
-							limit = true
-							return fs.SkipAll
-						}
-					}
-				}
-				if d.IsDir() && !f[2].Checked {
-					return filepath.SkipDir
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-			return func() {
-				if len(paths) == 0 {
-					a.Status = fmt.Sprintf("No matches (%d unreadable paths)", skipped)
-					return
-				}
-				labels := make([]string, len(paths))
-				for i, p := range paths {
-					labels[i], _ = filepath.Rel(root, p)
-				}
-				caption := fmt.Sprintf("%s — %d found, %d unreadable", title, len(paths), skipped)
-				if limit {
-					caption += " (limit)"
-				}
-				a.choose(caption, labels, func(i int) { a.revealPath(paths[i]) })
-			}, nil
-		})
+		a.startSearch(source, index, title, searchOptions{mask: mask, needle: needle, groups: groups, folders: folders, recursive: f[2].Checked, sensitive: f[3].Checked}, nil)
+
 	})
+	a.Form.Selected = true
 	a.Form.Primary = "Find"
 	a.Form.CheckColumns = 2
 }
@@ -146,6 +82,9 @@ func fileContains(path, needle string, sensitive bool, ops ...*fsops.Operation) 
 		return false, e
 	}
 	defer f.Close()
+	return readerContains(f, needle, sensitive, o)
+}
+func readerContains(f io.Reader, needle string, sensitive bool, o *fsops.Operation) (bool, error) {
 	buf := make([]byte, 64*1024)
 	tail := ""
 	for {
@@ -532,13 +471,11 @@ func (a *App) taskList() {
 	})
 }
 func (a *App) treeMenu() {
-	if a.remoteUnsupported() {
-		return
-	}
 	index := a.Active
 	root := a.Panels[index].Path
 	options := a.Panels[index].treeOptions()
 	a.backgroundProgress("Reading folder tree", func(o *fsops.Operation) (func(), error) {
+		options.ctx = o.Context()
 		options.check = o.Check
 		options.progress = func(path string, _ int) { o.Add(path, 0) }
 		result := scanTree(root, options)

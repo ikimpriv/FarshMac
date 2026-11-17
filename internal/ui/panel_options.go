@@ -114,6 +114,20 @@ func (p *Panel) sortEntries(files []Entry) {
 		switch p.Sort {
 		case "Created", "Accessed", "Owner":
 			cmp = compareStat(a, b, p.Sort)
+		case "Age":
+			if a.Info != nil && b.Info != nil {
+				if a.Info.ModTime().After(b.Info.ModTime()) {
+					cmp = -1
+				} else if a.Info.ModTime().Before(b.Info.ModTime()) {
+					cmp = 1
+				}
+			}
+		case "State":
+			x, xok := a.Info.(*kubeEntry)
+			y, yok := b.Info.(*kubeEntry)
+			if xok && yok {
+				cmp = strings.Compare(strings.ToLower(x.column), strings.ToLower(y.column))
+			}
 		case "Description":
 			cmp = strings.Compare(p.Descriptions[a.Name], p.Descriptions[b.Name])
 		case "Extension":
@@ -148,6 +162,9 @@ func (p *Panel) sortEntries(files []Entry) {
 func (a *App) sortMenu(index int) {
 	p := &a.Panels[index]
 	names := []string{"Name", "Extension", "Size", "Modified", "Reverse order", "Case sensitive", "Mix directories and files", "Selected first", "Unsorted", "Created", "Accessed", "Description", "Owner"}
+	if p.Kube != nil && p.kubeLevel().Level != kubeContainerFS {
+		names = append(names, "Age", "State")
+	}
 	current := p.Sort
 	if current == "" {
 		current = "Name"
@@ -178,7 +195,7 @@ func (a *App) sortMenu(index int) {
 				return
 			}
 			p.Sort = names[i]
-		case 0, 1, 2, 3, 8:
+		case 0, 1, 2, 3, 8, 13, 14:
 			p.Sort = names[i]
 		case 4:
 			p.Reverse = !p.Reverse
@@ -366,7 +383,7 @@ func (a *App) setView(index int, view string) {
 		a.stopCompactMetrics(true)
 	}
 	// Quick view only previews the other panel, so it works for remote
-	// panels like Ctrl+Q; Tree and Info panel need a local folder.
+	// panels like Ctrl+Q; Tree support follows the source strategy.
 	p := &a.Panels[index]
 	if view == "Tree panel" && !p.can(capTree) && p.kind() == backendArchive {
 		a.Status = "Tree view is unavailable inside archives"

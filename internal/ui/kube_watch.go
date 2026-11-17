@@ -83,7 +83,7 @@ func (k *kubePanel) watchFolder(ctx context.Context, ns string, r kube.Resource,
 			k.snapshots[ns] = snap.Apply(ev)
 		}
 		if ev.Object != nil && isPodObject(ev.Object) {
-			delete(k.pods, ns+"/"+ev.Object.Name)
+			delete(k.pods, ev.Object.Namespace+"/"+ev.Object.Name)
 		}
 		k.mu.Unlock()
 		k.watchChanged(ev.Type)

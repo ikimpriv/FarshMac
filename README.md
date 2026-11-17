@@ -9,7 +9,7 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.24.0 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.25.0 · macOS 12+ · Apple Silicon and Intel**
 
 **File context menu (F11 / Alt+Enter):** compose a message with attachments in the macOS Mail sharing service, create a ZIP / tar.gz / tar.bz2 archive, or choose an installed application compatible with all selected files. FarshMac does not send email itself. Remote files are staged locally for external applications and retained until the FarshMac window closes.
 
@@ -27,11 +27,11 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.24.0)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.25.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.24.0.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.25.0.md) for installation details and known limitations.
 
 ## Features
 
@@ -90,7 +90,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Cmd+O | Switch between panels and terminal; synchronize the folder |
 | Cmd+Option+F3 | Calculate all displayed folder sizes |
 | Shift+F3 / Alt+F3 / Shift+F4 | Kubernetes panel: logs / follow logs in the terminal / describe |
-| Ctrl+Shift+Q | Toggle Quick Live Metrics in the opposite panel for selected Kubernetes pods/containers or Docker containers; 1/2/3 toggle CPU/memory/storage, P pauses, PgUp/PgDn pages the legend |
+| Ctrl+Shift+Q | Toggle Quick Live Metrics in the opposite panel for selected Kubernetes pods/containers, namespace/workload folders, or Docker containers; 1/2/3 toggle CPU/memory/storage, P pauses, PgUp/PgDn pages the legend |
 | F3 / F4 | View / edit; F3 on an image or PDF opens a graphical view (black background, picture centred, Esc closes); F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
@@ -243,3 +243,44 @@ Quick Live Metrics uses **Working set** by default. Press **M** with the metrics
 Markdown files (`.md`, `.markdown`, `.mdown`, `.mkd`) open as formatted documents in F3 and supported Quick view panels, using the current theme and system fonts. Tables, task lists, fenced code, footnotes and internal heading links are supported. **Cmd+Shift+M** toggles source/formatting in the viewer; F7 searches the source, and F4 from panels still opens the editor. Rendering is asynchronous and limited to 256 KiB, with a visible notice for larger files; the complete source remains available in the normal viewer. Local and relative raster images are loaded from the document's own filesystem, including remote/container sources, and decoded in the preview helper. Images are bounded to eight per document, 12 MiB per input, 768 pixels on the longer side, and 8 MiB of embedded output. Missing or unsupported images retain their alternative text. Embedded HTML and automatic HTTP image loading remain disabled.
 
 In the F3 PDF viewer, **0** fits the page, **W** fits its width, and **+ / −** changes zoom. Page Up/Down (or **[ / ]**) and the toolbar move between pages; Home/End open the first/last page. Arrow keys, Space/Shift+Space and the mouse wheel scroll within a page. The toolbar shows the current scale; fitting follows the window size and preserves the page aspect ratio. All PDF pages are available; only the current page is decoded, with cancellation on page changes or closing.
+
+### Search boundaries
+
+Alt+F7 searches the current real or virtual source by name masks and optional text. Kubernetes/Docker catalog searches stop before container filesystems; start inside a container to search its files explicitly. Local searches skip nested network mounts and never follow directory symlinks. Archive name searches stay within the open archive. See [tree and search strategies](docs/SEARCH_STRATEGIES.md) for limits and backend-specific behavior.
+
+Search results appear as they are found and remain usable during collection.
+In the results list, **F3** views without stopping search, **Enter** cancels and
+navigates to the object, and **F2** stops while keeping partial results. Kubernetes
+results default to a flat list; **F5** toggles the optional ownership tree.
+
+Search respects hidden-item visibility: when hidden files are disabled, hidden
+folders and their descendants are excluded. The name mask is selected on opening
+Alt+F7, so typing immediately replaces it.
+
+Kubernetes panels dim completed/terminating resources and highlight failure
+states in red. The sort menu (Ctrl+F12) includes **Age** (youngest first) and
+**State**, with reverse ordering available. Type folders are dimmed when all
+contained objects are inactive; folders with errors are red.
+
+Quick Live Metrics on namespace and workload folders aggregates descendant pods
+through ownerReferences (including Deployment → ReplicaSet → Pod). Overlapping
+selections count each pod once. CPU and memory working set come from Metrics
+Server using namespace-wide lists, with workload membership refreshed as resources
+change. Ephemeral helpers are excluded. This view does not require PodToast and
+has no 32-pod selection limit. Storage is disabled because Metrics Server does not
+provide it; unavailable or incomplete metrics produce a gap rather than a false
+zero/partial total. Requests and limits are not drawn for aggregate scopes.
+
+Shell output selection works in every shell context (local, SSH and containers):
+**Shift+arrows** extends by cells/rows, **Option+Shift+Left/Right** by words, and
+**Cmd+Shift+Left/Right** or **Shift+Home/End** to line boundaries. **Cmd+C/V** copies
+and pastes; **Ctrl+C** still interrupts the running program. Drag selects output,
+**Option+drag** selects a rectangle, and **Shift+drag** forces selection when a
+terminal application handles the mouse. Esc clears selection. Selection also
+works on the currently loaded disk-history page without loading the whole spool.
+
+In Kubernetes panels, **Cmd+Shift+.** opens cluster-level resources (Nodes, PersistentVolumes, CRDs, ClusterRoles, etc.). Press it again to return to the previous location. Namespaced resources remain in the namespace browser. In filesystem views, including container files, the same shortcut toggles hidden files.
+
+When resource names collide, built-in types keep their short names (for example `nodes`, `deployments`); other types use `plural.group`. Enter a core Node to browse its `pods` folder, grouped by scheduling via `spec.nodeName`. Pod rows use `namespace:pod` so names remain unambiguous across namespaces. This view loads lazily and does not change pod ownership.
+
+Quick Live Metrics on core Nodes sums workload-container CPU and Working set across all namespaces, with one line per selected node. For a single node, Allocatable defines the top of the chart, unless observed usage exceeds it. Legends show percentage of Allocatable; the redundant Capacity line is omitted. Host processes are not part of the pod aggregate. Compact GPU/custom-device bars show scheduler allocation units versus allocatable units and capacity as advertised by the device plugin—not utilization. Shared GPU slots and MIG slices remain separate resource types. These bars work without Metrics Server; CPU/memory usage requires it. DRA-only devices that are not advertised as extended Node resources are not counted.

@@ -16,6 +16,7 @@ type TableColumn struct{ Name, Value string }
 // Object is the panel's view of one resource instance: metadata and printer
 // columns, never the full manifest.
 type Object struct {
+	Deleting        bool
 	Pod             *PodSummary
 	GVR             schema.GroupVersionResource
 	Kind            string
@@ -24,6 +25,7 @@ type Object struct {
 	UID             types.UID
 	ResourceVersion string
 	Created         time.Time
+	ControllerOwner types.UID // Preferred ownerReference for ownership result trees.
 	Owners          []types.UID
 	Labels          map[string]string
 	Columns         []TableColumn

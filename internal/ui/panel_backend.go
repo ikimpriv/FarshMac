@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"farshmac/internal/fsops"
 	"farshmac/internal/remotefs"
 )
 
@@ -82,6 +83,7 @@ func modifiersOf(m Message) modifiers {
 // remote server or a Kubernetes cluster. Panel keeps the source-specific
 // state (Remote, Archive, Kube); the backend interprets it.
 type panelBackend interface {
+	Browse(*Panel, *fsops.Operation) (browseStrategy, error)
 	Kind() backendKind
 	// Label prefixes the panel title and history entries ("", "[Archive] ", "sftp://user@host").
 	Label(p *Panel) string
@@ -267,7 +269,7 @@ type remoteBackend struct{}
 func (remoteBackend) Kind() backendKind     { return backendRemote }
 func (remoteBackend) Label(p *Panel) string { return p.Remote.Label() }
 func (remoteBackend) Caps(*Panel) panelCaps {
-	return capExecute | capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capFolderSize | capQuickView
+	return capFind | capTree | capExecute | capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capFolderSize | capQuickView
 }
 func (remoteBackend) FilesystemPath(p *Panel) string { return p.RemoteLocalPath }
 func (remoteBackend) Virtual(*Panel, string) bool    { return true }
@@ -285,7 +287,7 @@ func (remoteBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	ctrl := keyBarCtrl
 	ctrl[7], ctrl[8], ctrl[9] = "", "", "" // metadata sorts need local files
 	alt := keyBarAlt
-	alt[6] = ""
+	alt[6] = "Find"
 	return keyBarFor(mods, plain, shift, ctrl, alt)
 }
 func (remoteBackend) DocumentSource(p *Panel, path string) documentSource {

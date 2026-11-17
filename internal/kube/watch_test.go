@@ -36,7 +36,7 @@ func TestSnapshotResourceVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.ResourceVersions["pods"] == "" || s.Resources["pods"].GVR != gvrPods || s.Resources["deployments.apps"].Kind != "Deployment" {
+	if s.ResourceVersions["pods"] == "" || s.Resources["pods"].GVR != gvrPods || s.Resources["deployments"].Kind != "Deployment" {
 		t.Fatalf("resource versions %v resources %v", s.ResourceVersions, s.Resources)
 	}
 	if _, rv, err := c.NamespacesRV(context.Background()); err != nil || rv == "" {

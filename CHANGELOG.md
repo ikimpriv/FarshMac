@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.25.0 — Streaming search and Kubernetes node insights
+
+- Scale node pod-usage charts to Allocatable without rounding up to unused headroom; show percentages against Allocatable and omit redundant Capacity lines. Expand only for actual usage above Allocatable.
+
+- Show Quick Live Metrics for Nodes: sum pod CPU/working set across namespaces, compare with node capacity and allocatable resources, and display compact device reservation bars for GPUs and other extended resources. Keep device allocation available independently of Metrics Server.
+
+- Keep short built-in resource names when custom API groups use the same plural; qualify other colliding types by API group and retain old built-in path aliases. Browse Nodes → Pods using a lazy server-side node filter and namespace-qualified pod names, with live updates and original API identities.
+
+- Add Cmd+Shift+. to switch Kubernetes panels to cluster-level resources and back, with scope-specific discovery, live watches and manifest viewing.
+
+- Fix namespace metrics disappearing when a pod has not started: exclude idle workloads while retaining running init containers and strict coverage checks for running workloads. Show the actual source error in Quick Live Metrics.
+
+- Add shell output selection by character, word and line boundary; support rectangular mouse selection and forced selection over mouse-aware applications. Preserve Cmd+C/V and Ctrl+C semantics in every shell context, including bounded disk-history pages.
+
+- Group recent remote connections together, ordered Docker, Kubernetes, then other connections.
+
+- Exclude hidden subtrees from search when hidden-item display is disabled; select the initial name mask.
+- Dim inactive Kubernetes resources, highlight failures, and add Age/State sorting.
+- Add Quick Live Metrics aggregates for namespace/workload folders, following ownership chains with deduplication and fetching CPU/memory from Metrics Server.
+
+- Stream search results into a usable flat list while traversal continues. View with F3, stop with F2 without losing results, or navigate with Enter and cancel remaining work. Make Kubernetes ownership trees optional via F5, built and refreshed in the background.
+
+- Keep deep search-result trees readable by compressing excessive indentation, showing truncated labels with an ellipsis, and displaying row position, scroll progress and viewer/navigation shortcuts.
+
+- Collect Kubernetes objects once, then group search matches by ownerReferences, merging common ancestors and removing duplicate rows. Prefer controller owners and keep context ancestors viewable with F3. F3 views a search result in place and returns to the same filtered list.
+
+- Route file/object search and tree views through operation-scoped source strategies. Search Kubernetes and Docker catalogs without entering pod/container filesystems implicitly. Skip nested remote mounts on macOS and known network mounts reported by PodToast. Keep traversal bounded and cancellable.
+
+
 ## 0.24.0 — Markdown, PDF and responsive Quick Look
 
 - Keep the current PDF page visible at full brightness while decoding the next page, then replace it without an intermediate blank or dimmed frame.

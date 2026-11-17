@@ -85,7 +85,7 @@ func TestKubePanelLevels(t *testing.T) {
 	enterKube(t, a, "shop")
 	folders := entryNames(p)
 	// deployments exists in two groups, so the folder carries the group (C2).
-	if folders[0] != ".." || folders[1] != "deployments.apps" || folders[2] != "statefulsets" {
+	if folders[0] != ".." || folders[1] != "deployments" || folders[2] != "statefulsets" {
 		t.Fatal("type folders in priority order", folders)
 	}
 	p.Sort = "Name"
@@ -100,7 +100,7 @@ func TestKubePanelLevels(t *testing.T) {
 	if !strings.Contains(p.InfoText, "skipped") {
 		t.Fatal("skipped types not reported", p.InfoText)
 	}
-	enterKube(t, a, "deployments.apps")
+	enterKube(t, a, "deployments")
 	if got := entryNames(p); strings.Join(got, ",") != "..,app" {
 		t.Fatal("deployments", got)
 	}
@@ -197,7 +197,7 @@ func TestKubeManifestViewEditAndDelete(t *testing.T) {
 	a, f := kubeApp(t)
 	p := &a.Panels[0]
 	enterKube(t, a, "shop")
-	enterKube(t, a, "deployments.apps")
+	enterKube(t, a, "deployments")
 	selectEntry(t, p, "app")
 	a.key(Message{Key: "F3"})
 	waitNetwork(t, a)
@@ -289,7 +289,7 @@ func TestKubeExportManifests(t *testing.T) {
 	p := &a.Panels[0]
 	out := a.Panels[1].Path
 	enterKube(t, a, "shop")
-	enterKube(t, a, "deployments.apps")
+	enterKube(t, a, "deployments")
 	selectEntry(t, p, "app")
 	a.key(Message{Key: "F5"})
 	if a.Form == nil || a.Form.Title != "Export manifests" || a.Form.Fields[0].Value != out {
@@ -333,7 +333,7 @@ func TestKubeWatchUpdatesPanel(t *testing.T) {
 	a, f := kubeApp(t)
 	p := &a.Panels[0]
 	enterKube(t, a, "shop")
-	enterKube(t, a, "deployments.apps")
+	enterKube(t, a, "deployments")
 	if !p.Kube.watching("shop") || !p.Kube.watching("") {
 		t.Fatal("watches must start after listing", p.Kube.watches)
 	}
@@ -479,7 +479,7 @@ func TestKubeQuickViewDescribes(t *testing.T) {
 	a, _ := kubeApp(t)
 	p := &a.Panels[0]
 	enterKube(t, a, "shop")
-	enterKube(t, a, "deployments.apps")
+	enterKube(t, a, "deployments")
 	selectEntry(t, p, "app")
 	a.key(Message{Key: "q", Ctrl: true})
 	if a.Panels[1].View != "Quick view" {
@@ -563,5 +563,86 @@ func TestKubeApplyManifestsIntoNamespace(t *testing.T) {
 	a.key(Message{Key: "F5"})
 	if a.Form != nil || !strings.Contains(a.Status, "Choose a namespace") {
 		t.Fatal("root target", a.Form, a.Status)
+	}
+}
+
+func TestKubeClusterScopeShortcut(t *testing.T) {
+	a, _ := kubeApp(t)
+	enterKube(t, a, "shop")
+	original := a.Panels[0].Path
+	hidden := a.Settings.ShowHidden
+	otherPath := a.Panels[1].Path
+	a.key(Message{Key: ">", Code: "Period", Meta: true, Shift: true})
+	waitNetwork(t, a)
+	p := &a.Panels[0]
+	if p.Path != "/@cluster" || p.Err != "" {
+		t.Fatal(p.Path, p.Err)
+	}
+	if !strings.Contains(strings.Join(entryNames(p), ","), "namespaces") {
+		t.Fatal("cluster resources missing", entryNames(p))
+	}
+	if strings.Contains(strings.Join(entryNames(p), ","), "deployments") {
+		t.Fatal("namespaced resources leaked into cluster scope")
+	}
+	enterKube(t, a, "namespaces")
+	selectEntry(t, p, "shop")
+	a.key(Message{Key: "F3"})
+	waitWork(t, a)
+	if a.Doc == nil {
+		t.Fatal("cluster object cannot be viewed", a.Status)
+	}
+	a.key(Message{Key: "Escape"})
+	a.key(Message{Key: ".", Code: "Period", Meta: true, Shift: true})
+	waitNetwork(t, a)
+	if p.Path != original {
+		t.Fatal("did not restore namespace path", p.Path)
+	}
+	if a.Settings.ShowHidden != hidden || a.Panels[1].Path != otherPath {
+		t.Fatal("cluster shortcut changed file display or inactive panel")
+	}
+	a.Active = 1
+	a.key(Message{Key: ".", Code: "Period", Meta: true, Shift: true})
+	if a.Settings.ShowHidden == hidden || a.Panels[0].Path != original {
+		t.Fatal("filesystem shortcut must toggle hidden files without changing cluster scope")
+	}
+}
+
+func TestNodePodBrowsingAcrossNamespaces(t *testing.T) {
+	a, f := kubeApp(t)
+	f.Add("/api/v1/nodes", kubetest.Obj("Node", "", "worker", "node-worker", nil, nil, nil))
+	f.Add("/apis/other.io/v1/nodes", kubetest.Obj("Node", "", "custom", "custom-node", nil, nil, nil))
+	for _, ns := range []string{"shop", "default"} {
+		pod := kubetest.Obj("Pod", ns, "same-name", "pod-"+ns, nil, nil, nil)
+		pod["spec"] = map[string]any{"nodeName": "worker", "containers": []any{map[string]any{"name": "one"}, map[string]any{"name": "two"}}}
+		f.Add("/api/v1/pods", pod)
+		f.Add("/api/v1/namespaces/"+ns+"/pods", pod)
+	}
+	a.key(Message{Key: ".", Code: "Period", Meta: true, Shift: true})
+	waitNetwork(t, a)
+	p := &a.Panels[0]
+	names := strings.Join(entryNames(p), ",")
+	if !strings.Contains(names, "nodes") || !strings.Contains(names, "nodes.other.io") {
+		t.Fatal(names)
+	}
+	enterKube(t, a, "nodes")
+	enterKube(t, a, "worker")
+	enterKube(t, a, "pods")
+	names = strings.Join(entryNames(p), ",")
+	if !strings.Contains(names, "shop:same-name") || !strings.Contains(names, "default:same-name") {
+		t.Fatal("namespace-qualified pods missing", names, p.Err)
+	}
+	selectEntry(t, p, "shop:same-name")
+	if obj := p.kubeCurrent(); obj == nil || obj.Name != "same-name" || obj.Namespace != "shop" {
+		t.Fatal("wrong pod reference", obj)
+	}
+	a.key(Message{Key: "F3"})
+	waitWork(t, a)
+	if a.Doc == nil {
+		t.Fatal("cannot view pod", a.Status)
+	}
+	a.key(Message{Key: "Escape"})
+	enterKube(t, a, "shop:same-name")
+	if r := p.kubeLevel(); r.Namespace != "shop" || r.Level != kubeContainers {
+		t.Fatal("wrong container scope", r)
 	}
 }

@@ -22,10 +22,11 @@ import (
 // the cached namespace snapshots. It is shared with the worker copy of the
 // panel during an asynchronous load, hence the mutex.
 type kubePanel struct {
-	profile kube.Profile
-	client  *kube.Client
-	ttl     time.Duration
-	hidden  map[string]bool
+	clusterReturn string // Previous panel path; accessed only on the UI engine queue.
+	profile       kube.Profile
+	client        *kube.Client
+	ttl           time.Duration
+	hidden        map[string]bool
 
 	closed       bool
 	epoch        uint64
@@ -295,6 +296,10 @@ type kubePath struct {
 	Unknown   bool // Resolved without a snapshot: level guessed from the segment count.
 }
 
+func isNodeObject(o *kube.Object) bool {
+	return o != nil && o.GVR.Group == "" && o.GVR.Resource == "nodes"
+}
+
 func isPodObject(o *kube.Object) bool {
 	return o != nil && o.GVR.Group == "" && o.GVR.Resource == "pods"
 }
@@ -350,6 +355,10 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 			return r, nil
 		}
 		folder := rest[i]
+		// Resolve old fully-qualified bookmarks to the canonical built-in name.
+		if resource, ok := k.client.ResourceByFolder(folder); ok {
+			folder = resource.Folder
+		}
 		i++
 		var objects []*kube.Object
 		var known bool
@@ -372,7 +381,7 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 		i++
 		var obj *kube.Object
 		for _, o := range objects {
-			if o.Name == name {
+			if o.Name == name || (strings.HasPrefix(snap.Namespace, kube.NodeScopePrefix) && o.Namespace+":"+o.Name == name) {
 				obj = o
 				break
 			}
@@ -380,8 +389,24 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 		if obj == nil {
 			return r, fmt.Errorf("no such object: %s", path.Join(segs[:i+1]...))
 		}
+		if isNodeObject(obj) {
+			scope := kube.NodeScopePrefix + obj.Name
+			if ctx == nil {
+				snap = k.cachedSnapshot(scope)
+			} else {
+				snap, err = k.snapshot(ctx, scope)
+			}
+			if err != nil {
+				return r, err
+			}
+			if snap == nil {
+				return kubePath{Level: kubeObject, Object: obj, Namespace: r.Namespace, Unknown: true}, nil
+			}
+			r.Snapshot = snap
+		}
 		if isPodObject(obj) {
 			r.Object = obj
+			r.Namespace = obj.Namespace
 			// C3: a pod with exactly one ordinary container opens straight
 			// into its file system; otherwise the next segment names one.
 			summary, known := k.cachedPod(r.Namespace, obj.Name)
@@ -415,13 +440,14 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 // objects (and pods) are folders; an object without children is a file whose
 // Enter shows the manifest. The panel columns show kind, status and age.
 type kubeEntry struct {
-	covered bool
-	name    string
-	dir     bool
-	kind    string
-	modTime time.Time
-	column  string // Status, state or object count.
-	object  *kube.Object
+	stateTone int
+	covered   bool
+	name      string
+	dir       bool
+	kind      string
+	modTime   time.Time
+	column    string // Status, state or object count.
+	object    *kube.Object
 }
 
 func (e *kubeEntry) Name() string { return e.name }
@@ -437,7 +463,11 @@ func (e *kubeEntry) IsDir() bool        { return e.dir }
 func (e *kubeEntry) Sys() any           { return e.object }
 
 func kubeObjectEntry(o *kube.Object, dir bool) Entry {
-	return Entry{Name: o.Name, Dir: dir, Info: &kubeEntry{name: o.Name, dir: dir, covered: o.Pod != nil && o.Pod.Covered(), kind: o.Kind, modTime: o.Created, column: o.ShortStatus(), object: o}}
+	state := o.ShortStatus()
+	if o.Deleting && kubeObjectTone(o) != 2 {
+		state = "Terminating"
+	}
+	return Entry{Name: o.Name, Dir: dir, Info: &kubeEntry{name: o.Name, dir: dir, covered: o.Pod != nil && o.Pod.Covered(), kind: o.Kind, modTime: o.Created, column: state, stateTone: kubeObjectTone(o), object: o}}
 }
 func kubeFolderEntry(name string, count int) Entry {
 	return Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, column: strconv.Itoa(count) + " objects"}}
@@ -517,7 +547,7 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 		info += "\nNamespaces · server " + k.client.ServerVersion()
 	case kubeNamespace:
 		for _, folder := range r.Snapshot.Folders() {
-			files = append(files, kubeFolderEntry(folder, len(r.Snapshot.ByFolder[folder])))
+			files = append(files, kubeStatusFolderEntry(folder, r.Snapshot.ByFolder[folder]))
 		}
 		info += "\nNamespace " + r.Namespace + " · resource types"
 		if n := len(r.Snapshot.Skipped); n > 0 {
@@ -527,8 +557,12 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 		for _, obj := range r.Objects {
 			// Owners of other objects and pods are folders; the rest are
 			// files whose Enter shows the manifest.
-			dir := isPodObject(obj) || len(r.Snapshot.Children(obj)) > 0
-			files = append(files, kubeObjectEntry(obj, dir))
+			dir := isNodeObject(obj) || isPodObject(obj) || len(r.Snapshot.Children(obj)) > 0
+			entry := kubeObjectEntry(obj, dir)
+			if strings.HasPrefix(r.Snapshot.Namespace, kube.NodeScopePrefix) {
+				entry.Name = obj.Namespace + ":" + obj.Name
+			}
+			files = append(files, entry)
 		}
 		info += "\n" + r.Folder
 		if r.Parent != nil {
@@ -544,7 +578,7 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 			folders = append(folders, folder)
 		}
 		for _, folder := range kube.FolderOrder(folders) {
-			files = append(files, kubeFolderEntry(folder, len(children[folder])))
+			files = append(files, kubeStatusFolderEntry(folder, children[folder]))
 		}
 		info += "\n" + r.Object.Kind + " " + r.Object.Name + " · owned objects"
 	case kubeContainers:
@@ -561,7 +595,7 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 			if c.Kind != "" {
 				kind = strings.ToUpper(c.Kind[:1]) + c.Kind[1:] + " container"
 			}
-			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, kind: kind, covered: c.PodToast, modTime: c.Started, column: c.State, object: r.Object}})
+			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, kind: kind, covered: c.PodToast, modTime: c.Started, column: c.State, stateTone: kubeStateTone(c.State), object: r.Object}})
 		}
 		info += "\nPod " + r.Object.Name + " · " + summary.Phase + " · containers"
 	case kubeContainerFS:
@@ -674,15 +708,15 @@ func (kubeBackend) InfoPlugin(p *Panel) string               { return p.Kube.lab
 func (kubeBackend) Caps(p *Panel) panelCaps {
 	switch p.kubeLevel().Level {
 	case kubeRoot:
-		return capMkdir | capDelete | capQuickView
+		return capFind | capTree | capMkdir | capDelete | capQuickView
 	case kubeNamespace, kubeObject:
-		return capCopyIn
+		return capFind | capTree | capCopyIn
 	case kubeTypeFolder:
-		return capEdit | capDelete | capQuickView | capCopyIn | capRename
+		return capFind | capTree | capEdit | capDelete | capQuickView | capCopyIn | capRename
 	case kubeContainers:
-		return capQuickView
+		return capFind | capTree | capQuickView
 	case kubeContainerFS:
-		return capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute | capFolderSize | capQuickView
+		return capFind | capTree | capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute | capFolderSize | capQuickView
 	}
 	return 0
 }
@@ -718,6 +752,7 @@ func (kubeBackend) KeyBar(p *Panel, mods modifiers) [10]string {
 	plain := [10]string{"Help", "", "", "", "", "", "", "", "Menu", ""}
 	shift := [10]string{}
 	alt := [10]string{}
+	alt[6] = "Find"
 	ctrl := keyBarCtrl
 	ctrl[7], ctrl[8], ctrl[9] = "", "", ""
 	level := p.kubeLevel()
@@ -826,9 +861,27 @@ func (kubeBackend) Copy(a *App, p *Panel) bool {
 	a.kubeExport(p)
 	return true
 }
+func (a *App) toggleKubeClusterScope(p *Panel) {
+	if p.Kube == nil {
+		return
+	}
+	destination := "/" + kube.ClusterScope
+	if p.Path == destination || strings.HasPrefix(p.Path, destination+"/") {
+		destination = p.Kube.clusterReturn
+		if destination == "" {
+			destination = "/"
+		}
+	} else {
+		p.Kube.clusterReturn = p.Path
+	}
+	a.error(p.Load(destination))
+}
+
 func (kubeBackend) Key(a *App, p *Panel, m Message) bool {
 	cmd := m.Meta || m.Ctrl
 	switch {
+	case m.Meta && m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == "." || m.Key == ">") && p.kubeLevel().Level != kubeContainerFS:
+		a.toggleKubeClusterScope(p)
 	case m.Key == "F3" && m.Shift && !cmd && !m.Alt:
 		a.kubeLogs(p, false)
 	case m.Key == "F3" && m.Alt && !cmd && !m.Shift:
@@ -847,6 +900,7 @@ func (kubeBackend) Key(a *App, p *Panel, m Message) bool {
 }
 func (kubeBackend) MenuSection(a *App, p *Panel) *menuSection {
 	return &menuSection{Name: "Kubernetes", Items: []menuItem{
+		{"Toggle cluster-level resources", "⌘⇧.", func() { a.toggleKubeClusterScope(p) }},
 		{"Live metrics and charts…", "", func() { a.openPodMetrics(p) }},
 		{"Logs…", "⇧F3", func() { a.kubeLogs(p, false) }},
 		{"Follow logs in terminal", "⌥F3", func() { a.kubeLogs(p, true) }},

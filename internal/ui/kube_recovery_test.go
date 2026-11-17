@@ -52,7 +52,7 @@ func TestKubeManifestCancelAndDisconnect(t *testing.T) {
 			}
 			waitNetwork(t, a)
 			enterKube(t, a, "shop")
-			enterKube(t, a, "deployments.apps")
+			enterKube(t, a, "deployments")
 			selectEntry(t, p, "app")
 			blocked.Store(true)
 			a.key(Message{Key: "F3"})

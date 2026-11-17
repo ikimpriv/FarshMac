@@ -33,7 +33,7 @@ func kubeApplyTarget(target *Panel) (ns string, ok bool) {
 	level := target.kubeLevel()
 	switch level.Level {
 	case kubeNamespace, kubeTypeFolder, kubeObject:
-		return level.Namespace, level.Namespace != ""
+		return level.Namespace, level.Namespace != "" && level.Namespace != kube.ClusterScope
 	}
 	return "", false
 }

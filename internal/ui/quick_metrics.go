@@ -65,7 +65,7 @@ func (a *App) toggleQuickMetrics() {
 	if p.Kube != nil {
 		refs := metricSelection(p)
 		if len(refs) == 0 {
-			a.Status = "Select pods or containers for Quick Live Metrics"
+			a.openQuickMetricsGroup(p)
 			return
 		}
 		if len(refs) > 32 {

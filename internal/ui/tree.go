@@ -3,9 +3,9 @@ package ui
 import (
 	"context"
 	"errors"
+	"farshmac/internal/fsops"
 	"fmt"
-	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -16,11 +16,12 @@ const treeNodeLimit = 50000
 const treeEntryLimit = 1000000
 
 type treeResult struct {
-	entries []Entry
-	labels  map[string]string
-	limited bool
-	skipped int
-	err     error
+	entries    []Entry
+	labels     map[string]string
+	limited    bool
+	skipped    int
+	boundaries int
+	err        error
 }
 
 // Only the worker owns entries and filesystem handles. The UI receives an
@@ -36,6 +37,8 @@ type treeLoad struct {
 }
 
 type treeScanOptions struct {
+	ctx                          context.Context
+	browse                       func(*fsops.Operation) (browseStrategy, error)
 	depth, nodeLimit, entryLimit int
 	hideHidden                   bool
 	ignoreDSStore                bool
@@ -49,6 +52,24 @@ type treeScanOptions struct {
 // or enumerate descendants at the depth boundary. Symlinks are not traversed.
 func scanTree(root string, opts treeScanOptions) treeResult {
 	var result treeResult
+	op := fsops.NewOperation("Reading tree")
+	defer op.Cancel()
+	if opts.ctx != nil {
+		stop := context.AfterFunc(opts.ctx, op.Cancel)
+		defer stop()
+	}
+	var source browseStrategy
+	var err error
+	if opts.browse != nil {
+		source, err = opts.browse(op)
+	} else {
+		source, err = newLocalBrowse(root, op)
+	}
+	if err != nil {
+		result.err = err
+		return result
+	}
+	defer source.Close()
 	reserved, visited := 0, 0
 	stopped := false
 	check := func() bool {
@@ -73,56 +94,38 @@ func scanTree(root string, opts treeScanOptions) treeResult {
 			return nil
 		}
 		path := filepath.Join(root, rel)
-		f, err := os.Open(path)
-		if err != nil {
-			if rel == "" {
-				result.err = err
-			} else {
-				result.skipped++
-			}
-			return nil
-		}
-		defer f.Close()
 		var dirs []Entry
-		for check() {
-			batch, err := f.ReadDir(256)
-			for _, d := range batch {
-				visited++
-				name := filepath.Join(rel, d.Name())
-				if d.IsDir() && !(opts.ignoreDSStore && d.Name() == ".DS_Store") && !(opts.hideHidden && strings.HasPrefix(d.Name(), ".") && filepath.Join(root, name) != opts.forcedVisible) {
-					if reserved >= opts.nodeLimit {
-						result.limited = true
-						break
-					}
-					if info, e := d.Info(); e == nil {
-						if !opts.hideHidden || !hiddenEntry(d.Name(), info) || filepath.Join(root, name) == opts.forcedVisible {
-							dirs = append(dirs, Entry{Name: name, Info: info, Dir: true})
-							reserved++
-						}
-					} else {
-						result.skipped++
-					}
-				}
-				if visited >= opts.entryLimit {
+		err := source.ReadDir(path, func(e Entry) error {
+			if !check() {
+				return result.err
+			}
+			visited++
+			name := filepath.Join(rel, e.Name)
+			if e.Dir && !(opts.ignoreDSStore && e.Name == ".DS_Store") && !(opts.hideHidden && strings.HasPrefix(e.Name, ".") && filepath.Join(root, name) != opts.forcedVisible) {
+				if reserved >= opts.nodeLimit {
 					result.limited = true
-					break
+					return fs.SkipAll
+				}
+				if e.Info == nil || !opts.hideHidden || !hiddenEntry(e.Name, e.Info) || filepath.Join(root, name) == opts.forcedVisible {
+					e.Name = name
+					dirs = append(dirs, e)
+					reserved++
 				}
 			}
 			if opts.progress != nil {
 				opts.progress(path, visited)
 			}
-			if result.limited {
-				break
+			if visited >= opts.entryLimit {
+				result.limited = true
+				return fs.SkipAll
 			}
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					if rel == "" {
-						result.err = err
-					} else {
-						result.skipped++
-					}
-				}
-				break
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.SkipAll) {
+			if rel == "" || op.Check() != nil {
+				result.err = err
+			} else {
+				result.skipped++
 			}
 		}
 		opts.sort(dirs)
@@ -133,7 +136,11 @@ func scanTree(root string, opts treeScanOptions) treeResult {
 		for _, dir := range dirs {
 			result.entries = append(result.entries, dir)
 			if depth < opts.depth && check() {
-				visit(read(dir.Name), depth+1)
+				if source.Descend(filepath.Join(root, dir.Name), dir) {
+					visit(read(dir.Name), depth+1)
+				} else {
+					result.boundaries++
+				}
 			}
 		}
 	}
@@ -148,7 +155,8 @@ func (p *Panel) treeOptions() treeScanOptions {
 	for k, v := range p.MaskGroups {
 		config.MaskGroups[k] = v
 	}
-	return treeScanOptions{depth: max(1, min(12, p.TreeDepth)), nodeLimit: treeNodeLimit,
+	source := *p
+	return treeScanOptions{browse: source.browse, depth: max(1, min(12, p.TreeDepth)), nodeLimit: treeNodeLimit,
 		entryLimit: treeEntryLimit, hideHidden: p.HideHidden, ignoreDSStore: p.IgnoreDSStore,
 		forcedVisible: p.ForcedVisiblePath, sort: config.sortEntries}
 }
@@ -161,7 +169,9 @@ func (p *Panel) cancelTree() {
 }
 
 func (p *Panel) loadTree(abs string) error {
-	p.startTree(abs, p.treeOptions())
+	source := *p
+	source.Path = abs
+	p.startTree(abs, source.treeOptions())
 	return nil
 }
 
@@ -185,6 +195,7 @@ func (p *Panel) startTree(abs string, options treeScanOptions) {
 		}
 		return nil
 	}
+	options.ctx = ctx
 	options.progress = func(_ string, visited int) { job.visited.Store(int64(visited)) }
 	go func() {
 		result := scanTree(abs, options)
@@ -203,6 +214,9 @@ func (r treeResult) status(depth int) string {
 		}
 	} else if r.limited {
 		text = "Partial tree · limit reached; open a subfolder"
+	}
+	if r.boundaries > 0 {
+		text += fmt.Sprintf(" · %d source boundaries skipped", r.boundaries)
 	}
 	if r.skipped > 0 {
 		text += fmt.Sprintf(" · %d unreadable", r.skipped)

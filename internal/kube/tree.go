@@ -52,7 +52,16 @@ func (s *Snapshot) Folders() []string {
 
 // Lookup finds an object by its type folder and name.
 func (s *Snapshot) Lookup(folder, name string) (*Object, bool) {
-	for _, o := range s.ByFolder[folder] {
+	objects := s.ByFolder[folder]
+	if objects == nil {
+		for name, r := range s.Resources {
+			if r.Key() == folder {
+				objects = s.ByFolder[name]
+				break
+			}
+		}
+	}
+	for _, o := range objects {
 		if o.Name == name {
 			return o, true
 		}
@@ -114,6 +123,13 @@ func (s *Snapshot) Children(parent *Object) map[string][]*Object {
 		}
 	}
 	collect(parent.UID, 0)
+	if parent.GVR.Group == "" && parent.GVR.Resource == "nodes" {
+		for _, pod := range s.ByFolder["pods"] {
+			if pod.Pod != nil && pod.Pod.Node == parent.Name {
+				add(pod)
+			}
+		}
+	}
 	if parent.GVR.Group == "" && parent.GVR.Resource == "services" && len(parent.Selector) > 0 {
 		for _, pod := range s.ByFolder["pods"] {
 			if matchesSelector(pod.Labels, parent.Selector) {

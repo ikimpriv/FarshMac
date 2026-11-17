@@ -92,6 +92,7 @@ func (a *App) closeImage() {
 		a.Image.op.Cancel()
 	}
 	a.Image = nil
+	a.restoreSearchResults()
 	a.previewSent = ""
 	a.dirty = true
 }

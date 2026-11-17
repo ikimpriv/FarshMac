@@ -19,6 +19,6 @@ module.exports=function harness(){
  const context={Terminal,TerminalArchive,FarshMacTerminalTheme:{},Unicode11Addon:{Unicode11Addon:class{}},Uint8Array,Math,Promise,atob:s=>Buffer.from(s,'base64').toString('binary'),btoa:s=>Buffer.from(s,'binary').toString('base64'),setTimeout(fn){const id=++serial;timers.set(id,fn);return id},clearTimeout(id){timers.delete(id)},innerWidth:1028,innerHeight:656,document};
  context.window={webkit:{messageHandlers:{farshmac:{postMessage(m){sent.push(m)}}}},addEventListener(n,fn){listeners[n]=fn},getSelection(){return selection}};
  vm.createContext(context);
- for(const name of ['history_view.js','commands.js','markdown.js','pdf.js','app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../assets',name),'utf8'),context);
+ for(const name of ['history_view.js','commands.js','markdown.js','pdf.js','terminal_selection.js','history_selection.js','app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../assets',name),'utf8'),context);
  return {context,sent,timers,listeners,docListeners,docListenerOptions,writes,terminals,elements,flushTimers(){const copy=[...timers.values()];timers.clear();copy.forEach(fn=>fn())}};
 };

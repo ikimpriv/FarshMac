@@ -29,11 +29,13 @@ class HistoryView {
    }
    this.content.append(row);
   }
+  if(!this.selectionController)this.selectionController=new HistorySelection(this);
+  this.selectionController.update();
   this.caption.textContent=page.error||(page.lines.length===0?'History is empty':`History ${page.start+1}–${page.start+page.lines.length} / ${page.total}${page.first?' · oldest rows expired':''}`);
   if(this.wanted!==page.start&&this.wanted>=page.first&&this.wanted<=Math.max(page.first,page.total-this.rows()))this.load();
  }
  open(top){this.visible=true;document.body.classList.add('archive');this.el.focus();this.wanted=top??Math.max(this.status.first,this.status.total-this.rows());this.load();}
- close(){this.visible=false;this.pending=false;this.request++;document.body.classList.remove('archive');this.live();}
+ close(){this.selectionController?.selection.clear();this.visible=false;this.pending=false;this.request++;document.body.classList.remove('archive');this.live();}
  move(delta){this.wanted=Math.max(this.status.first,Math.min(this.wanted+delta,Math.max(this.status.first,this.status.total-this.rows())));this.load();}
  load(){
   if(this.pending)return;this.pending=true;this.request++;
@@ -41,6 +43,7 @@ class HistoryView {
  }
  key(e){
   if(!this.visible)return false;
+  if(this.selectionController?.key(e))return true;
   const moves={ArrowUp:-1,ArrowDown:1,PageUp:-this.rows(),PageDown:this.rows()};
   if(e.key==='Escape'||e.key==='End'){this.close();}
   else if(e.key==='Home'){this.wanted=this.status.first;this.load();}
@@ -48,11 +51,13 @@ class HistoryView {
   else return false;
   e.preventDefault();return true;
  }
- copy(){
+ copy(){return this.selectionController?.copy()??this.copyDOM();}
+ copyDOM(){
   const selection=window.getSelection();
   if(!selection.rangeCount)return selection.toString().replace(/\u200b/g,'');
   const selected=selection.getRangeAt(0);let text='',first=true;
   for(const row of this.content.children){
+   if(row.className!=='history-line')continue;
    if(!selected.intersectsNode(row))continue;
    const part=document.createRange();part.selectNodeContents(row);
    if(row.contains(selected.startContainer))part.setStart(selected.startContainer,selected.startOffset);
@@ -61,5 +66,5 @@ class HistoryView {
   }
   return text;
  }
- selectAll(){const range=document.createRange();range.selectNodeContents(this.content);const s=window.getSelection();s.removeAllRanges();s.addRange(range);}
+ selectAll(){this.selectionController?.selection.clear();const range=document.createRange();range.selectNodeContents(this.content);const s=window.getSelection();s.removeAllRanges();s.addRange(range);}
 }

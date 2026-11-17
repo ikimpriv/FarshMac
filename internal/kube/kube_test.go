@@ -55,12 +55,12 @@ func TestConnectAndDiscovery(t *testing.T) {
 	for _, r := range resources {
 		folders[r.Folder] = r
 	}
-	for _, want := range []string{"pods", "services", "configmaps", "secrets", "events", "deployments.apps", "deployments.other.io", "replicasets", "jobs", "cronjobs", "widgets"} {
+	for _, want := range []string{"pods", "services", "configmaps", "secrets", "events", "deployments", "deployments.other.io", "replicasets", "jobs", "cronjobs", "widgets"} {
 		if _, ok := folders[want]; !ok {
 			t.Fatal("missing folder", want, folders)
 		}
 	}
-	for _, unwanted := range []string{"namespaces", "gadgets", "bindings", "pods/log", "deployments"} {
+	for _, unwanted := range []string{"namespaces", "gadgets", "bindings", "pods/log", "deployments.apps"} {
 		if _, ok := folders[unwanted]; ok {
 			t.Fatal("unexpected folder", unwanted)
 		}
@@ -145,7 +145,7 @@ func TestNamespacesAndSnapshot(t *testing.T) {
 	if _, listed := s.ByFolder["events"]; listed {
 		t.Fatal("hidden folder listed")
 	}
-	if got := strings.Join(s.Folders(), ","); got != "deployments.apps,statefulsets,cronjobs,jobs,pods,services,configmaps,controllerrevisions,replicasets,widgets" {
+	if got := strings.Join(s.Folders(), ","); got != "deployments,statefulsets,cronjobs,jobs,pods,services,configmaps,controllerrevisions,replicasets,widgets" {
 		t.Fatal(got)
 	}
 	app, ok := s.Lookup("deployments.apps", "app")
@@ -389,5 +389,32 @@ func TestConnectThroughKubeconfig(t *testing.T) {
 	defer c.Close()
 	if c.ServerVersion() == "" {
 		t.Fatal("no server version")
+	}
+}
+
+func TestBuiltInResourceNameCollisions(t *testing.T) {
+	resources := []Resource{
+		{GVR: schema.GroupVersionResource{Group: "vendor.io", Resource: "nodes"}},
+		{GVR: schema.GroupVersionResource{Resource: "nodes"}},
+		{GVR: schema.GroupVersionResource{Group: "vendor.io", Resource: "deployments"}},
+		{GVR: schema.GroupVersionResource{Group: "apps", Resource: "deployments"}},
+		{GVR: schema.GroupVersionResource{Group: "one.io", Resource: "widgets"}},
+		{GVR: schema.GroupVersionResource{Group: "two.io", Resource: "widgets"}},
+	}
+	for i := 0; i < 2; i++ {
+		cache := buildResourceCache(resources)
+		var names []string
+		for _, r := range cache.list {
+			names = append(names, r.Folder)
+		}
+		if strings.Join(names, ",") != "deployments,deployments.vendor.io,nodes,nodes.vendor.io,widgets.one.io,widgets.two.io" {
+			t.Fatal(names)
+		}
+		if cache.byFolder["deployments.apps"].Folder != "deployments" {
+			t.Fatal("old alias lost")
+		}
+		for l, r := 0, len(resources)-1; l < r; l, r = l+1, r-1 {
+			resources[l], resources[r] = resources[r], resources[l]
+		}
 	}
 }

@@ -134,7 +134,10 @@ func (a *App) viewArchiveMember() {
 	if len(p.Entries) == 0 || p.Entries[p.Cursor].Dir {
 		return
 	}
-	catalog, virtual := p.Archive, p.Current()
+	a.viewArchivePath(p.Archive, p.Current())
+}
+
+func (a *App) viewArchivePath(catalog *fsops.ArchiveIndex, virtual string) {
 	name, ok := catalog.Relative(virtual)
 	if !ok {
 		return

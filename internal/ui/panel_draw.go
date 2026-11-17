@@ -229,6 +229,14 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			if storage, ok := e.Info.(storageFileInfo); ok && storage.mount {
 				fg = 0xffaa55
 			}
+			if k, ok := e.Info.(*kubeEntry); ok {
+				if k.stateTone == 1 {
+					fg = 0x888899
+				}
+				if k.stateTone == 2 {
+					fg = 0xff5555
+				}
+			}
 			if p.Marked[e.Name] {
 				fg = Yellow
 			}

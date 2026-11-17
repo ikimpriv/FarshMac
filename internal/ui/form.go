@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -50,6 +51,8 @@ func (field *Field) choiceText() (string, []int) {
 }
 
 type Form struct {
+	SearchResults             bool
+	OwnershipTree             bool
 	Remember, RememberChecked bool
 	OperationQuestion         bool
 	Scroll                    int
@@ -433,6 +436,9 @@ func (a *App) drawForm(g *Grid) {
 	}
 	box := a.formGeometry()
 	title := f.Title
+	if f.SearchResults {
+		title += fmt.Sprintf(" · %d/%d", min(f.Focus+1, len(f.Choice)), len(f.Choice))
+	}
 	if f.Query != "" {
 		title += " [" + f.Query + "]"
 	}
@@ -450,7 +456,12 @@ func (a *App) drawForm(g *Grid) {
 				bg = Cyan
 			}
 			g.Fill(box.X+4, y, box.W-8, 1, Black, bg)
-			modalLabel(g, box.X+4, y, f.Choice[i], keys[i], bg, box.W-8)
+			if f.SearchResults {
+				label := searchResultLabel(f.Choice[i], box.W-8, f.OwnershipTree)
+				g.Text(box.X+4, y, label, Black, bg, box.W-8)
+			} else {
+				modalLabel(g, box.X+4, y, f.Choice[i], keys[i], bg, box.W-8)
+			}
 		}
 	} else {
 		for _, y := range box.Rules {
@@ -496,6 +507,20 @@ func (a *App) drawForm(g *Grid) {
 		}
 	}
 	modalRule(g, box.modalRect, box.Bottom)
+	if f.SearchResults {
+		g.Text(box.X+4, box.Bottom, " "+f.Message+" ", Black, Gray, box.W-8)
+		visible := box.Bottom - box.Top
+		if len(f.Choice) > visible && visible > 2 {
+			x := box.X + box.W - 3
+			for y := box.Top + 1; y < box.Bottom-1; y++ {
+				g.Set(x, y, "│", Black, Gray)
+			}
+			g.Set(x, box.Top, "▲", Black, Gray)
+			g.Set(x, box.Bottom-1, "▼", Black, Gray)
+			pos := f.Scroll * (visible - 3) / max(1, len(f.Choice)-visible)
+			g.Set(x, box.Top+1+pos, "█", Black, Gray)
+		}
+	}
 	if f.CheckColumns == 2 {
 		for i := 0; i < len(f.Fields); {
 			if !f.Fields[i].Toggle {

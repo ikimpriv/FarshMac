@@ -136,3 +136,10 @@ Commands submitted from a panel return to the panels automatically when the shel
 ## Remote contexts
 
 SFTP and Kubernetes shells share the same context command lifecycle: persistent session, panel-directory execution, automatic panel return, and retained output through Cmd+O. SFTP opens a dedicated SSH connection using the file connection's authentication and host verification; terminal cancellation does not interrupt transfers. FTP/FTPS and SSH accounts denying PTY/exec show an explicit error instead of using the local shell. Remote SSH requires /bin/sh. Shell readiness is bounded to 30 seconds, and setup can be cancelled without waiting for the network timeout.
+
+Shell output selection: Shift+arrows, Option+Shift+Left/Right (words),
+Cmd+Shift+Left/Right and Shift+Home/End (line boundaries). Option+drag makes a
+rectangle; Shift+drag overrides application mouse reporting. Selection is scoped
+to each shell. Public xterm markers keep live selections anchored as output
+scrolls; resizing clears selection rather than retaining invalid cell geometry.
+Disk-history selection remains bounded to its loaded page.

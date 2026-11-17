@@ -76,7 +76,9 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 	if count == 0 {
 		text(4, 22, "Enable CPU, Memory or Storage above", fg)
 	}
-	rowHeight := (height - 20) / max(1, count)
+	deviceSVG, deviceHeight := deviceBars(c, width, height, fg)
+	b.WriteString(deviceSVG)
+	rowHeight := (height - 20 - deviceHeight) / max(1, count)
 	if count > 0 && rowHeight < 68 {
 		text(4, 22, "More space needed; disable a metric above", fg)
 		b.WriteString("</g></svg>")
@@ -90,7 +92,7 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 			}
 		}
 	}
-	top := 0
+	top := deviceHeight
 	for group, name := range []string{"CPU", "Memory · " + quickMemoryNames[c.memoryMode], "Ephemeral storage"} {
 		if !c.enabled[group] {
 			continue
@@ -140,14 +142,10 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 			}
 			for _, ref := range chosen {
 				refs = append(refs, ref)
-				maximum = max(maximum, ref.Value)
 			}
 			sort.Slice(refs, func(i, j int) bool { return refs[i].Value > refs[j].Value })
 		}
-		if maximum <= 0 {
-			maximum = 1
-		}
-		maximum = niceMetricMaximum(maximum, group != 0)
+		maximum, refs = quickMetricScale(maximum, refs, group != 0)
 		legendRows := min(len(list), max(1, min(4, (rowHeight-73)/15)))
 		plotTop := top + 28
 		plotBottom := max(plotTop+12, top+rowHeight-legendRows*15-36)
@@ -195,6 +193,14 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 				if theme == "Light" {
 					color = "#16803a"
 				}
+			}
+			if ref.Bound == "capacity" {
+				color = fg
+				dash = "5 4"
+			}
+			if ref.Bound == "allocatable" {
+				color = fg
+				dash = "1 5"
 			}
 			label := strings.ToUpper(ref.Bound[:1]) + ref.Bound[1:] + " " + unit(ref.Value)
 			fmt.Fprintf(&b, `<path d="M%d %.2f H%d" fill="none" stroke="%s" stroke-opacity="0.65" stroke-width="1" stroke-linecap="round" stroke-dasharray="%s"><title>%s</title></path>`, left, y, right, color, dash, html.EscapeString(label))
@@ -246,6 +252,14 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 				}
 			}
 			label := metricScope(s.Descriptor) + "  " + value
+			if c.packet != nil && len(s.Points) > 0 {
+				v := compactSeriesValue(s, s.Points[len(s.Points)-1])
+				for _, ref := range c.packet.References {
+					if ref.Bound == "allocatable" && ref.Resource == []string{"cpu_cores", "memory_bytes", "ephemeral_storage_bytes"}[group] && metricScope(ref.Descriptor) == metricScope(s.Descriptor) && ref.Value > 0 && v != nil {
+						label += fmt.Sprintf(" / %s · %.1f%% allocatable", unit(ref.Value), 100**v/ref.Value)
+					}
+				}
+			}
 			text(4, plotBottom+34+n*15, tail(label, max(1, width/8)), colors[scopeIDs[metricScope(s.Descriptor)]%len(colors)])
 		}
 		if pages > 1 {
@@ -254,6 +268,9 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 		top += rowHeight
 	}
 	status := "5 min · separate line per container"
+	if strings.HasPrefix(c.title, "Nodes ·") {
+		status = "Pod usage · excludes host processes · devices show reservations"
+	}
 	if c.packet != nil {
 		if c.packet.Limit || len(quickSeriesIDs(c.packet.Catalog)) > metrics.MaxSelected {
 			status = "Series limit reached · narrow selection"
@@ -263,7 +280,7 @@ func quickMetricsSVG(c *compactMetricsPanel, theme string, width, height int) st
 					status = ep.History
 				}
 				if ep.Enabled && ep.Error != "" {
-					status = "Some sources unavailable"
+					status = "Metrics unavailable · " + ep.Error
 					break
 				}
 			}
@@ -290,4 +307,31 @@ func niceMetricMaximum(value float64, bytes bool) float64 {
 		}
 	}
 	return 40 * base
+}
+
+// For node pod usage, allocatable is the useful 100% boundary. Do not
+// inflate it with capacity or rounding; retain real over-budget samples.
+func quickMetricScale(observed float64, refs []metrics.Reference, bytes bool) (float64, []metrics.Reference) {
+	allocatable := 0.0
+	for _, ref := range refs {
+		if ref.Bound == "allocatable" && ref.Value > 0 {
+			allocatable = max(allocatable, ref.Value)
+		}
+	}
+	if allocatable > 0 {
+		filtered := make([]metrics.Reference, 0, len(refs))
+		for _, ref := range refs {
+			if ref.Bound != "capacity" {
+				filtered = append(filtered, ref)
+			}
+		}
+		if observed <= allocatable {
+			return allocatable, filtered
+		}
+		return niceMetricMaximum(observed, bytes), filtered
+	}
+	for _, ref := range refs {
+		observed = max(observed, ref.Value)
+	}
+	return niceMetricMaximum(observed, bytes), refs
 }

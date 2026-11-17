@@ -107,6 +107,9 @@ func (p *Panel) Load(path string) error {
 	if err != nil {
 		return err
 	}
+	if p.View == "Tree panel" && p.can(capTree) {
+		return p.loadTree(abs)
+	}
 	if p.Docker != nil {
 		if p.Async {
 			return p.loadPanel(abs)
@@ -348,6 +351,8 @@ type App struct {
 
 	task             *uiTask
 	Async            bool
+	searchResults    *Form
+	searchSession    *searchSession
 	previewTarget    string
 	previewOperation *fsops.Operation
 	nextScreenID     int
@@ -445,6 +450,7 @@ func (a *App) startTerminalAt(cwd string) error {
 	return nil
 }
 func (a *App) Close() {
+	a.closeSearch()
 	if a.markdownCancel != nil {
 		a.markdownCancel()
 	}
@@ -1551,6 +1557,8 @@ func (a *App) Poll() Update {
 		}
 	}
 jobsDone:
+	a.pollSearch()
+	a.restoreSearchResults()
 	for i := range a.Panels {
 		if a.Panels[i].pollTree() || a.Panels[i].pollPanelLoad() {
 			a.dirty = true
@@ -1735,7 +1743,8 @@ M                  Choose memory metric when Quick Live Metrics is active
 Ctrl+L / Ctrl+T    Toggle inactive Info / Tree
 Ctrl+P / Ctrl+B    Toggle inactive panel / key bar
 Ctrl+F3..F11       Sort (name, ext, modified, size, unsorted, created, accessed, description, owner)
-Ctrl+F12           Sort menu; Shift+F12 selected first; Shift+F11 sort groups
+Cmd+Shift+.        Kubernetes: cluster-level resources / previous location
+Ctrl+F12           Sort menu (Kubernetes: Age / State); Shift+F12 selected first; Shift+F11 sort groups
 Left/Right menu    Brief, Medium, Full, Wide, Detailed, Info, Tree, Quick view
 Shift+F5/F6        Copy / rename current item in the same panel
 Shift+F1/F2/F3     Archive create/extract/commands
@@ -1743,6 +1752,8 @@ Shift+F9           Save setup
 Alt+F6             Link (symbolic, relative by default / hard); an existing
                    folder as the name creates the link inside it
 Alt+F7 / Alt+F8    Find file / command history (inserts, does not run)
+Search results    Live list: F3 view, Enter go to, F2 stop and keep results.
+                  F5 toggles Kubernetes ownership tree; Esc stops, then closes.
 Alt+F10            Folder tree
 Alt+F11/F12        View/edit history / folder history
 Ctrl+PgUp/PgDown   Parent / enter folder or archive
@@ -1768,6 +1779,8 @@ Cmd+0..9            Go to bookmark (keeps remembered cursor positions and marks)
                     to the window: a document bookmark opens that file at the
                     saved position (nothing if the file is gone)
 Network connections: F9 > Commands > Network connections
+Quick metrics:     Ctrl+Shift+Q on a namespace/workload folder totals owned pods
+                   using Metrics Server CPU/memory; no storage or aggregate limits.
 Kubernetes panel:   New Kubernetes cluster… (kubeconfig + context). Folders:
                     namespaces > resource types > objects > owned objects > pod
                     > containers > files. F3/F4 manifest (F4 saves with Update),
@@ -1836,6 +1849,10 @@ history, aliases and jobs. Your shell's startup files are loaded.
 The output stays visible after completion; ⌘O restores the panels.
 ⌘O also works during a command; returning does not stop the job.
 Use Cmd+. (or Ctrl+C) to interrupt, Cmd+C / Cmd+V to copy / paste.
+Shift+arrows selects output; Option+Shift+Left/Right selects words.
+Cmd+Shift+Left/Right or Shift+Home/End selects to line boundaries.
+Drag selects output; Option+drag selects a rectangle; Shift+drag overrides
+application mouse reporting. Esc clears selection.
 Scroll the terminal to review output. vim/less use the alternate screen.
 If the shell exits it restarts (1/2/4/8 s backoff; stops after 5 failed
 starts): press Enter or ⌘O to retry.

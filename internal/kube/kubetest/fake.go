@@ -256,6 +256,7 @@ var discoveryRoutes = map[string]any{
 	"/api":     map[string]any{"kind": "APIVersions", "versions": []string{"v1"}},
 	"/api/v1": resources("v1",
 		res("namespaces", "namespace", "Namespace", false),
+		res("nodes", "node", "Node", false),
 		res("pods", "pod", "Pod", true),
 		res("pods/log", "", "Pod", true, "get"),
 		res("services", "service", "Service", true),
@@ -275,7 +276,7 @@ var discoveryRoutes = map[string]any{
 	"/apis/batch/v1":               resources("batch/v1", res("jobs", "job", "Job", true), res("cronjobs", "cronjob", "CronJob", true)),
 	"/apis/metrics.k8s.io/v1beta1": resources("metrics.k8s.io/v1beta1", res("pods", "pod", "PodMetrics", true, "get", "list")),
 	"/apis/example.com/v1":         resources("example.com/v1", res("widgets", "widget", "Widget", true), res("gadgets", "gadget", "Gadget", false)),
-	"/apis/other.io/v1":            resources("other.io/v1", res("deployments", "deployment", "Deployment", true)),
+	"/apis/other.io/v1":            resources("other.io/v1", res("deployments", "deployment", "Deployment", true), res("nodes", "node", "Node", false)),
 }
 
 // openAPIRoutes serve /openapi/v3 like a real server: an index of

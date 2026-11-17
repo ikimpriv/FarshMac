@@ -160,7 +160,7 @@ func (dockerBackend) Caps(p *Panel) panelCaps {
 	if _, _, _, ok := p.Docker.location(p.Path); ok {
 		return remoteBackend{}.Caps(p)
 	}
-	return capQuickView
+	return capFind | capTree | capQuickView
 }
 func (dockerBackend) Endpoint(p *Panel) remotefs.Endpoint {
 	c, prefix, _, ok := p.Docker.location(p.Path)

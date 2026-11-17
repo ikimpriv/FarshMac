@@ -201,7 +201,7 @@ func (s *Session) Packet(force bool) *Packet {
 		ser := s.series[id]
 		if resource, bound := ReferenceKind(ser.Name); s.showReferences && resource != "" && len(ser.Points) > 0 {
 			v := ser.Points[len(ser.Points)-1].Value
-			if v != nil && *v > 0 && !math.IsInf(*v, 0) && !math.IsNaN(*v) && time.Since(ser.seen) < 30*time.Second {
+			if v != nil && (*v > 0 || strings.HasPrefix(ser.Name, "farshmac_node_") && *v == 0) && !math.IsInf(*v, 0) && !math.IsNaN(*v) && time.Since(ser.seen) < 30*time.Second {
 				p.References = append(p.References, Reference{Descriptor: ser.Descriptor, Resource: resource, Bound: bound, Value: *v})
 			}
 		}
@@ -571,6 +571,13 @@ func filterTargetSamples(t Target, samples []Sample) []Sample {
 
 // ReferenceKind recognizes only explicit container budgets, never filesystem capacity.
 func ReferenceKind(name string) (string, string) {
+	for _, bound := range []string{"capacity", "allocatable", "allocated"} {
+		for _, resource := range []string{"cpu_cores", "memory_bytes", "device"} {
+			if name == "farshmac_node_"+bound+"_"+resource {
+				return resource, bound
+			}
+		}
+	}
 	for _, bound := range []string{"request", "limit"} {
 		for _, resource := range []string{"cpu_cores", "memory_bytes", "ephemeral_storage_bytes"} {
 			if name == "farshmac_container_"+bound+"_"+resource {
