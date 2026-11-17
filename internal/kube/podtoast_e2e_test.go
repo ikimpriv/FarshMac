@@ -78,7 +78,7 @@ func TestPodToastDistroless(t *testing.T) {
 		if _, e = reused.FS(ctx).Lstat("/data/hello.txt"); e != nil {
 			t.Fatal(e)
 		}
-		again, e := c.StartPodToast(ctx, ref, "unused.invalid/podtoast:never-pull")
+		again, e := c.StartPodToast(ctx, ref, image)
 		if e != nil {
 			t.Fatal(e)
 		}
