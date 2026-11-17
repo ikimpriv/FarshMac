@@ -563,6 +563,7 @@ func (a *App) treeMenu() {
 	})
 }
 func (a *App) updatePreview() {
+	a.syncQuickPreviewTarget()
 	if a.traffic != nil {
 		return
 	}
@@ -659,7 +660,7 @@ func (a *App) updatePreview() {
 			text = directoryPreview(path, o, fsops.WalkDir, true, func(partial string) {
 				select {
 				case a.jobs <- func() {
-					if a.previewKey == key && o.Check() == nil {
+					if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 						a.previewText = partial
 						a.dirty = true
 					}
@@ -685,7 +686,7 @@ func (a *App) updatePreview() {
 			if e != nil {
 				text = e.Error()
 			} else {
-				b, e := io.ReadAll(o.Reader(io.LimitReader(f, 16*1024)))
+				b, e := io.ReadAll(o.Reader(io.LimitReader(f, markdownReadLimit(path, 16*1024))))
 				f.Close()
 				text = string(b)
 				if e != nil {
@@ -694,7 +695,10 @@ func (a *App) updatePreview() {
 			}
 		}
 		a.jobs <- func() {
-			if a.previewKey == key {
+			if a.previewOperation != o {
+				return
+			}
+			if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 				a.previewText = text
 				a.previewImage = imageData
 			}

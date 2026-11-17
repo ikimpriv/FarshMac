@@ -160,7 +160,10 @@ func (a *App) updateDockerPreview(source *Panel) {
 			text = target + "\n" + err.Error()
 		}
 		a.jobs <- func() {
-			if a.previewKey == key && op.Check() == nil {
+			if a.previewOperation != op {
+				return
+			}
+			if a.previewOperation == op && a.previewKey == key && op.Check() == nil {
 				if len(text) > 64*1024 {
 					text = text[:64*1024] + "\n… (F3 for full details)"
 				}

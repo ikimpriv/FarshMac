@@ -32,6 +32,9 @@ func directoryPreview(root string, o *fsops.Operation, walk sizeWalker, local bo
 	}
 	last := time.Now()
 	err := walk(root, o, func(path string, d fs.DirEntry, err error) error {
+		if e := o.Check(); e != nil {
+			return e
+		}
 		if err != nil {
 			unreadable++
 			return nil
@@ -126,7 +129,7 @@ func (a *App) updateFolderPreview(p *Panel) bool {
 						partial := agentDirectoryText(root, s, nil)
 						select {
 						case a.jobs <- func() {
-							if a.previewKey == key && o.Check() == nil {
+							if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 								a.previewText = partial
 								a.dirty = true
 							}
@@ -149,7 +152,7 @@ func (a *App) updateFolderPreview(p *Panel) bool {
 			result = directoryPreview(root, o, walk, local, func(partial string) {
 				select {
 				case a.jobs <- func() {
-					if a.previewKey == key && o.Check() == nil {
+					if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 						a.previewText = partial
 						a.dirty = true
 					}
@@ -159,7 +162,10 @@ func (a *App) updateFolderPreview(p *Panel) bool {
 			})
 		}
 		a.jobs <- func() {
-			if a.previewKey == key {
+			if a.previewOperation != o {
+				return
+			}
+			if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 				a.previewText = result
 			}
 			a.previewPending = false

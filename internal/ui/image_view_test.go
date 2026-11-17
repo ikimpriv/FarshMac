@@ -22,12 +22,16 @@ func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && os.Args[1] == cloudfiles.HelperFlag {
 		os.Exit(cloudfiles.HelperMain(os.Args[2]))
 	}
-	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == preview.HelperFlag {
+	if (len(os.Args) >= 3 && len(os.Args) <= 5) && os.Args[1] == preview.HelperFlag {
 		pixels := 0
-		if len(os.Args) == 4 {
+		if len(os.Args) >= 4 {
 			pixels, _ = strconv.Atoi(os.Args[3])
 		}
-		os.Exit(preview.HelperMain(os.Args[2], pixels))
+		page := 1
+		if len(os.Args) == 5 {
+			page, _ = strconv.Atoi(os.Args[4])
+		}
+		os.Exit(preview.HelperMain(os.Args[2], pixels, page))
 	}
 	// Every test starts with isolated preferences, even tests that do not
 	// explicitly override HOME. Protocol fixtures must never save real profiles.

@@ -25,7 +25,7 @@ else
   go test ./...
 fi
 # grid.cjs consumes JSON on stdin; harness.cjs is a helper, not a test program.
-for test in input resize terminal commands preview switch sessions throughput metrics traffic; do
+for test in input resize terminal commands preview markdown pdf switch sessions throughput metrics traffic; do
   node "internal/native/tests/$test.cjs"
 done
 

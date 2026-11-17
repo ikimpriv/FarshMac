@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"farshmac/internal/highlight"
+	"farshmac/internal/markdown"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -285,6 +286,7 @@ type Update struct {
 	Commands            *[]string              `json:"commands,omitempty"`
 	CommandsError       string                 `json:"commandsError,omitempty"`
 	Zoom                bool                   `json:"zoom,omitempty"`
+	Markdown            *MarkdownPreview       `json:"markdown,omitempty"`
 	Preview             *ImagePreview          `json:"preview,omitempty"`
 	History             terminal.HistoryStatus `json:"history"`
 	HistoryPage         *terminal.HistoryPage  `json:"historyPage,omitempty"`
@@ -307,14 +309,19 @@ type Update struct {
 	Quit                bool                   `json:"quit,omitempty"`
 }
 type App struct {
-	traffic        *trafficMonitor
-	Metrics        *metrics.Session
-	MetricsOnly    bool
-	TrafficOnly    bool
-	detachTraffic  bool
-	compactMetrics *compactMetricsPanel
-	detachMetrics  bool
-	metricsLaunch  *metricsLaunch
+	traffic                       *trafficMonitor
+	Metrics                       *metrics.Session
+	MetricsOnly                   bool
+	TrafficOnly                   bool
+	detachTraffic                 bool
+	markdownKey, markdownHTML     string
+	markdownWorkKey, markdownSent string
+	markdownVersion               uint64
+	markdownCancel                context.CancelFunc
+	markdownPending               bool
+	compactMetrics                *compactMetricsPanel
+	detachMetrics                 bool
+	metricsLaunch                 *metricsLaunch
 	shellState
 	shellCommands         *[]string
 	infoJobs              [2]*infoJob
@@ -341,6 +348,7 @@ type App struct {
 
 	task             *uiTask
 	Async            bool
+	previewTarget    string
 	previewOperation *fsops.Operation
 	nextScreenID     int
 	Operation        *fsops.Operation
@@ -437,6 +445,9 @@ func (a *App) startTerminalAt(cwd string) error {
 	return nil
 }
 func (a *App) Close() {
+	if a.markdownCancel != nil {
+		a.markdownCancel()
+	}
 	a.rememberConnections()
 	a.closeTraffic()
 	if a.closed {
@@ -624,6 +635,7 @@ func (a *App) confirmQuitShell(closeWindow bool) {
 	a.Quit = true
 }
 func (a *App) Handle(raw string) {
+	defer a.syncQuickPreviewTarget()
 	var m Message
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return
@@ -957,6 +969,14 @@ func (a *App) key(m Message) {
 		return
 	}
 	if a.Doc != nil {
+		if (m.Key == "M" || m.Key == "m") && m.Meta && m.Shift && !m.Ctrl && !m.Alt && !a.Doc.Edit && markdown.Supported(a.Doc.Path) {
+			a.Doc.markdownRaw = !a.Doc.markdownRaw
+			a.dirty = true
+			return
+		}
+		if markdown.Supported(a.Doc.Path) && m.Key == "F7" {
+			a.Doc.markdownRaw = true
+		}
 		a.documentKey(m)
 		return
 	}
@@ -1496,6 +1516,7 @@ func (a *App) click(m Message) {
 	a.panelMouse(m)
 }
 func (a *App) Poll() Update {
+	a.syncQuickPreviewTarget()
 	if a.TrafficOnly {
 		return a.pollTrafficWindow()
 	}
@@ -1660,10 +1681,21 @@ termDone:
 			a.pending = nil
 		}
 	}
+	if a.TermVisible {
+		a.markdownSent = ""
+		if a.markdownCancel != nil {
+			a.markdownCancel()
+		}
+	}
 	if a.dirty && !a.TermVisible {
 		grid := a.Draw()
 		u.Grid = grid.ANSI()
 		u.Preview = a.imagePreview()
+		u.Markdown = a.markdownPreview()
+		if u.Markdown != nil {
+			u.Markdown.Occlusions = grid.Occlusions
+			u.Preview = nil
+		}
 		if u.Preview != nil {
 			u.Preview.Occlusions = grid.Occlusions
 		}
@@ -1697,6 +1729,7 @@ Arrows / PgUp/PgDn   Navigate files
 Shift+arrows/PgUp/PgDn/Home/End  Mark a range of files
 Quick view / Info / Tree / hidden panel: file keys need a file panel (Tab)
 Ctrl+Q             Toggle inactive Quick view (restore previous view)
+Cmd+Shift+M        Markdown viewer: formatted / source
 Ctrl+Shift+Q       Quick Live Metrics for selected pods/containers (toggle)
 M                  Choose memory metric when Quick Live Metrics is active
 Ctrl+L / Ctrl+T    Toggle inactive Info / Tree

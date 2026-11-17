@@ -21,6 +21,7 @@ import (
 const maxTextBytes = 64 * 1024 * 1024
 
 type Document struct {
+	markdownRaw   bool
 	Source        documentSource // Non-local origin (server, container, manifest); nil for local files.
 	SourceInfo    os.FileInfo    // Attributes of the source at the last fetch or store; nil when unknown.
 	ArchiveSource bool

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.0 — Markdown, PDF and responsive Quick Look
+
+- Keep the current PDF page visible at full brightness while decoding the next page, then replace it without an intermediate blank or dimmed frame.
+
+- Cancel Quick view work immediately when its source selection/context changes or the view is hidden, including directory scans, remote requests and Markdown image loading. Ignore stale completions without delaying the new preview.
+
+- Browse every PDF page in F3 using Page Up/Down, first/last-page shortcuts and toolbar controls. Decode only one bounded page at a time and cancel superseded loads. Fix content shrinking inside high-resolution PDF previews.
+- Give the F3 PDF viewer a viewport-based fit-page/fit-width layout, explicit zoom controls, scrolling and correct page dimensions independent of the text grid.
+
+- Render Markdown in F3 and supported Quick view panels with theme-matched backgrounds, system fonts, tables, task lists, fenced code and footnotes.
+- Cmd+Shift+M switches the viewer between formatted text and source; source search and editing retain existing controls.
+- Parse bounded fragments asynchronously, preserve scrolling across redraws, and mask dialogs without hiding the whole document. Render local and relative raster images from the source filesystem with bounded helper-process decoding and cancellation; do not automatically load HTTP images or execute embedded HTML.
+
 ## 0.23.0 — Container workspaces and live diagnostics
 
 ### Quick Live Metrics

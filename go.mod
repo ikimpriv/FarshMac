@@ -10,6 +10,7 @@ require (
 	github.com/pkg/sftp v1.13.12
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
+	github.com/yuin/goldmark v1.8.7
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.56.0

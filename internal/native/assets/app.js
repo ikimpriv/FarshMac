@@ -41,6 +41,7 @@ function keyMessage(e){
 }
 function toggle(e){return (e.metaKey||e.ctrlKey)&&!e.altKey&&!e.shiftKey&&shortcutLetter(e)==='o';}
 function copyText(){
+ if(mode==='panels'&&window.farshmacMarkdown?.copy())return;
  if(mode==='traffic'){window.farshmacTraffic?.copy();return;}
  if(mode==='metrics'){window.farshmacMetrics?.copy();return;}
  if(commandHistory.visible){commandHistory.copy();return;}
@@ -124,14 +125,17 @@ window.farshmacUpdate = state => {
    await session.archive.write(Uint8Array.from(atob(packet.Data),c=>c.charCodeAt(0)));
    const rows=session.archive.take();if(rows.length)send({Type:'historyAppend',History:rows,Context:packet.Context});
   }
+  if(state.mode&&state.mode!=='panels'){window.farshmacMarkdown?.update(null);window.farshmacPDF?.update(null);}
   historyView.update(state.history,state.historyPage);
   commandHistory.update(state.commands,state.shellReady,state.commandsError);
   if(state.grid){
+   window.farshmacMarkdown?.update(state.markdown,panelEl.querySelector('.xterm-screen').getBoundingClientRect(),panels.cols,panels.rows);
    const img=document.getElementById('quick-preview'), p=state.preview;
-   img.hidden=!p;
+   window.farshmacPDF?.update(p);
+   img.hidden=!p||!!p.pdf;
    // The F3 image view: the whole grid is black and the picture is centred over it.
    const full=!!(p&&p.full);img.classList.toggle('full',full);panelEl.classList.toggle('image',full);
-   if(p){const r=panelEl.querySelector('.xterm-screen').getBoundingClientRect();
+   if(p&&!p.pdf){const r=panelEl.querySelector('.xterm-screen').getBoundingClientRect();
     if(p.data)img.src=p.data;
     img.style.objectFit=p.stretch?'fill':'';
     // Mask only modal rectangles (including shadows), not the entire chart.
@@ -166,6 +170,8 @@ document.addEventListener('keyup',reportModifiers,true);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)reportModifiers({});});
 document.addEventListener('keydown',e=>{
  reportModifiers(e);
+ if(mode==='panels'&&window.farshmacMarkdown?.key(e))return;
+ if(mode==='panels'&&window.farshmacPDF?.key(e))return;
  if(mode==='traffic'){
   if(e.metaKey&&['q','w'].includes(e.key.toLowerCase())||e.altKey&&e.key==='F9'){e.preventDefault();send(keyMessage(e));}
   return;

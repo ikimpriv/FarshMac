@@ -34,11 +34,11 @@ const DefaultPixels = 768
 
 // HelperMain decodes path in the helper process; maxPixels bounds the longer
 // side of the picture (DefaultPixels when 0).
-func HelperMain(path string, maxPixels int) int {
+func HelperMain(path string, maxPixels int, pageNumber ...int) int {
 	if maxPixels <= 0 {
 		maxPixels = DefaultPixels
 	}
-	r, err := decode(path, maxPixels)
+	r, err := decode(path, maxPixels, pageNumber...)
 	if err != nil {
 		return 1
 	}
@@ -56,6 +56,11 @@ func Run(ctx context.Context, path string) (Result, error) {
 // RunSized decodes path with the longer side bounded by maxPixels. Larger
 // pictures are allowed more bytes and time.
 func RunSized(ctx context.Context, path string, maxPixels int) (Result, error) {
+	return RunPage(ctx, path, maxPixels, 1)
+}
+
+// RunPage renders one PDF page, keeping decoding memory independent of page count.
+func RunPage(ctx context.Context, path string, maxPixels, page int) (Result, error) {
 	limit := int64(5 * 1024 * 1024)
 	timeout := 4 * time.Second
 	if maxPixels > DefaultPixels {
@@ -68,7 +73,7 @@ func RunSized(ctx context.Context, path string, maxPixels int) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, exe, HelperFlag, path, strconv.Itoa(maxPixels))
+	cmd := exec.CommandContext(ctx, exe, HelperFlag, path, strconv.Itoa(maxPixels), strconv.Itoa(page))
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return Result{}, err

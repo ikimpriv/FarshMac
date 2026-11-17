@@ -1,10 +1,12 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'">
-<title>FarshMac</title><link rel="stylesheet" href="vendor/xterm.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="metrics.css"><link rel="stylesheet" href="traffic.css"></head>
+<title>FarshMac</title><link rel="stylesheet" href="vendor/xterm.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="metrics.css"><link rel="stylesheet" href="traffic.css"><link rel="stylesheet" href="markdown.css"></head>
 <body>
 <div id="panels" aria-label="File manager"></div>
 <img id="quick-preview" alt="File preview" hidden>
+<section id="markdown-preview" hidden aria-label="Markdown document"><div id="markdown-toolbar"><span id="markdown-caption"></span><button id="markdown-source">⌘⇧M Source</button></div><article id="markdown-body"></article></section>
+<section id="pdf-view" hidden aria-label="PDF viewer"><div id="pdf-toolbar"><span id="pdf-caption"></span><button id="pdf-prev">Previous · PgUp</button><span id="pdf-position"></span><button id="pdf-next">Next · PgDn</button><button id="pdf-fit">Fit page · 0</button><button id="pdf-width">Fit width · W</button><button id="pdf-out">−</button><span id="pdf-scale"></span><button id="pdf-in">+</button><button id="pdf-close">Close · Esc</button></div><div id="pdf-scroll"><img id="pdf-page" alt="PDF page"></div></section>
 <div id="terminal" aria-label="Interactive terminal"></div>
 
 <div id="history" tabindex="0" aria-label="Terminal history">
@@ -20,5 +22,5 @@
 <div id="metrics" aria-label="Pod metrics dashboard"></div>
 <div id="traffic" aria-label="Traffic monitor"></div>
 <div id="footer"></div>
-<script src="vendor/xterm.js"></script><script src="vendor/addon-unicode11.js"></script><script src="history.js"></script><script src="history_view.js"></script><script src="commands.js"></script><script src="metrics.js"></script><script src="traffic.js"></script><script src="app.js"></script>
+<script src="vendor/xterm.js"></script><script src="vendor/addon-unicode11.js"></script><script src="history.js"></script><script src="history_view.js"></script><script src="commands.js"></script><script src="metrics.js"></script><script src="traffic.js"></script><script src="markdown.js"></script><script src="pdf.js"></script><script src="app.js"></script>
 </body></html>

@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),h=require('./harness.cjs')();
+const md=h.context.window.farshmacMarkdown,root=h.elements.get('markdown-preview'),body=h.elements.get('markdown-body');
+const screen={left:0,top:0,width:1000,height:600};
+const p={html:'<h1>Title</h1><table><tr><td>Value</td></tr></table>',key:'one',theme:'Classic',X:1,Y:2,W:48,H:30,Active:true};
+md.update(p,screen,100,40);assert.equal(root.hidden,false);assert.equal(root.style.left,'10px');assert.equal(body.innerHTML,p.html);
+root.scrollTop=80;md.update({...p,theme:'Light'},screen,100,40);assert.equal(root.scrollTop,80);assert.equal(root.dataset.theme,'Light');
+let prevented=false;const key={key:'PageDown',preventDefault(){prevented=true},stopImmediatePropagation(){}};root.clientHeight=300;md.key(key);assert.equal(root.scrollTop,330);assert.ok(prevented);
+md.update({...p,Blocked:true,occlusions:[{X:4,Y:5,W:8,H:7}]},screen,100,40);assert.equal(root.style.pointerEvents,'none');assert.ok(root.style.maskImage);assert.equal(md.key(key),false);
+md.update({...p,key:'two'},screen,100,40);assert.equal(root.scrollTop,0);assert.equal(root.style.maskImage,'');
+md.update(null);assert.equal(root.hidden,true);assert.equal(body.innerHTML,'');console.log('Markdown placement, theme, scrolling, modal masking, source reset: OK');

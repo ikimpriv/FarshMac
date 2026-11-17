@@ -7,7 +7,7 @@ package preview
 #import <ImageIO/ImageIO.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <stdlib.h>
-static char *thumbnail(const char *filename, int maxPixels) {
+static char *thumbnail(const char *filename, int maxPixels, int pageNumber) {
  @autoreleasepool {
  NSURL *url=[NSURL fileURLWithPath:[NSString stringWithUTF8String:filename]];
  CGImageRef image=NULL; int width=0,height=0,pages=0;
@@ -16,16 +16,22 @@ static char *thumbnail(const char *filename, int maxPixels) {
   CGPDFDocumentRef doc=CGPDFDocumentCreateWithURL((__bridge CFURLRef)url);
   if(!doc)return NULL;
   pages=(int)CGPDFDocumentGetNumberOfPages(doc);
-  CGPDFPageRef page=pages?CGPDFDocumentGetPage(doc,1):NULL;
+  CGPDFPageRef page=pageNumber>=1 && pageNumber<=pages?CGPDFDocumentGetPage(doc,pageNumber):NULL;
   if(page){
    CGRect box=CGPDFPageGetBoxRect(page,kCGPDFCropBox);
    if(box.size.width>0 && box.size.height>0){
     double scale=(double)maxPixels/MAX(box.size.width,box.size.height);
     int w=MAX(1,(int)(box.size.width*scale)),h=MAX(1,(int)(box.size.height*scale));
-    if(CGPDFPageGetRotationAngle(page)%180){int t=w;w=h;h=t;}
+    width=(int)box.size.width;height=(int)box.size.height;
+    if(CGPDFPageGetRotationAngle(page)%180){int t=w;w=h;h=t;t=width;width=height;height=t;}
     CGColorSpaceRef cs=CGColorSpaceCreateDeviceRGB();
     CGContextRef ctx=CGBitmapContextCreate(NULL,w,h,8,w*4,cs,(CGBitmapInfo)kCGImageAlphaPremultipliedLast);CGColorSpaceRelease(cs);
-    if(ctx){CGContextSetRGBFillColor(ctx,1,1,1,1);CGContextFillRect(ctx,CGRectMake(0,0,w,h));CGContextConcatCTM(ctx,CGPDFPageGetDrawingTransform(page,kCGPDFCropBox,CGRectMake(0,0,w,h),0,true));CGContextDrawPDFPage(ctx,page);image=CGBitmapContextCreateImage(ctx);CGContextRelease(ctx);}
+    if(ctx){CGContextSetRGBFillColor(ctx,1,1,1,1);CGContextFillRect(ctx,CGRectMake(0,0,w,h));// CoreGraphics fits down but does not enlarge PDF content. Map in page
+    // points first, then explicitly scale those points to bitmap pixels.
+    double pointW=box.size.width,pointH=box.size.height;
+    if(CGPDFPageGetRotationAngle(page)%180){double t=pointW;pointW=pointH;pointH=t;}
+    CGContextScaleCTM(ctx,(double)w/pointW,(double)h/pointH);
+    CGContextConcatCTM(ctx,CGPDFPageGetDrawingTransform(page,kCGPDFCropBox,CGRectMake(0,0,pointW,pointH),0,true));CGContextDrawPDFPage(ctx,page);image=CGBitmapContextCreateImage(ctx);CGContextRelease(ctx);}
    }
   }
   CGPDFDocumentRelease(doc);
@@ -61,10 +67,14 @@ import (
 	"unsafe"
 )
 
-func decode(path string, maxPixels int) (Result, error) {
+func decode(path string, maxPixels int, pageNumber ...int) (Result, error) {
+	page := 1
+	if len(pageNumber) > 0 {
+		page = pageNumber[0]
+	}
 	p := C.CString(path)
 	defer C.free(unsafe.Pointer(p))
-	out := C.thumbnail(p, C.int(maxPixels))
+	out := C.thumbnail(p, C.int(maxPixels), C.int(page))
 	if out == nil {
 		return Result{}, fmt.Errorf("preview unavailable")
 	}

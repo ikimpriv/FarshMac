@@ -30,3 +30,14 @@ func TestImagePreviewVisibilityAndPayload(t *testing.T) {
 		t.Fatal("preview covers terminal")
 	}
 }
+
+func TestPDFViewDimensions(t *testing.T) {
+	a := &App{Cols: 100, Rows: 40, Image: &imageView{Path: "sample.pdf", Data: "data:image/png;base64,pdf", Pages: 3, PageWidth: 792, PageHeight: 612}}
+	p := a.imagePreview()
+	if p == nil || !p.PDF || p.PageWidth != 792 || p.PageHeight != 612 || p.Pages != 3 {
+		t.Fatal(p)
+	}
+	if next := a.imagePreview(); next == nil || next.Data != "" || !next.PDF {
+		t.Fatal(next)
+	}
+}

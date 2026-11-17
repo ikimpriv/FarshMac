@@ -9,7 +9,7 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.23.0 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.24.0 · macOS 12+ · Apple Silicon and Intel**
 
 **File context menu (F11 / Alt+Enter):** compose a message with attachments in the macOS Mail sharing service, create a ZIP / tar.gz / tar.bz2 archive, or choose an installed application compatible with all selected files. FarshMac does not send email itself. Remote files are staged locally for external applications and retained until the FarshMac window closes.
 
@@ -27,11 +27,11 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.23.0)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.24.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.23.0.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.24.0.md) for installation details and known limitations.
 
 ## Features
 
@@ -239,3 +239,7 @@ closing a traffic window closes its monitoring session and clears its active
 experiments. See [Docker integration](docs/DOCKER.md).
 
 Quick Live Metrics uses **Working set** by default. Press **M** with the metrics panel active, or click its memory selector, to choose **Applications (anonymous)**, **File cache**, or **Total**. Working set is total cgroup memory minus inactive file cache; it includes active cache and kernel memory. File cache includes tmpfs/shared memory. These components are not additive. Missing breakdown metrics are shown as unavailable, never replaced with Total. PodToast 0.8.2 provides the breakdown and retains it in metrics history.
+
+Markdown files (`.md`, `.markdown`, `.mdown`, `.mkd`) open as formatted documents in F3 and supported Quick view panels, using the current theme and system fonts. Tables, task lists, fenced code, footnotes and internal heading links are supported. **Cmd+Shift+M** toggles source/formatting in the viewer; F7 searches the source, and F4 from panels still opens the editor. Rendering is asynchronous and limited to 256 KiB, with a visible notice for larger files; the complete source remains available in the normal viewer. Local and relative raster images are loaded from the document's own filesystem, including remote/container sources, and decoded in the preview helper. Images are bounded to eight per document, 12 MiB per input, 768 pixels on the longer side, and 8 MiB of embedded output. Missing or unsupported images retain their alternative text. Embedded HTML and automatic HTTP image loading remain disabled.
+
+In the F3 PDF viewer, **0** fits the page, **W** fits its width, and **+ / −** changes zoom. Page Up/Down (or **[ / ]**) and the toolbar move between pages; Home/End open the first/last page. Arrow keys, Space/Shift+Space and the mouse wheel scroll within a page. The toolbar shows the current scale; fitting follows the window size and preserves the page aspect ratio. All PDF pages are available; only the current page is decoded, with cancellation on page changes or closing.

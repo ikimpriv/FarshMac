@@ -642,7 +642,10 @@ func (a *App) updateKubePreview(source *Panel) {
 			text = ref.String() + "\n" + err.Error()
 		}
 		a.jobs <- func() {
-			if a.previewKey == key && o.Check() == nil {
+			if a.previewOperation != o {
+				return
+			}
+			if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 				a.previewText = text
 			}
 			a.previewOperation = nil
@@ -688,7 +691,7 @@ func (a *App) updateContainerFilePreview(source *Panel, level kubePath) {
 			var r io.ReadCloser
 			if r, err = f.Open(path); err == nil {
 				var data []byte
-				data, err = io.ReadAll(io.LimitReader(o.Reader(r), 64*1024))
+				data, err = io.ReadAll(io.LimitReader(o.Reader(r), markdownReadLimit(path, 64*1024)))
 				r.Close()
 				if bytes.IndexByte(data, 0) >= 0 {
 					text = fmt.Sprintf("%s\nBinary file: press F3 to view in hex", filepath.Base(path))
@@ -702,7 +705,10 @@ func (a *App) updateContainerFilePreview(source *Panel, level kubePath) {
 			text = filepath.Base(path) + "\n" + err.Error()
 		}
 		a.jobs <- func() {
-			if a.previewKey == key && o.Check() == nil {
+			if a.previewOperation != o {
+				return
+			}
+			if a.previewOperation == o && a.previewKey == key && o.Check() == nil {
 				a.previewText = text
 			}
 			a.previewOperation = nil

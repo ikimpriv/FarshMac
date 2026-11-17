@@ -18,16 +18,28 @@ const imageViewPixels = 2048
 // PDF: black background, the picture centred, Esc closes. The decode runs in
 // the sandboxed preview helper, so a damaged file cannot take the UI down.
 type imageView struct {
-	Path    string
-	Data    string // data: URL once decoded.
-	Caption string // Name, size and dimensions, or the failure.
-	Failed  bool
-	op      *fsops.Operation
+	Path                               string
+	Data                               string // data: URL once decoded.
+	Caption                            string // Name, size and dimensions, or the failure.
+	Failed                             bool
+	Page, Pages, PageWidth, PageHeight int
+	loading                            bool
+	op                                 *fsops.Operation
 }
 
 func (a *App) openImage(path string) {
 	a.closeImage()
-	v := &imageView{Path: path, Caption: "Loading " + filepath.Base(path) + "…", op: fsops.NewOperation("Viewing image")}
+	a.loadImagePage(path, 1)
+}
+
+func (a *App) loadImagePage(path string, page int) {
+	if a.Image != nil && a.Image.op != nil {
+		a.Image.op.Cancel()
+	}
+	v := &imageView{Path: path, Page: page, loading: true, Caption: "Loading " + filepath.Base(path) + "…", op: fsops.NewOperation("Viewing image")}
+	if previous := a.Image; previous != nil && previous.Path == path {
+		v.Data, v.Pages, v.PageWidth, v.PageHeight = previous.Data, previous.Pages, previous.PageWidth, previous.PageHeight
+	}
 	a.Image = v
 	a.Menu = nil
 	a.FastFind = nil
@@ -40,12 +52,14 @@ func (a *App) openImage(path string) {
 		}
 		var r preview.Result
 		if err == nil {
-			r, err = preview.RunSized(v.op.Context(), resolved, imageViewPixels)
+			r, err = preview.RunPage(v.op.Context(), resolved, imageViewPixels, page)
 		}
 		a.jobs <- func() {
 			if a.Image != v {
 				return
 			}
+			v.loading = false
+			a.previewSent = ""
 			a.dirty = true
 			if err != nil {
 				v.Failed = true
@@ -58,9 +72,10 @@ func (a *App) openImage(path string) {
 				return
 			}
 			v.Data = r.Data
+			v.Pages, v.PageWidth, v.PageHeight = r.Pages, r.Width, r.Height
 			v.Caption = fmt.Sprintf("%s · %d bytes", filepath.Base(path), info.Size())
 			if r.Pages > 0 {
-				v.Caption += fmt.Sprintf(" · PDF, page 1 of %d", r.Pages)
+				v.Caption += fmt.Sprintf(" · PDF, page %d of %d", page, r.Pages)
 			} else {
 				v.Caption += fmt.Sprintf(" · %d × %d", r.Width, r.Height)
 			}
@@ -81,8 +96,26 @@ func (a *App) closeImage() {
 	a.dirty = true
 }
 
-// imageKey: Esc (also F3, F10 and Enter) closes the view; other keys are ignored.
+// imageKey handles PDF page navigation and closing the graphical viewer.
 func (a *App) imageKey(m Message) {
+	if v := a.Image; v != nil && v.Pages > 0 && !m.Meta && !m.Ctrl && !m.Alt {
+		page := v.Page
+		switch m.Key {
+		case "PageDown", "]":
+			page++
+		case "PageUp", "[":
+			page--
+		case "Home":
+			page = 1
+		case "End":
+			page = v.Pages
+		}
+		page = max(1, min(v.Pages, page))
+		if page != v.Page {
+			a.loadImagePage(v.Path, page)
+			return
+		}
+	}
 	switch m.Key {
 	case "Escape", "F3", "F10", "Enter":
 		if !m.Shift && !m.Meta && !m.Ctrl && !m.Alt {

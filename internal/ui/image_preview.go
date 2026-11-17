@@ -1,6 +1,13 @@
 package ui
 
 type ImagePreview struct {
+	Page       int         `json:"page,omitempty"`
+	Loading    bool        `json:"loading,omitempty"`
+	PDF        bool        `json:"pdf,omitempty"`
+	Pages      int         `json:"pages,omitempty"`
+	PageWidth  int         `json:"pageWidth,omitempty"`
+	PageHeight int         `json:"pageHeight,omitempty"`
+	Caption    string      `json:"caption,omitempty"`
 	Data       string      `json:"data,omitempty"`
 	Stretch    bool        `json:"stretch,omitempty"`
 	Full       bool        `json:"full,omitempty"` // The F3 image view: whole window, black backdrop.
@@ -20,7 +27,7 @@ func (a *App) imagePreview() *ImagePreview {
 			a.previewSent = ""
 			return nil
 		}
-		result := &ImagePreview{Full: true, X: 0, Y: 0, W: a.Cols, H: a.Rows}
+		result := &ImagePreview{Page: v.Page, Loading: v.loading, PDF: v.Pages > 0, Pages: v.Pages, PageWidth: v.PageWidth, PageHeight: v.PageHeight, Caption: v.Caption, Full: true, X: 0, Y: 0, W: a.Cols, H: a.Rows}
 		if key := "image:" + v.Path; a.previewSent != key {
 			result.Data = v.Data
 			a.previewSent = key
