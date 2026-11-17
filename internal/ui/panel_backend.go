@@ -18,6 +18,7 @@ const (
 	backendArchive
 	backendRemote
 	backendKube
+	backendDocker
 )
 
 // panelCaps says what the panel at its current path can do, so actions ask
@@ -127,6 +128,8 @@ type panelBackend interface {
 
 func (p *Panel) backend() panelBackend {
 	switch {
+	case p.Docker != nil:
+		return dockerBackend{}
 	case p.Kube != nil:
 		return kubeBackend{}
 	case p.Remote != nil:
@@ -151,7 +154,7 @@ func (p *Panel) endpoint() remotefs.Endpoint { return p.backend().Endpoint(p) }
 // Kubernetes), not in the local file system or an archive on it.
 func (p *Panel) served() bool {
 	k := p.kind()
-	return k == backendRemote || k == backendKube
+	return k == backendRemote || k == backendKube || k == backendDocker
 }
 
 // Key bar rows shared by the sources: Far Manager's local table.
@@ -264,7 +267,7 @@ type remoteBackend struct{}
 func (remoteBackend) Kind() backendKind     { return backendRemote }
 func (remoteBackend) Label(p *Panel) string { return p.Remote.Label() }
 func (remoteBackend) Caps(*Panel) panelCaps {
-	return capEdit | capMkdir | capDelete | capRename | capCopyIn | capFolderSize | capQuickView
+	return capExecute | capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capFolderSize | capQuickView
 }
 func (remoteBackend) FilesystemPath(p *Panel) string { return p.RemoteLocalPath }
 func (remoteBackend) Virtual(*Panel, string) bool    { return true }
@@ -333,5 +336,11 @@ func (localBackend) CommandPrompt(*Panel) string         { return "" }
 func (localBackend) Execute(*App, *Panel, string) bool   { return false }
 func (archiveBackend) CommandPrompt(*Panel) string       { return "" }
 func (archiveBackend) Execute(*App, *Panel, string) bool { return false }
-func (remoteBackend) CommandPrompt(*Panel) string        { return "" }
-func (remoteBackend) Execute(*App, *Panel, string) bool  { return false }
+func (remoteBackend) CommandPrompt(p *Panel) string      { return p.Remote.Label() + p.Path }
+func (remoteBackend) Execute(a *App, p *Panel, command string) bool {
+	if !a.showRemoteTerminal() {
+		return false
+	}
+	a.queueContextCommand(p, p.Path, command)
+	return true
+}

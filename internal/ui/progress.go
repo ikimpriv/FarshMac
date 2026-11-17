@@ -9,13 +9,18 @@ import (
 )
 
 func (a *App) workProgress(label string, fn func(*fsops.Operation) error) {
+	receipt := a.Panels[a.Active].selectionReceipt()
 	a.backgroundTask(label, func(o *fsops.Operation) (func(), func(), error) {
 		a.operationQuestions(o)
 		err := fn(o)
-		if errors.Is(err, fsops.ErrSkipped) {
+		skippedResult := errors.Is(err, fsops.ErrSkipped)
+		if skippedResult {
 			err = nil
 		}
 		return func() {
+				if !skippedResult && o.Snapshot().Skipped == 0 {
+					receipt.complete()
+				}
 				a.Status = "Done"
 				if skipped := o.Snapshot().Skipped; skipped > 0 {
 					a.Status = fmt.Sprintf("Done — %d item(s) skipped", skipped)

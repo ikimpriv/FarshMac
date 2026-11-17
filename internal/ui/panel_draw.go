@@ -62,6 +62,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 		g.Fill(x, y, w, h, Gray, Black)
 		return
 	}
+	if a.drawCompactMetrics(g, index, x, y, w, h) {
+		return
+	}
 	g.Box(x, y, w, h, LightCyan, Blue)
 	label := p.label() + p.Path
 	if p.View == "Info panel" {
@@ -97,6 +100,13 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			g.Text(x+2, y+2+row, line, LightCyan, Blue, w-4)
 		}
 		return
+	}
+	storagePanel := false
+	for _, entry := range p.Entries {
+		if _, ok := entry.Info.(storageFileInfo); ok {
+			storagePanel = true
+			break
+		}
 	}
 	rows := max(1, h-5)
 	columns := panelColumns(p)
@@ -167,6 +177,30 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 		extraWidth := min(width-4, max(sizeWidth, preferred))
 		nameWidth := max(0, width-extraWidth-3)
 		metadata := columns == 1 && p.View != "Tree panel" && width >= 12
+		storageWidth, storageSize, storageDate := 0, false, false
+		if storagePanel && p.View != "Tree panel" && width >= 24 {
+			metadata = true
+			storageSize = columns == 1 && width >= 48
+			storageDate = columns == 1 && width >= 95
+			storageWidth = min(30, max(10, width/3))
+			extraWidth = storageWidth
+			if storageSize {
+				extraWidth += sizeWidth + 1
+			}
+			if storageDate {
+				extraWidth += 15
+			}
+			nameWidth = max(0, width-extraWidth-3)
+			g.Fill(xx, y+1, width, 1, Yellow, Blue)
+			g.Text(xx+1, y+1, "Name", Yellow, Blue, nameWidth)
+			g.Text(xx+nameWidth+2, y+1, "Storage / volume", Yellow, Blue, storageWidth)
+			if storageSize {
+				g.Text(xx+nameWidth+3+storageWidth, y+1, "Size", Yellow, Blue, sizeWidth)
+			}
+			if storageDate {
+				g.Text(xx+nameWidth+4+storageWidth+sizeWidth, y+1, "Modified", Yellow, Blue, 14)
+			}
+		}
 		for row := 0; row < rows; row++ {
 			i := p.Offset + c*rows + row
 			yy := y + 2 + row
@@ -192,6 +226,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 					fg = 0xff55ff
 				}
 			}
+			if storage, ok := e.Info.(storageFileInfo); ok && storage.mount {
+				fg = 0xffaa55
+			}
 			if p.Marked[e.Name] {
 				fg = Yellow
 			}
@@ -203,6 +240,12 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				g.Fill(xx, yy, width, 1, fg, bg)
 			}
 			marker := " "
+			if storage, ok := e.Info.(storageFileInfo); ok && storage.mount {
+				marker = "↳"
+			}
+			if k, ok := e.Info.(*kubeEntry); ok && k.covered {
+				marker = "◆"
+			}
 			if p.Marked[e.Name] {
 				marker = "√"
 			}
@@ -240,6 +283,25 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				if result.Stale {
 					size = "~" + size
 				}
+			}
+			if storageWidth > 0 {
+				kind := ""
+				if info, ok := e.Info.(storageFileInfo); ok {
+					kind = info.column
+				}
+				g.Text(xx+1, yy, name, fg, bg, nameWidth)
+				g.Set(xx+nameWidth+1, yy, "│", LightCyan, bg)
+				start := xx + nameWidth + 2
+				g.Text(start, yy, kind, fg, bg, storageWidth)
+				if storageSize {
+					g.Set(start+storageWidth, yy, "│", LightCyan, bg)
+					g.Text(start+storageWidth+1, yy, fmt.Sprintf("%*s", sizeWidth, size), fg, bg, sizeWidth)
+				}
+				if storageDate {
+					g.Set(start+storageWidth+sizeWidth+1, yy, "│", LightCyan, bg)
+					g.Text(start+storageWidth+sizeWidth+2, yy, date, fg, bg, 14)
+				}
+				continue
 			}
 			extra := fmt.Sprintf("%*s %s", sizeWidth, size, date)
 			switch p.View {
@@ -301,6 +363,11 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	status := fmt.Sprintf("%s in %d items", panelSizeLabel(p.TotalBytes, a.Settings.HumanReadableSizes), p.ItemCount)
 	if marked > 0 {
 		status = fmt.Sprintf("%d selected · %s", marked, status)
+	}
+	if p.Cursor >= 0 && p.Cursor < len(p.Entries) {
+		if storage, ok := p.Entries[p.Cursor].Info.(storageFileInfo); ok {
+			status = storage.label + " · " + status
+		}
 	}
 	status = p.filterFooter(status)
 	if p.Err != "" {

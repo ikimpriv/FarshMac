@@ -68,6 +68,7 @@ type CopyOptions struct {
 	AcceptProtocolMetadata bool
 	PermissionsMode        *os.FileMode
 	ExpectedDestination    os.FileInfo
+	ExpectedAbsent         bool
 	Workers                int
 	Metadata               fsops.MetadataOptions
 	Conflict               fsops.Conflict
@@ -336,6 +337,9 @@ func copyFile(s, d FS, source, target Endpoint, j job, options CopyOptions, o *f
 		return statErr
 	}
 	exists := statErr == nil
+	if options.ExpectedAbsent && exists {
+		return fmt.Errorf("remote file changed; destination now exists")
+	}
 	if want := options.ExpectedDestination; want != nil {
 		if !exists || before.Size() != want.Size() || !before.ModTime().Equal(want.ModTime()) || before.Mode() != want.Mode() {
 			return fmt.Errorf("remote file changed; reopen before saving")

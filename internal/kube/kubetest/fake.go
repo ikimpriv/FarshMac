@@ -40,6 +40,7 @@ type watcher struct {
 	drop   chan struct{}
 	table  bool
 	meta   bool
+	full   bool
 	names  []string // Table column names fixed when the watch started.
 	first  bool
 }
@@ -114,7 +115,7 @@ func (f *FakeAPI) push(collection, eventType string, obj map[string]any) {
 	for _, w := range f.watchers[collection] {
 		var object any
 		if w.table {
-			object = tableWith(w.names, []map[string]any{obj}, w.meta, !w.first, fmt.Sprint(f.rv))
+			object = tableWith(w.names, []map[string]any{obj}, w.meta, !w.first, fmt.Sprint(f.rv), w.full)
 			w.first = true
 		} else {
 			object = stripColumns(obj)
@@ -164,7 +165,7 @@ func (f *FakeAPI) serveWatch(w http.ResponseWriter, r *http.Request, path string
 		return
 	}
 	items := f.objects[path]
-	wt := &watcher{events: make(chan []byte, 64), drop: make(chan struct{}), table: strings.Contains(r.Header.Get("Accept"), "as=Table"), meta: r.URL.Query().Get("includeObject") == "Metadata", names: columnNames(items)}
+	wt := &watcher{events: make(chan []byte, 64), drop: make(chan struct{}), table: strings.Contains(r.Header.Get("Accept"), "as=Table"), meta: r.URL.Query().Get("includeObject") == "Metadata", full: r.URL.Query().Get("includeObject") == "Object", names: columnNames(items)}
 	f.watchers[path] = append(f.watchers[path], wt)
 	f.mu.Unlock()
 	defer func() {
@@ -431,7 +432,7 @@ func (f *FakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		rv := fmt.Sprint(f.rv)
 		if strings.Contains(r.Header.Get("Accept"), "as=Table") {
-			writeJSON(w, tableWith(columnNames(items), items, r.URL.Query().Get("includeObject") == "Metadata", true, rv))
+			writeJSON(w, tableWith(columnNames(items), items, r.URL.Query().Get("includeObject") == "Metadata", true, rv, r.URL.Query().Get("includeObject") == "Object"))
 			return
 		}
 		out := make([]any, 0, len(items))
@@ -595,7 +596,7 @@ func columnNames(items []map[string]any) []string {
 
 // tableWith renders items as a metav1.Table: NAME, the given columns, AGE.
 // withDefs includes columnDefinitions (a watch sends them once).
-func tableWith(names []string, items []map[string]any, includeMeta, withDefs bool, rv string) map[string]any {
+func tableWith(names []string, items []map[string]any, includeMeta, withDefs bool, rv string, full ...bool) map[string]any {
 	rows := []any{}
 	for _, it := range items {
 		meta := it["metadata"].(map[string]any)
@@ -612,6 +613,9 @@ func tableWith(names []string, items []map[string]any, includeMeta, withDefs boo
 		row := map[string]any{"cells": cells}
 		if includeMeta {
 			row["object"] = map[string]any{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1", "metadata": meta}
+		}
+		if len(full) > 0 && full[0] {
+			row["object"] = stripColumns(it)
 		}
 		rows = append(rows, row)
 	}

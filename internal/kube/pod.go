@@ -18,11 +18,13 @@ type ContainerState struct {
 	State      string
 	Started    time.Time
 	Ready      bool
+	PodToast   bool
 }
 
 // PodSummary is what the panel needs from a pod: its phase, node and
 // containers in manifest order (init, regular, ephemeral).
 type PodSummary struct {
+	Storage     map[string][]StorageMount
 	Phase, Node string
 	Containers  []ContainerState
 }
@@ -30,7 +32,7 @@ type PodSummary struct {
 // PodSummaryOf reads the container list and statuses of a pod. Containers
 // without a status yet (pending pod) are reported as "waiting".
 func PodSummaryOf(pod *corev1.Pod) PodSummary {
-	s := PodSummary{Phase: string(pod.Status.Phase), Node: pod.Spec.NodeName}
+	s := PodSummary{Storage: containerStorage(pod), Phase: string(pod.Status.Phase), Node: pod.Spec.NodeName}
 	add := func(name, kind string, statuses []corev1.ContainerStatus) {
 		c := ContainerState{Name: name, Kind: kind, State: "waiting"}
 		for _, st := range statuses {
@@ -62,9 +64,44 @@ func PodSummaryOf(pod *corev1.Pod) PodSummary {
 		add(c.Name, "", pod.Status.ContainerStatuses)
 	}
 	for _, c := range pod.Spec.EphemeralContainers {
+		if isPodToastCandidate(c) {
+			continue
+		}
 		add(c.Name, "ephemeral", pod.Status.EphemeralContainerStatuses)
 	}
+	if !pod.Spec.HostPID && !pod.Spec.HostNetwork {
+		for _, ec := range pod.Spec.EphemeralContainers {
+			if !isPodToastCandidate(ec) {
+				continue
+			}
+			running := false
+			for _, st := range pod.Status.EphemeralContainerStatuses {
+				if st.Name == ec.Name && st.State.Running != nil {
+					running = true
+				}
+			}
+			if !running {
+				continue
+			}
+			for i := range s.Containers {
+				c := &s.Containers[i]
+				if c.Kind != "ephemeral" && c.State == "running" && (podToastSharedManagement(pod, ec) || ec.TargetContainerName == c.Name) {
+					c.PodToast = true
+				}
+			}
+		}
+	}
 	return s
+}
+
+// Covered reports whether a running agent covers at least one target.
+func (s PodSummary) Covered() bool {
+	for _, c := range s.Containers {
+		if c.PodToast {
+			return true
+		}
+	}
+	return false
 }
 
 // Regular returns the ordinary (non-init, non-ephemeral) containers.

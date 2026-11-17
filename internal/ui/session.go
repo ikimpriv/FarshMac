@@ -106,7 +106,7 @@ func (g *WindowGroup) windowSnapshot(id int) SessionWindow {
 func (g *WindowGroup) sessionSnapshot() SavedSession {
 	s := SavedSession{Version: 1, Windows: []SessionWindow{}}
 	for _, id := range g.Order {
-		if g.Apps[id] == nil {
+		if g.Apps[id] == nil || (g.Apps[id].MetricsOnly || g.Apps[id].TrafficOnly) {
 			continue
 		}
 		if id == g.focused {

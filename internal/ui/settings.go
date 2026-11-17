@@ -54,10 +54,12 @@ type Settings struct {
 	MaskGroups       map[string]string
 	DescriptionFile  string
 	// Kubernetes panels (docs/KUBERNETES_PANEL_SPEC.md).
-	KubeProfiles    []kube.Profile `json:",omitempty"`
-	KubeHiddenTypes string         // Comma-separated type folders never listed.
-	KubeSnapshotTTL int            // Seconds a namespace snapshot stays fresh (0 = 30).
-	KubeLogsTail    int            // Lines Shift+F3 shows (0 = 1000).
+	KubeProfiles     []kube.Profile    `json:",omitempty"`
+	KubeHiddenTypes  string            // Comma-separated type folders never listed.
+	KubeSnapshotTTL  int               // Seconds a namespace snapshot stays fresh (0 = 30).
+	EphemeralHistory []EphemeralPreset `json:",omitempty"`
+	PodToastImage    string            // Explicit image reference; no image is deployed on ordinary browsing.
+	KubeLogsTail     int               // Lines Shift+F3 shows (0 = 1000).
 }
 type UserCommand struct{ Name, Command string }
 type Association struct{ Mask, Command, Viewer, Editor string }

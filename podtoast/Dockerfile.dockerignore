@@ -1,0 +1,12 @@
+**
+!LICENSE
+!go.mod
+!go.sum
+!internal
+!internal/podtoast
+!internal/podtoast/**
+!cmd
+!cmd/podtoast
+!cmd/podtoast/**
+!podtoast
+!podtoast/Dockerfile

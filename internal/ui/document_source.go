@@ -36,9 +36,11 @@ type documentSource interface {
 // remoteSource is a file on a server (FTP/FTPS/SFTP) or in a container:
 // anything reachable through a remotefs.Opener.
 type remoteSource struct {
-	Opener remotefs.Opener
-	Label  string
-	Path   string
+	AllowCreate bool
+	Missing     bool
+	Opener      remotefs.Opener
+	Label       string
+	Path        string
 }
 
 func (s *remoteSource) Display() string { return s.Label + s.Path }
@@ -56,6 +58,21 @@ func (s *remoteSource) Fetch(o *fsops.Operation, dir string) (string, os.FileInf
 	}
 	defer f.Close()
 	info, err := f.Lstat(s.Path)
+	if os.IsNotExist(err) && s.AllowCreate {
+		parent, parentErr := f.Stat(path.Dir(s.Path))
+		if parentErr != nil {
+			return "", nil, parentErr
+		}
+		if !parent.IsDir() {
+			return "", nil, fmt.Errorf("parent is not a directory")
+		}
+		local := filepath.Join(dir, path.Base(s.Path))
+		if err = os.WriteFile(local, nil, 0600); err != nil {
+			return "", nil, err
+		}
+		s.Missing = true
+		return local, nil, nil
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -85,7 +102,9 @@ func (s *remoteSource) Fetch(o *fsops.Operation, dir string) (string, os.FileInf
 	if err == nil {
 		err = writeErr
 	}
-	if err == nil && n != info.Size() {
+	// procfs and other generated files can report zero bytes while returning
+	// content. Read those to EOF; retain size checks for advertised payloads.
+	if err == nil && info.Size() > 0 && n != info.Size() {
 		err = fmt.Errorf("remote file changed during download")
 	}
 	if err != nil {
@@ -101,19 +120,24 @@ func (s *remoteSource) Store(o *fsops.Operation, staged string, expected os.File
 	}
 	defer f.Close()
 	current, err := f.Lstat(s.Path)
-	if err != nil {
+	missing := os.IsNotExist(err)
+	if err != nil && !(s.Missing && missing) {
 		return nil, err
 	}
 	// Unknown attributes (an earlier upload whose result could not be
 	// examined) cannot be compared; that upload is what is on the server.
-	if !force && expected != nil && !sameRemoteInfo(current, expected) {
+	if !force && ((s.Missing && !missing) || (expected != nil && !sameRemoteInfo(current, expected))) {
 		return nil, errRemoteChanged
 	}
-	mode := current.Mode().Perm()
-	options := remotefs.CopyOptions{AcceptProtocolMetadata: true, Workers: 1, Metadata: fsops.MetadataOptions{Permissions: true}, PermissionsMode: &mode, ExpectedDestination: current, Conflict: func(string, string) int { return 0 }}
+	mode := os.FileMode(0644)
+	if current != nil {
+		mode = current.Mode().Perm()
+	}
+	options := remotefs.CopyOptions{AcceptProtocolMetadata: true, Workers: 1, Metadata: fsops.MetadataOptions{Permissions: true}, PermissionsMode: &mode, ExpectedDestination: current, ExpectedAbsent: s.Missing && !force, Conflict: func(string, string) int { return 0 }}
 	if err = remotefs.Copy(remotefs.Endpoint{}, remotefs.Endpoint{Opener: s.Opener}, []remotefs.Pair{{Source: staged, Destination: s.Path}}, options, o); err != nil {
 		return nil, err
 	}
+	s.Missing = false
 	if o.Check() != nil {
 		return nil, nil
 	}

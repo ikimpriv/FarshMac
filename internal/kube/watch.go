@@ -104,7 +104,7 @@ func expired(err error) bool {
 func (c *Client) watchOnce(ctx context.Context, r Resource, ns, rv string, defs *[]metav1.TableColumnDefinition, events chan<- Event) (string, error) {
 	req := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).
 		SetHeader("Accept", tableAccept).
-		Param("watch", "true").Param("allowWatchBookmarks", "true").Param("includeObject", "Metadata")
+		Param("watch", "true").Param("allowWatchBookmarks", "true").Param("includeObject", tableObjectPolicy(r))
 	if rv != "" {
 		req = req.Param("resourceVersion", rv)
 	}

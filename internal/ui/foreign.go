@@ -10,23 +10,20 @@ import (
 )
 
 // foreignStream is a byte stream shown in the terminal area instead of the
-// local shell: an interactive exec in a container, or followed logs. Keyboard
+// local shell: an interactive SSH/container exec, or followed logs. Keyboard
 // input and resizes go to it while it runs; the shell waits (C10, G13).
-type foreignStream interface {
-	Write(p []byte) error
-	Resize(cols, rows int) error
-	Output() <-chan []byte
-	Done() <-chan struct{}
-	Err() error
-	Close()
-}
-
 // startForeign shows the terminal and routes it to s until s ends; done
 // runs afterwards on the engine queue (for example to refresh a panel).
 func (a *App) startForeign(s foreignStream, label string, done func()) {
+	a.activateTerminal("stream")
+	a.installForeign(s, label, done)
+}
+func (a *App) installForeign(s foreignStream, label string, done func()) {
 	if a.Foreign != nil {
 		a.Foreign.Close()
 	}
+	a.Shells.ClearRemote()
+	a.foreignEnded = false
 	a.Foreign, a.foreignLabel, a.foreignDone = s, label, done
 	a.TermVisible = true
 	a.Status = label + " · ⌘. stops"
@@ -54,7 +51,7 @@ func (a *App) pollForeign() {
 				a.finishForeign()
 				return
 			}
-			a.pending = append(a.pending, chunk...)
+			a.acceptForeignOutput(chunk)
 			a.dirty = true
 		default:
 			select {
@@ -73,7 +70,7 @@ func (a *App) finishForeign() {
 	}
 	// Drain what is left so the final lines are not lost.
 	for chunk := range s.Output() {
-		a.pending = append(a.pending, chunk...)
+		a.acceptForeignOutput(chunk)
 	}
 	a.Foreign = nil
 	done := a.foreignDone
@@ -86,16 +83,33 @@ func (a *App) finishForeign() {
 			status = a.foreignLabel + ": " + err.Error()
 		}
 	}
+	if m := a.Shells.Remote(); m != nil {
+		r := m.End()
+		a.pending = append(a.pending, r.Output...)
+		if r.Completed {
+			a.pending = append(a.pending, ("\r\n" + status + "\r\n")...)
+			a.TermVisible, a.foreignEnded = false, false
+			a.Status, a.dirty = status, true
+			if done != nil {
+				done()
+			}
+			return
+		}
+	}
 	a.pending = append(a.pending, "\r\n\x1b[7m "+status+" · any key returns to the panels \x1b[0m\r\n"...)
 	a.foreignEnded = true
-	a.setShellStatus(status)
+	if a.Shells.RemoteKey() != "" {
+		a.Status = status
+	} else {
+		a.setShellStatus(status)
+	}
 	a.dirty = true
 	if done != nil {
 		done()
 	}
 }
 
-// foreignReturn consumes the first key after a container command ended and
+// foreignReturn consumes the first key after a remote command ended and
 // returns to the panels, instead of passing the key to the local shell.
 func (a *App) foreignReturn() bool {
 	if !a.foreignEnded {

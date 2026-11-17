@@ -16,11 +16,12 @@ import (
 // or editor and the position in it. Bookmarks belong to one window instance:
 // they are not shared between windows and are not saved.
 type bookmark struct {
-	Kind    string           // "folder" or "document"
-	Path    string           // Folder, or the document file.
-	Cursor  string           // Folder: entry under the cursor.
-	Remote  *remotefs.Config // Folder on a server (no secrets).
-	Archive string           // Folder inside this archive.
+	Connection *recentConnection
+	Kind       string           // "folder" or "document"
+	Path       string           // Folder, or the document file.
+	Cursor     string           // Folder: entry under the cursor.
+	Remote     *remotefs.Config // Folder on a server (no secrets).
+	Archive    string           // Folder inside this archive.
 
 	Edit, Help bool        // Document: editor rather than viewer; the F1 help text.
 	Row, Col   int         // Document: text position; survives the file changing length.
@@ -38,6 +39,8 @@ func (b bookmark) label() string {
 			mode = "Edit "
 		}
 		return mode + b.Path + ":" + strconv.Itoa(b.Row+1)
+	case b.Connection != nil:
+		return b.Connection.Label + filepath.Join(b.Path, b.Cursor)
 	case b.Remote != nil:
 		return b.Remote.Label() + filepath.Join(b.Path, b.Cursor)
 	default:
@@ -115,6 +118,10 @@ func (a *App) documentBookmarkKey(d *Document, m Message) bool {
 func (a *App) saveFolderBookmark(n int) {
 	p := &a.Panels[a.Active]
 	b := bookmark{Kind: "folder", Path: p.Path}
+	if p.Docker != nil {
+		r, _ := panelConnection(p)
+		b.Connection = &r
+	}
 	if p.Cursor >= 0 && p.Cursor < len(p.Entries) && p.Entries[p.Cursor].Name != ".." {
 		b.Cursor = p.Entries[p.Cursor].Name
 	}
@@ -161,6 +168,17 @@ func (a *App) goBookmark(n int) {
 // the cursor on the remembered entry if it is still there.
 func (a *App) goFolderBookmark(b bookmark) {
 	p := &a.Panels[a.Active]
+	if b.Connection != nil {
+		r := *b.Connection
+		r.Path = b.Path
+		r.Cursor = b.Cursor
+		if err := saveRecentConnection(r, false); err != nil {
+			a.error(err)
+			return
+		}
+		a.openRecentConnection(a.Active, r)
+		return
+	}
 	if c := b.Remote; c != nil {
 		for i := range a.Panels {
 			other := &a.Panels[i]
@@ -192,6 +210,7 @@ func (a *App) goFolderBookmark(b bookmark) {
 	// Remembered cursor positions and marks of visited folders survive the
 	// jump; going up still focuses the folder just left (see beginLoad).
 	previous := *p
+	p.Docker = nil
 	p.Remote = nil
 	p.RemoteLocalPath = ""
 	p.Archive = nil

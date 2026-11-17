@@ -77,7 +77,7 @@ func (p *Panel) loadRemote(path string) error {
 	p.installEntries(files, state)
 	p.TotalBytes = size
 	p.ItemCount = len(files)
-	p.InfoText = p.Remote.Label() + "\nRemote filesystem; terminal remains local"
+	p.InfoText = p.Remote.Label() + "\n" + remoteShellDescription(*p.Remote)
 	return nil
 }
 
@@ -111,7 +111,14 @@ func (p *Panel) listFS(f remotefs.FS, path string, o *fsops.Operation) ([]Entry,
 			continue
 		}
 		isDir := info.IsDir()
-		if info.Mode()&os.ModeSymlink != 0 && stater != nil && links < remoteLinkResolveLimit {
+		linkKnown := false
+		if link, ok := info.(interface{ LinkIsDir() (bool, bool) }); ok {
+			if dir, known := link.LinkIsDir(); known {
+				isDir = dir
+				linkKnown = true
+			}
+		}
+		if !linkKnown && info.Mode()&os.ModeSymlink != 0 && stater != nil && links < remoteLinkResolveLimit {
 			links++
 			if target, err := stater.Stat(filepath.Join(path, name)); err == nil {
 				isDir = target.IsDir()
@@ -159,6 +166,7 @@ func (a *App) networkMenu() {
 		case i < first+len(profiles):
 			a.connectionDialog(profiles[i-first])
 		default:
+			a.restoreNextConnection = true
 			a.connectKube(a.Active, clusters[i-first-len(profiles)])
 		}
 	})
@@ -208,6 +216,7 @@ func (a *App) connectionDialog(c remotefs.Config) {
 // connectionForm keeps passwords only in this form's memory, so Edit after a
 // failed attempt does not make the user type them again.
 func (a *App) connectionForm(index int, c remotefs.Config, focus int) {
+	a.requestedRestore = nil
 	address := "sftp://"
 	if c.Host != "" {
 		address = c.ServerURL()
@@ -235,6 +244,7 @@ func (a *App) connectionForm(index int, c remotefs.Config, focus int) {
 			config.HostKey, config.CertFingerprint = previous.HostKey, previous.CertFingerprint
 			config.PlainFTPAccepted = previous.PlainFTPAccepted
 		}
+		a.restoreNextConnection = true
 		a.connectRemote(index, config)
 	})
 	a.Form.Primary = "Connect"
@@ -273,6 +283,11 @@ func (a *App) connectRemote(index int, c remotefs.Config) {
 	a.connectRemoteChecked(index, c)
 }
 func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
+	requested := a.requestedRestore
+	a.requestedRestore = nil
+	restore := a.restoreNextConnection
+	a.restoreNextConnection = false
+	a.rememberConnection(index, false)
 	note := a.connectNote
 	a.connectNote = ""
 	cursor := a.connectCursor
@@ -303,6 +318,7 @@ func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 				p.Kube.close()
 			}
 			p.Kube = nil
+			p.Docker = nil
 			p.Remote = &c
 			p.RemoteLocalPath = local
 			p.Archive = nil
@@ -315,8 +331,11 @@ func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 			p.Offset = 0
 			saveErr := a.saveConnectionProfile(c)
 			a.error(p.Load(c.Directory))
+			if restore {
+				a.restoreConnection(index, requested)
+			}
 			p.placeCursor(cursor)
-			a.Status = "Connected: " + c.Label() + " (terminal is local)" + note
+			a.Status = "Connected: " + c.Label() + " · " + remoteShellDescription(c) + note
 			if saveErr != nil {
 				a.Status += "; profile not saved: " + saveErr.Error()
 			}
@@ -404,8 +423,9 @@ func hostKeyWarning(e *remotefs.HostKeyChanged) string {
 	return "WARNING: the host key of " + e.Host + " does not match " + source + ".\nReceived: " + e.Fingerprint + " (" + e.Type + ")\nExpected: " + strings.Join(expected, ", ") + "\nThis may be a man-in-the-middle attack. The connection was refused."
 }
 func (a *App) disconnectRemote(index int) {
+	a.rememberConnection(index, false)
 	p := &a.Panels[index]
-	if p.Remote == nil && p.Kube == nil {
+	if p.Remote == nil && p.Kube == nil && p.Docker == nil {
 		return
 	}
 	p.cancelPanelLoad()
@@ -420,6 +440,7 @@ func (a *App) disconnectRemote(index int) {
 	if p.Kube != nil && p.Kube != a.Panels[1-index].Kube {
 		p.Kube.close()
 	}
+	p.Docker = nil
 	p.Remote, p.Kube = nil, nil
 	p.RemoteLocalPath = ""
 	p.states = nil

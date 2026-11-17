@@ -10,12 +10,13 @@ import (
 )
 
 func TestCleanMenuOrderAndSeparators(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	a, err := New(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	wantPanel := []string{"Brief", "Medium", "Full", "Wide", "Detailed", "", "Info panel", "Tree panel", "Quick view", "", "Sort modes…", "Panel on/off", "Re-read", "Change volume…"}
+	wantPanel := []string{"Brief", "Medium", "Full", "Wide", "Detailed", "", "Info panel", "Tree panel", "Quick view", "", "Sort modes…", "Panel on/off", "Re-read", "Change volume…", "Docker…", "FTP / SFTP connections…", "Kubernetes cluster…"}
 	for _, index := range []int{0, 4} {
 		var got []string
 		for _, item := range a.menuSections()[index].Items {

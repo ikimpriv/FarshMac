@@ -25,8 +25,8 @@ func TestFarQuickViewToggleAndPanelKeys(t *testing.T) {
 		t.Fatal("original panel not restored")
 	}
 	a.key(Message{Key: "F9", Alt: true})
-	if !a.Zoom {
-		t.Fatal("Alt F9")
+	if !a.Zoom || a.Form != nil {
+		t.Fatal("Alt F9 must zoom")
 	}
 	a.Zoom = false
 	a.key(Message{Key: "p", Ctrl: true})

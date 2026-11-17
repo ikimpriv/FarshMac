@@ -909,3 +909,81 @@ func TestNewFileInLockedFolderWarns(t *testing.T) {
 		t.Fatal("Edit anyway did not open the editor")
 	}
 }
+
+func TestNewRemoteFileAndCollision(t *testing.T) {
+	a, c := remoteEditorFixture(t, true)
+	a.key(Message{Key: "F4", Shift: true})
+	if a.Dialog == nil {
+		t.Fatal("Shift F4 did not prompt", a.Status)
+	}
+	a.Dialog.Input = "new.txt"
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	d := a.Doc
+	if d == nil || d.Source == nil {
+		t.Fatal("new remote editor", a.Status)
+	}
+	f, err := c.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.Lstat("/folder/new.txt")
+	f.Close()
+	if !os.IsNotExist(err) {
+		t.Fatal("file created before save", err)
+	}
+	d.Insert("new content")
+	d.modified()
+	a.save()
+	waitNetwork(t, a)
+	if d.Dirty || readRemote(t, c, "/folder/new.txt") != "new content" {
+		t.Fatal("new file save", a.Status)
+	}
+	// A file created by another client after opening must not be overwritten.
+	a.Doc = nil
+	a.newFile()
+	a.Dialog.Input = "collision.txt"
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	d = a.Doc
+	if d == nil {
+		t.Fatal(a.Status)
+	}
+	writeRemote(t, c, "/folder/collision.txt", "other client")
+	d.Insert("mine")
+	d.modified()
+	a.save()
+	waitNetwork(t, a)
+	if a.Form == nil || a.Form.Title != "File changed on disk" || readRemote(t, c, "/folder/collision.txt") != "other client" {
+		t.Fatal("collision protection", a.Form, a.Status)
+	}
+}
+
+func TestNewFTPEmptyFile(t *testing.T) {
+	server := testnet.FTP(t)
+	server.Config.PlainFTPAccepted = true
+	a, err := New(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Async = true
+	a.connectRemote(0, server.Config)
+	waitNetwork(t, a)
+	a.key(Message{Key: "F4", Shift: true})
+	if a.Dialog == nil {
+		t.Fatal(a.Status)
+	}
+	a.Dialog.Input = "empty.txt"
+	a.key(Message{Key: "Enter"})
+	waitNetwork(t, a)
+	if a.Doc == nil {
+		t.Fatal(a.Status)
+	}
+	a.save()
+	waitNetwork(t, a)
+	info, err := os.Stat(filepath.Join(server.Root, "empty.txt"))
+	if err != nil || info.Size() != 0 {
+		t.Fatal(info, err, a.Status)
+	}
+}

@@ -362,6 +362,9 @@ func (p *Panel) rememberFileView() {
 }
 
 func (a *App) setView(index int, view string) {
+	if a.compactMetrics != nil && a.compactMetrics.index == index {
+		a.stopCompactMetrics(true)
+	}
 	// Quick view only previews the other panel, so it works for remote
 	// panels like Ctrl+Q; Tree and Info panel need a local folder.
 	p := &a.Panels[index]
@@ -389,13 +392,40 @@ func (a *App) volumes(index int) {
 	for _, e := range items {
 		paths = append(paths, filepath.Join("/Volumes", e.Name()))
 	}
-	a.choose("Volumes and home", paths, func(i int) { a.openVolume(index, paths[i]) })
+	actions := a.connectionMenuItems(index)
+	labels := append([]string(nil), paths...)
+	labels = append(labels, "────────")
+	disabled := map[int]bool{len(paths): true}
+	for _, item := range actions {
+		if item.Run == nil {
+			disabled[len(labels)] = true
+		}
+		if item.Label == "" {
+			labels = append(labels, "────────")
+		} else {
+			labels = append(labels, item.Label)
+		}
+	}
+	a.choose("Volumes and connections", labels, func(i int) {
+		if i < len(paths) {
+			a.openVolume(index, paths[i])
+			return
+		}
+		n := i - len(paths) - 1
+		if n >= 0 && n < len(actions) && actions[n].Run != nil {
+			actions[n].Run()
+		} else {
+			a.volumes(index)
+		}
+	})
+	a.Form.DisabledChoices = disabled
 }
 
 // openVolume switches a panel to a local volume. The volume is probed before
 // the panel leaves its current source, so an unmounted or unreadable volume
 // keeps a remote/archive panel intact. A hidden panel is shown first.
 func (a *App) openVolume(index int, path string) {
+	a.rememberConnection(index, false)
 	f, err := os.Open(path)
 	if err == nil {
 		_, err = f.ReadDir(1)
@@ -415,6 +445,7 @@ func (a *App) openVolume(index int, path string) {
 	p.cancelTree()
 	previous := *p
 	p.rememberFileView()
+	p.Docker = nil
 	p.Remote, p.RemoteLocalPath, p.Archive, p.Kube = nil, "", nil, nil
 	p.View = p.lastFileView
 	if p.View == "" {

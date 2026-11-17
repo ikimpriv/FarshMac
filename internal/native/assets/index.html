@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'">
-<title>FarshMac</title><link rel="stylesheet" href="vendor/xterm.css"><link rel="stylesheet" href="style.css"></head>
+<title>FarshMac</title><link rel="stylesheet" href="vendor/xterm.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="metrics.css"><link rel="stylesheet" href="traffic.css"></head>
 <body>
 <div id="panels" aria-label="File manager"></div>
 <img id="quick-preview" alt="File preview" hidden>
@@ -17,6 +17,8 @@
 <textarea id="command-edit" rows="3" spellcheck="false"></textarea>
 <div><button id="command-run">Run · Enter</button> <button id="command-cancel">Cancel · Esc</button></div>
 </div>
+<div id="metrics" aria-label="Pod metrics dashboard"></div>
+<div id="traffic" aria-label="Traffic monitor"></div>
 <div id="footer"></div>
-<script src="vendor/xterm.js"></script><script src="vendor/addon-unicode11.js"></script><script src="history.js"></script><script src="history_view.js"></script><script src="commands.js"></script><script src="app.js"></script>
+<script src="vendor/xterm.js"></script><script src="vendor/addon-unicode11.js"></script><script src="history.js"></script><script src="history_view.js"></script><script src="commands.js"></script><script src="metrics.js"></script><script src="traffic.js"></script><script src="app.js"></script>
 </body></html>

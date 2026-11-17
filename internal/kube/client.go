@@ -26,8 +26,13 @@ import (
 // stop when it is cancelled. Values that come from the server are data:
 // they are never interpreted as commands.
 type Client struct {
-	Profile         Profile
-	connectionEpoch *atomic.Uint64
+	storageCacheMu   sync.Mutex
+	storageCacheKey  string
+	storageCacheAt   time.Time
+	storageCacheData []byte
+	storageCacheErr  error
+	Profile          Profile
+	connectionEpoch  *atomic.Uint64
 
 	config         *rest.Config
 	raw            *rest.RESTClient // Unversioned client for Table LISTs by absolute path.
@@ -63,6 +68,9 @@ func Connect(ctx context.Context, p Profile) (*Client, error) {
 // against a fake API server) and verifies the connection.
 func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, error) {
 	cfg = rest.CopyConfig(cfg)
+	if err := freshOIDCConfig(cfg); err != nil {
+		return nil, err
+	}
 	cfg.QPS = 50
 	cfg.Burst = 300
 	if cfg.Timeout == 0 {

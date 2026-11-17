@@ -12,12 +12,16 @@ import (
 	"testing"
 	"time"
 
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/preview"
 )
 
 // TestMain lets the test binary serve as the sandboxed preview helper, which
 // the image view starts through os.Executable().
 func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == cloudfiles.HelperFlag {
+		os.Exit(cloudfiles.HelperMain(os.Args[2]))
+	}
 	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == preview.HelperFlag {
 		pixels := 0
 		if len(os.Args) == 4 {
@@ -25,7 +29,17 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(preview.HelperMain(os.Args[2], pixels))
 	}
-	os.Exit(m.Run())
+	// Every test starts with isolated preferences, even tests that do not
+	// explicitly override HOME. Protocol fixtures must never save real profiles.
+	home, err := os.MkdirTemp("", "farshmac-ui-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func TestEnterOnAppBundleEntersIt(t *testing.T) {

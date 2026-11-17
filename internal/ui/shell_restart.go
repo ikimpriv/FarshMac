@@ -51,6 +51,11 @@ func (a *App) StartTerminalOrRetry() {
 }
 
 func (a *App) scheduleShellRestart(err error) {
+	if a.Shells.LocalExited() {
+		if a.Foreign == nil {
+			a.TermVisible = false
+		}
+	}
 	cwd := a.ShellCwd
 	if a.pendingShellCwd != "" {
 		cwd = a.pendingShellCwd
@@ -59,7 +64,7 @@ func (a *App) scheduleShellRestart(err error) {
 		cwd = a.Panels[a.Active].filesystemPath()
 	}
 	if a.Term != nil {
-		a.Term.Close()
+		a.Shells.DetachLocal()
 		a.Term = nil
 	}
 	fast := !a.shellStarted && !a.shellStartedAt.IsZero() && time.Since(a.shellStartedAt) < shellStartupWindow
@@ -76,7 +81,9 @@ func (a *App) scheduleShellRestart(err error) {
 	a.shellRestartCwd = cwd
 	// Restore terminal input/display modes after an exited shell or exec'ed app,
 	// retaining the normal screen and its scrollback.
-	a.pending = append(a.pending, []byte("\x1b[?1049l\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l")...)
+	if a.Shells.RemoteKey() == "" && a.Foreign == nil {
+		a.appendLocalTerminal([]byte("\x1b[?1049l\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l"))
+	}
 	if fast {
 		a.shellFailures++
 	} else {
@@ -87,7 +94,7 @@ func (a *App) scheduleShellRestart(err error) {
 		a.Status = fmt.Sprintf("Shell keeps exiting during startup (%d attempts). Check your shell startup files; press Enter in the terminal or ⌘O to retry", a.shellFailures)
 		return
 	}
-	a.pending = append(a.pending, "\r\n[Restarting shell]\r\n"...)
+	a.appendLocalTerminal([]byte("\r\n[Restarting shell]\r\n"))
 	// A bad startup script must not cause an unbounded process-spawn loop.
 	a.shellRestartAt = time.Now().Add(shellBackoff(a.shellFailures))
 	a.Status = "Shell exited; restarting…"
@@ -101,9 +108,9 @@ func (a *App) stopShell(reason string) {
 	a.shellRestartAt = time.Time{}
 	a.shellStopped = reason
 	if strings.HasPrefix(reason, "exited ") {
-		a.pending = append(a.pending, fmt.Sprintf("\r\n[Shell exited %d times during startup; press Enter to retry]\r\n", a.shellFailures)...)
+		a.appendLocalTerminal([]byte(fmt.Sprintf("\r\n[Shell exited %d times during startup; press Enter to retry]\r\n", a.shellFailures)))
 	} else {
-		a.pending = append(a.pending, fmt.Sprintf("\r\n[Shell stopped: %s; press Enter to retry]\r\n", reason)...)
+		a.appendLocalTerminal([]byte(fmt.Sprintf("\r\n[Shell stopped: %s; press Enter to retry]\r\n", reason)))
 	}
 	a.dirty = true
 }
@@ -198,6 +205,7 @@ func (a *App) checkIntegrationWatchdog() {
 		return
 	}
 	a.ShellReady = true
+	a.Shells.Local().Prompt()
 	a.Status = "Shell integration did not respond; command not sent — check shell key bindings"
 	if a.integrationCommand != "" && a.Command == "" {
 		a.Command = a.integrationCommand
@@ -209,4 +217,14 @@ func (a *App) checkIntegrationWatchdog() {
 	a.integrationCommand = ""
 	a.integrationHistory = false
 	a.dirty = true
+}
+
+func (a *App) appendLocalTerminal(data []byte) {
+	if a.currentTerminalKey() == "local" {
+		a.pending = append(a.pending, data...)
+		return
+	}
+	if p := a.parkedTerminals["local"]; p != nil {
+		p.pending = append(p.pending, data...)
+	}
 }

@@ -41,7 +41,7 @@ func TestQuickViewOfArchiveMemberAndRemotePanelMenu(t *testing.T) {
 	a.setView(1, "Quick view")
 	settlePanels(t, a)
 	waitPreview(t, a)
-	if a.previewText != "Archive member: press F3 to extract and view" {
+	if !strings.Contains(a.previewText, "Directory contents (recursive)") || !strings.Contains(a.previewText, "Files:          1") {
 		t.Fatalf("archive member preview %q", a.previewText)
 	}
 	a.Panels[1].View = "Full"

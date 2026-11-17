@@ -47,7 +47,11 @@ func TestShiftEnterUsesSystemOpen(t *testing.T) {
 			}
 			a.key(Message{Key: "Enter", Shift: true})
 			waitWork(t, a)
-			if !reflect.DeepEqual(got, []string{"/usr/bin/open", filepath.Join(root, name)}) {
+			expected := filepath.Join(root, name)
+			if name == ".." {
+				expected = root
+			}
+			if !reflect.DeepEqual(got, []string{"/usr/bin/open", expected}) {
 				t.Fatalf("unexpected external invocation: %q", got)
 			}
 			if a.Command != "echo keep this draft" || a.TermVisible || a.Doc != nil || a.Panels[1].Path != root || a.Panels[1].Archive != nil || a.FastFind != nil {

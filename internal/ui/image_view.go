@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/fsops"
 	"farshmac/internal/preview"
 )
@@ -32,10 +33,14 @@ func (a *App) openImage(path string) {
 	a.FastFind = nil
 	a.dirty = true
 	go func() {
-		info, err := os.Stat(path)
+		resolved, err := cloudfiles.Prepare(v.op.Context(), path)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(resolved)
+		}
 		var r preview.Result
 		if err == nil {
-			r, err = preview.RunSized(v.op.Context(), path, imageViewPixels)
+			r, err = preview.RunSized(v.op.Context(), resolved, imageViewPixels)
 		}
 		a.jobs <- func() {
 			if a.Image != v {
@@ -44,7 +49,7 @@ func (a *App) openImage(path string) {
 			a.dirty = true
 			if err != nil {
 				v.Failed = true
-				v.Caption = filepath.Base(path) + ": cannot be shown (unsupported, damaged or too large)"
+				v.Caption = filepath.Base(path) + ": " + err.Error()
 				if !os.IsNotExist(err) && !isCancelled(err) {
 					a.Status = v.Caption
 				} else if os.IsNotExist(err) {

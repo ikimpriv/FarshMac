@@ -199,7 +199,7 @@ func TestRemoteCommandsDoNotModifyLocalPaths(t *testing.T) {
 	}
 	defer a.Close()
 	a.Panels[0].Remote = &remotefs.Config{Protocol: "sftp", Host: "test", Port: 22}
-	for _, run := range []func(){a.newFile, a.fileAttributes, a.createLink, a.describeFiles, a.archiveCreate} {
+	for _, run := range []func(){a.fileAttributes, a.createLink, a.describeFiles, a.archiveCreate} {
 		run()
 		if a.Form != nil || a.Dialog != nil || a.Busy {
 			t.Fatal("local-only action started on remote panel")

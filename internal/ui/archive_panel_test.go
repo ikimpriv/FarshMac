@@ -116,7 +116,7 @@ func TestPanelHotkeysAndArchiveSync(t *testing.T) {
 		t.Fatal("CmdF2")
 	}
 	a.key(Message{Key: "F2", Alt: true})
-	if a.Form == nil || a.Form.Title != "Volumes and home" {
+	if a.Form == nil || a.Form.Title != "Volumes and connections" {
 		t.Fatal("AltF2")
 	}
 	a.Form = nil

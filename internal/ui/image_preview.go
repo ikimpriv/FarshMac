@@ -1,12 +1,20 @@
 package ui
 
 type ImagePreview struct {
-	Data       string `json:"data,omitempty"`
-	Full       bool   `json:"full,omitempty"` // The F3 image view: whole window, black backdrop.
+	Data       string      `json:"data,omitempty"`
+	Stretch    bool        `json:"stretch,omitempty"`
+	Full       bool        `json:"full,omitempty"` // The F3 image view: whole window, black backdrop.
+	Occlusions []modalRect `json:"occlusions,omitempty"`
 	X, Y, W, H int
 }
 
 func (a *App) imagePreview() *ImagePreview {
+	if a.traffic != nil {
+		return nil
+	}
+	if a.compactMetrics != nil && a.Image == nil {
+		return a.quickMetricsPreview()
+	}
 	if v := a.Image; v != nil && !a.TermVisible {
 		if v.Data == "" || a.Form != nil || a.Dialog != nil {
 			a.previewSent = ""

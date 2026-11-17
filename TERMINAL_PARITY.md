@@ -127,3 +127,12 @@ different keyboards. Full compatibility with every xterm extension is not claime
 Sixel/Kitty graphics and file transfer are absent. Archived lines are static;
 blinking and active OSC 8 links are not replayed. Complex ZWJ/emoji graphemes and
 IME input require further validation.
+
+
+## Panel command completion
+
+Commands submitted from a panel return to the panels automatically when the shell reaches its next prompt, including a nonzero exit. No acknowledgement key is required. Cmd+O retains access to output and the live session. Local startup queues the first command until readiness. Container panels reuse a persistent native/toolbox shell; commands wait for readiness instead of entering a foreground program's stdin. Commands entered directly in the terminal keep the terminal visible.
+
+## Remote contexts
+
+SFTP and Kubernetes shells share the same context command lifecycle: persistent session, panel-directory execution, automatic panel return, and retained output through Cmd+O. SFTP opens a dedicated SSH connection using the file connection's authentication and host verification; terminal cancellation does not interrupt transfers. FTP/FTPS and SSH accounts denying PTY/exec show an explicit error instead of using the local shell. Remote SSH requires /bin/sh. Shell readiness is bounded to 30 seconds, and setup can be cancelled without waiting for the network timeout.

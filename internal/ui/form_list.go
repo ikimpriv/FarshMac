@@ -30,6 +30,49 @@ func (a *App) listKey(m Message) bool {
 		return false
 	}
 	f.freeScroll = false
+	if len(f.DisabledChoices) > 0 {
+		delta, target := 1, f.Focus
+		switch m.Key {
+		case "ArrowUp", "ArrowLeft":
+			delta = -1
+			target--
+		case "ArrowDown", "ArrowRight":
+			target++
+		case "Tab":
+			if m.Shift {
+				delta = -1
+			}
+			target += delta
+		case "Home":
+			target = 0
+		case "End":
+			target = len(f.Choice) - 1
+			delta = -1
+		case "PageDown":
+			target = min(len(f.Choice)-1, target+max(1, a.listRows()))
+		case "PageUp":
+			target = max(0, target-max(1, a.listRows()))
+			delta = -1
+		default:
+			target = -999
+		}
+		if target != -999 {
+			for attempts := 0; attempts < len(f.Choice); attempts++ {
+				if target < 0 || target >= len(f.Choice) {
+					if !a.Settings.MenuWrap {
+						return true
+					}
+					target = (target + len(f.Choice)) % len(f.Choice)
+				}
+				if f.choiceSelectable(target) {
+					f.Focus = target
+					return true
+				}
+				target += delta
+			}
+			return true
+		}
+	}
 	switch {
 	case m.Key == "Escape" && f.Query != "":
 		a.setListFilter("")
@@ -51,7 +94,7 @@ func (a *App) listKey(m Message) bool {
 		for step := 1; step <= len(f.Choice); step++ {
 			i := (f.Focus + step) % len(f.Choice)
 			first, _ := utf8.DecodeRuneInString(strings.TrimLeft(f.Choice[i], "✓ "))
-			if i < len(keys) && keys[i] == pressed || unicode.ToLower(first) == pressed {
+			if f.choiceSelectable(i) && (i < len(keys) && keys[i] == pressed || unicode.ToLower(first) == pressed) {
 				f.Focus = i
 				return true
 			}
@@ -77,6 +120,9 @@ func (a *App) setListFilter(query string) bool {
 	var index []int
 	needle := strings.ToLower(query)
 	for i, c := range f.all {
+		if query != "" && f.DisabledChoices[i] {
+			continue
+		}
 		if strings.Contains(strings.ToLower(c), needle) {
 			visible = append(visible, c)
 			index = append(index, i)
@@ -108,4 +154,8 @@ func (a *App) listWheel(delta int) {
 	f := a.Form
 	f.freeScroll = true
 	f.Scroll = max(0, min(max(0, len(f.Choice)-a.listRows()), f.Scroll+delta))
+}
+
+func (f *Form) choiceSelectable(row int) bool {
+	return row >= 0 && row < len(f.Choice) && !f.DisabledChoices[f.choiceIndex(row)]
 }

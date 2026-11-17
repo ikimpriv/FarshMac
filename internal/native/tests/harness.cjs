@@ -9,9 +9,9 @@ module.exports=function harness(){
   contains(e){return this===e||this.children.includes(e)} focus(){} blur(){} setPointerCapture(){this.captured=true} hasPointerCapture(){return this.captured} releasePointerCapture(){this.captured=false}
  }
  class Terminal{
-  constructor(options){this.options=options;this.cols=options.cols;this.rows=options.rows;this.unicode={};this.resizeCount=0;this.selection='';this.buffer={active:{type:'normal',viewportY:1},normal:{baseY:0}};this.modes={mouseTrackingMode:'none'};terminals.push(this)}
+  constructor(options){this.output=[];this.options=options;this.cols=options.cols;this.rows=options.rows;this.unicode={};this.resizeCount=0;this.selection='';this.buffer={active:{type:'normal',viewportY:1},normal:{baseY:0}};this.modes={mouseTrackingMode:'none'};terminals.push(this)}
   open(){} loadAddon(){} resize(c,r){this.cols=c;this.rows=r;this.resizeCount++} attachCustomKeyEventHandler(fn){this.key=fn} onData(fn){this.data=fn} onBinary(fn){this.binary=fn} focus(){}
-  write(data,done){writes.push(done)} getSelection(){return this.selection} hasSelection(){return !!this.selection} clearSelection(){this.selection=''} selectAll(){this.selectedAll=true} paste(data){this.pasted=data}
+  write(data,done){this.output.push(data);writes.push(done)} getSelection(){return this.selection} hasSelection(){return !!this.selection} clearSelection(){this.selection=''} selectAll(){this.selectedAll=true} paste(data){this.pasted=data}
  }
  class TerminalArchive{constructor(term){this.term=term}resize(c,r){this.term.resize(c,r)}write(data){return new Promise(resolve=>this.term.write(data,resolve))}take(){return []}}
  const selection={toString(){return 'selected history'},removeAllRanges(){},addRange(){}};

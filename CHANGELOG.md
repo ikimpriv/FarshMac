@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.23.0 — Container workspaces and live diagnostics
+
+### Quick Live Metrics
+
+- Default to Working set instead of total cgroup memory. The M selector offers anonymous application memory, file cache and Total; missing data is never silently substituted. PodToast 0.8.2 exposes all components and retains their history.
+- Keep charts updating behind dialogs and menus, masking only their bounds and shadows.
+- Show agent versions, attach replacements explicitly, switch sessions after validation, and retire superseded agents only after active operations drain.
+- Calculate container directory summaries inside PodToast with progress and cancellation; integrate them with Quick view and folder-size sorting.
+- Read generated zero-size files such as /proc/cpuinfo in the viewer without false download-size errors.
+
+- Ctrl+Shift+Q opens or closes Quick Live Metrics in the opposite panel for selected Kubernetes pods/containers or Docker containers. Theme-matched SVG charts show separate container lines, source-priority deduplication, bounded history and paged legends.
+- New PodToast agents collect up to ten minutes of basic metric history while idle. Histories are target-process-specific, capped in memory/storage, and replayed before live samples in both quick and detached charts. Older agents remain compatible without historical data.
+
+### cloud files
+
+- Materialize macOS dataless files through iCloud/File Provider coordination before F3/F4 and Quick view; resolve legacy iCloud placeholder names. Download waits run in a cancellable helper, outside image/PDF decoding timeouts, without reading entire files into memory. Preserve provider error messages.
+
+### persistent contexts and Docker
+
+- Add state-aware Docker context actions: container controls/signals/resource limits, image history/tag/run/export, network membership, volume consumers/read-only backups, and Compose service operations with validated recreation. Stream archives to atomic local output and clean up temporary backup containers.
+
+- Add structured Docker object reports to F3 and Quick view, including Compose service summaries; keep inspect reports read-only and retain F4 for container/volume files.
+
+- Use nonselectable separators instead of redundant connection-menu headings.
+- Fix Docker catalog crashes when a panel inherits date sorting; provide consistent metadata for virtual folders in every panel view.
+
+- Reload renewed OIDC credentials instead of reusing a legacy client-go provider cached before an external kubectl login.
+- Restore recent connections directly, without their settings dialogs.
+- Retain shell processes, screens and independent disk histories across local, SSH, Kubernetes and Docker context switches; route background terminal replies to their originating session.
+- Add Docker context connections, Compose/standalone container browsing, file operations, persistent shells, explicit PodToast and volume toolboxes, mount classification, logs/processes, live metrics and detached network monitoring.
+
+### file actions and connections
+
+- Open the current folder in Finder when Shift+Enter is pressed on the parent-directory entry.
+- Add Finder-style email composition with attachments, compatible-application selection, and ZIP / tar.gz / tar.bz2 creation to file context menus, including multiple selections and staged remote files.
+- Clear captured selections after successful file operations while preserving them on failure or cancellation.
+- Add FTP/SFTP and Kubernetes connection entry points to panel and volume menus, with five recent connections and retained locations for older connections. Explicit folder-history paths take priority over location restoration.
+- Isolate UI tests from the real user's connection profiles and settings.
+
+### metrics and pod diagnostics
+
+- Show storage/volume types directly in container file-panel columns, preserving manifest-declared mount points even when agent mount information is incomplete.
+
+- Track kubelet ephemeral storage without metrics-server, distinguishing container writable layer/logs from shared pod volume usage. Preserve unknown/stale statistics and explain denied access.
+- Highlight container mount points and identify volume types/PVCs using Kubernetes metadata plus PodToast 0.7.1 mount identity, with one mount-table read per listing.
+- Route Cmd+O to the active container shell or attached toolbox; preserve live sessions, show isolated failure screens, and block local PTY/history fallback.
+
+- Choose the destination chart and raw/delta/rate transform when adding metrics. Keep selected-series controls visible; prevent implicit reassignment to CPU and preserve restored layouts.
+- Recognize known untyped cumulative counters, allow explicit gauge/counter overrides, handle resets and gaps, and warn about mixed units.
+- Add passive pod socket/flow observation, incoming/outgoing port aggregates and multi-selection traffic charts using PodToast 0.7.0. Keep fault injection separate and explicit.
+- Separate current process CPU percent from lifetime CPU seconds and prioritize basic container metrics when the catalog is full.
+- Try compatible ephemeral toolboxes when an older preferred PodToast lacks a shell; offer an explicit upgrade only for missing shells.
+
+### Graphical traffic monitor
+
+- Add per-row graphical actions and a port-wide toolbar, show inherited conditions, and immediately re-evaluate queued delays when cleared.
+
+- Open traffic monitoring in an independent macOS window with live rate/concurrency charts, bounded history, human-readable values, connection search and per-connection keyboard controls.
+- Keep monitoring active until exit with renewable watchdog leases; apply and clear selected-connection delay, bandwidth, packet loss and resets without affecting peers. TLS remains opaque.
+- Add kernel-level Docker and disposable Kubernetes traffic tests.
+
+## Unreleased
+
+- Automatically reconnect to existing PodToast agents without creating duplicates. Resolve the ephemeral execution context before commands, including after restarting FarshMac; report legacy toolbox limitations explicitly.
+
+- Split live metrics into a compact per-container themed neighboring panel and independent chart windows for a container, pod or marked pods. Attribute PodToast series to targets, default to CPU-only comparison, hide detailed controls and add optional metrics-server CPU/memory sources.
+
+- Run panel commands in PodToast or another integrated ephemeral shell at the target folder, with explicit target/debug execution labels and TARGET_ROOT. Add per-target attachment checkboxes and generic debug filesystem access.
+
+- Select a sole PodToast target automatically; offer a container dropdown for isolated multi-container pods. Reuse one agent for shared PID namespaces with distinct target-root sessions. Discover metrics and run network diagnostics at pod scope.
+
+- Add live pod metrics dashboards with annotation/PodMonitor/named-port discovery, PodToast reuse, counters and classic histogram quantiles, searchable series, chart normalization, and independent detached windows. Collection is cancellable and memory-bounded.
+
+- Restore Alt+F9 window maximize/restore; context actions move to Alt+Enter and F11 without ordinary file commands.
+- Shift+F4 opens or creates files on remote and container filesystems, with collision-safe saves.
+- PodToast 0.2.0 adds Prometheus metrics over exec and an optional read-only HTTP listener. — PodToast
+
+- Alt+Enter or F11 opens a context menu. Pods offer explicit ephemeral-container attachment: PodToast integration, saved launch presets or another image, with target, command, security profile, UID, TTY, pull policy and startup options. Preserve open container folders after attachment. Window zoom moves to Alt+F9.
+
+- Add an explicitly started, shell-free Go agent in a Kubernetes ephemeral container for distroless filesystem access over a persistent multiplexed exec connection.
+- Route container file operations through PodToast while preserving FarshMac transfer dialogs and collision handling; stream directory entries and file payloads, cancel individual requests, and copy within the target container.
+- Add live CPU/memory/process/network monitoring, diagnostic snapshots with filesystem capacities, DNS/TCP/HTTP probes and bounded HTTP load tests.
+- Add Linux protocol tests, isolated kind/distroless integration tests, an agent Dockerfile and Linux CI. See `podtoast/README.md` for deployment, capabilities and limitations.
+
 ## 0.22.1 — Kubernetes panels and remote workflows
 
 - Add Kubernetes panels: Commands → Network connections → New Kubernetes cluster… connects through client-go (kubeconfig + context, exec auth plugins via the login shell PATH); profiles live in `kubernetes.json`.

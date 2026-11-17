@@ -5,7 +5,7 @@
 #include "panel_keys_darwin.h"
 
 @class FarshMacDelegate;
-@interface FarshMacWindow : NSObject <NSWindowDelegate,WKScriptMessageHandler,WKNavigationDelegate>
+@interface FarshMacWindow : NSObject <NSWindowDelegate,WKScriptMessageHandler,WKNavigationDelegate,NSSharingServiceDelegate>
 @property NSWindow *window;
 @property WKWebView *web;
 @property NSTimer *timer;
@@ -17,6 +17,8 @@
 @property NSRect restoredFrame;
 - (void)captureFrame;
 @property int session;
+@property NSMapTable<NSSharingService *,NSNumber *> *fileShares;
+@property BOOL choseFileApplication;
 @property(weak) FarshMacDelegate *owner;
 - (void)open;
 - (void)send:(NSString *)json;
@@ -54,6 +56,11 @@
 }
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
     NSEventModifierFlags flags=event.modifierFlags;
+    // Handle window cycling before WKWebView or its JavaScript consumes it.
+    if(event.keyCode==50 && (flags & NSEventModifierFlagCommand) && !(flags & (NSEventModifierFlagControl|NSEventModifierFlagOption))) {
+        [NSApp sendAction:(flags & NSEventModifierFlagShift) ? @selector(previousWindow:) : @selector(nextWindow:) to:self.controller.owner from:self];
+        return YES;
+    }
     // Option must use the current keyboard layout's base character, not the
     // macOS accent/dead-key result. Do not touch Option keys in the terminal/editor.
     NSString *s=event.charactersIgnoringModifiers;
@@ -100,6 +107,55 @@
     [self.window makeKeyAndOrderFront:nil];[self.window makeFirstResponder:self.web];
     NSURL *url=[NSURL fileURLWithPath:self.owner.entry];[self.web loadFileURL:url allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
     self.timer=[NSTimer timerWithTimeInterval:1.0/30 target:self selector:@selector(tick:) userInfo:nil repeats:YES];[[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];
+}
+- (void)fileActionFinished:(NSNumber *)request success:(BOOL)success error:(NSString *)error {
+    NSDictionary *message=@{@"Type":@"nativeFileActionDone",@"Request":request,@"Count":@(success?1:0),@"Text":error?:@""};
+    NSData *data=[NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
+    [self send:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]];
+}
+- (void)openFileApplication:(NSMenuItem *)item {
+    self.choseFileApplication=YES;
+    NSDictionary *action=item.representedObject;
+    [[NSWorkspace sharedWorkspace] openURLs:action[@"files"] withApplicationAtURL:action[@"app"] configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:^(NSRunningApplication *application,NSError *error){
+        dispatch_async(dispatch_get_main_queue(), ^{[self fileActionFinished:action[@"id"] success:error==nil error:error.localizedDescription];});
+    }];
+}
+- (void)performFileAction:(NSDictionary *)action {
+    NSMutableArray<NSURL *> *files=[NSMutableArray new];
+    for(NSString *path in action[@"Paths"])[files addObject:[NSURL fileURLWithPath:path]];
+    NSNumber *request=action[@"ID"];
+    if(!files.count){[self fileActionFinished:request success:NO error:@"No files selected"];return;}
+    if([action[@"Kind"] isEqual:@"email"]){
+        NSSharingService *service=[NSSharingService sharingServiceNamed:NSSharingServiceNameComposeEmail];
+        if(!service||![service canPerformWithItems:files]){[self fileActionFinished:request success:NO error:@"No email application can compose a message with these files"];return;}
+        if(!self.fileShares)self.fileShares=[NSMapTable strongToStrongObjectsMapTable];
+        [self.fileShares setObject:request forKey:service];service.delegate=self;[service performWithItems:files];return;
+    }
+    if(@available(macOS 12.0,*)){
+        NSMutableSet<NSURL *> *apps=nil;
+        for(NSURL *file in files){
+            NSSet *compatible=[NSSet setWithArray:[[NSWorkspace sharedWorkspace] URLsForApplicationsToOpenURL:file]];
+            if(!apps)apps=[compatible mutableCopy];else [apps intersectSet:compatible];
+        }
+        if(!apps.count){[self fileActionFinished:request success:NO error:@"No installed application supports all selected files"];return;}
+        NSMenu *menu=[[NSMenu alloc] initWithTitle:@"Open In"];
+        NSArray *sorted=[[apps allObjects] sortedArrayUsingComparator:^NSComparisonResult(NSURL *a,NSURL *b){return [a.lastPathComponent localizedCaseInsensitiveCompare:b.lastPathComponent];}];
+        for(NSURL *app in sorted){
+            NSMenuItem *item=[menu addItemWithTitle:app.lastPathComponent.stringByDeletingPathExtension action:@selector(openFileApplication:) keyEquivalent:@""];
+            item.target=self;item.representedObject=@{@"app":app,@"files":files,@"id":request};
+        }
+        self.choseFileApplication=NO;
+        [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(30,self.web.bounds.size.height-50) inView:self.web];
+        if(!self.choseFileApplication)[self fileActionFinished:request success:NO error:nil];
+    }else [self fileActionFinished:request success:NO error:@"Application discovery requires macOS 12 or newer"];
+}
+- (void)sharingService:(NSSharingService *)service didShareItems:(NSArray *)items {
+    NSNumber *request=[self.fileShares objectForKey:service];[self.fileShares removeObjectForKey:service];
+    if(request)[self fileActionFinished:request success:YES error:nil];
+}
+- (void)sharingService:(NSSharingService *)service didFailToShareItems:(NSArray *)items error:(NSError *)error {
+    NSNumber *request=[self.fileShares objectForKey:service];[self.fileShares removeObjectForKey:service];
+    if(request)[self fileActionFinished:request success:NO error:error.localizedDescription];
 }
 - (void)captureFrame {
     if(self.geometryTransition||self.owner.stopping||(self.window.styleMask&NSWindowStyleMaskFullScreen))return;
@@ -149,6 +205,7 @@
             if([state[@"fullscreen"] boolValue])[self.window toggleFullScreen:nil];
             if([state[@"zoom"] boolValue])[self.window zoom:nil];
             if([state[@"diskAccessSettings"] boolValue])[self.owner diskAccessSettings:nil];
+            if([state[@"nativeFileAction"] isKindOfClass:[NSDictionary class]])[self performFileAction:state[@"nativeFileAction"]];
             self.terminalMode=[state[@"mode"] isEqual:@"terminal"];
             self.panelKeys=[state[@"panelKeys"] boolValue]&&![state[@"mode"] isEqual:@"terminal"];
             [self.web evaluateJavaScript:[NSString stringWithFormat:@"window.farshmacUpdate(%@)",json] completionHandler:^(id value,NSError *error){if(error){self.evaluating=NO;NSLog(@"FarshMac UI: %@",error.localizedDescription);}}];

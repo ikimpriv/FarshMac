@@ -14,6 +14,7 @@ import (
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/kube"
+	"farshmac/internal/podtoast"
 	"farshmac/internal/remotefs"
 )
 
@@ -26,6 +27,7 @@ type kubePanel struct {
 	ttl     time.Duration
 	hidden  map[string]bool
 
+	closed       bool
 	epoch        uint64
 	mu           sync.Mutex
 	namespaces   []*kube.Object
@@ -33,8 +35,10 @@ type kubePanel struct {
 	snapshots    map[string]*kube.Snapshot
 	pods         map[string]kube.PodSummary // "ns/pod" -> containers, for the containers level
 	probes       map[string]kube.Probe      // "ns/pod/container" -> shell and tools found (C6)
-	executor     kube.Executor              // Tests inject a local shell; nil = the client's.
-	last         kubePath                   // Level of the path last listed, for the key bar.
+	toasts       map[string]*podtoast.Client
+	debugShells  map[string]kube.DebugShell
+	executor     kube.Executor // Tests inject a local shell; nil = the client's.
+	last         kubePath      // Level of the path last listed, for the key bar.
 	lastPath     string
 	watches      map[string]*kubeNamespaceWatch // Namespace ("" = the list of namespaces) -> its watches.
 	unwatched    map[string]string              // "ns/folder" -> why its watch ended (kept as listed).
@@ -90,6 +94,13 @@ func newKubePanel(profile kube.Profile, client *kube.Client, namespaces []*kube.
 }
 func (k *kubePanel) label() string { return k.profile.Label() }
 func (k *kubePanel) close() {
+	k.mu.Lock()
+	k.closed = true
+	for key, toast := range k.toasts {
+		toast.Close()
+		delete(k.toasts, key)
+	}
+	k.mu.Unlock()
 	k.stopWatches()
 	if k.client != nil {
 		k.client.Close()
@@ -117,6 +128,9 @@ func (k *kubePanel) syncConnection() {
 	defer k.mu.Unlock()
 	if epoch := k.client.ConnectionEpoch(); epoch != k.epoch {
 		k.epoch = epoch
+		for _, toast := range k.toasts {
+			toast.Close()
+		}
 		k.invalidateLocked("")
 		k.changed.Add(1)
 	}
@@ -401,6 +415,7 @@ func (k *kubePanel) resolve(ctx context.Context, p string) (kubePath, error) {
 // objects (and pods) are folders; an object without children is a file whose
 // Enter shows the manifest. The panel columns show kind, status and age.
 type kubeEntry struct {
+	covered bool
 	name    string
 	dir     bool
 	kind    string
@@ -422,7 +437,7 @@ func (e *kubeEntry) IsDir() bool        { return e.dir }
 func (e *kubeEntry) Sys() any           { return e.object }
 
 func kubeObjectEntry(o *kube.Object, dir bool) Entry {
-	return Entry{Name: o.Name, Dir: dir, Info: &kubeEntry{name: o.Name, dir: dir, kind: o.Kind, modTime: o.Created, column: o.ShortStatus(), object: o}}
+	return Entry{Name: o.Name, Dir: dir, Info: &kubeEntry{name: o.Name, dir: dir, covered: o.Pod != nil && o.Pod.Covered(), kind: o.Kind, modTime: o.Created, column: o.ShortStatus(), object: o}}
 }
 func kubeFolderEntry(name string, count int) Entry {
 	return Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, column: strconv.Itoa(count) + " objects"}}
@@ -546,7 +561,7 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 			if c.Kind != "" {
 				kind = strings.ToUpper(c.Kind[:1]) + c.Kind[1:] + " container"
 			}
-			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, kind: kind, modTime: c.Started, column: c.State, object: r.Object}})
+			files = append(files, Entry{Name: name, Dir: true, Info: &kubeEntry{name: name, dir: true, kind: kind, covered: c.PodToast, modTime: c.Started, column: c.State, object: r.Object}})
 		}
 		info += "\nPod " + r.Object.Name + " · " + summary.Phase + " · containers"
 	case kubeContainerFS:
@@ -559,20 +574,27 @@ func (p *Panel) loadKubeMode(abs string, cachedOnly bool) error {
 		if files, size, err = p.listFS(f, abs, o); err != nil {
 			return err
 		}
-		probe, _ := k.probe(ctx, kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container})
-		info += "\nPod " + r.Object.Name + " · container " + r.Container + " · shell " + probe.Shell
-		if !probe.Tar {
-			info += " · no tar"
-		}
-		if !probe.Cat {
-			info += " · no cat: files cannot be written"
-		}
-		if pf, ok := f.(prefixFS); ok {
-			if cfs, ok := pf.FS.(*kube.ContainerFS); ok && cfs.ListMode() == "builtin" {
-				info += "\nNo ls, stat or find: names and types only, sizes and dates unknown"
+		summary, summaryErr := k.podSummary(ctx, r.Namespace, r.Object.Name)
+		mounts, known := summary.Storage[r.Container]
+		classifyContainerEntries(files, r.FSPath, mounts, summaryErr == nil && known)
+		if k.toast(kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container}) != nil {
+			info += "\nPod " + r.Object.Name + " · container " + r.Container
+		} else {
+			probe, _ := k.probe(ctx, kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container})
+			info += "\nPod " + r.Object.Name + " · container " + r.Container + " · shell " + probe.Shell
+			if !probe.Tar {
+				info += " · no tar"
 			}
+			if !probe.Cat {
+				info += " · no cat: files cannot be written"
+			}
+			if pf, ok := f.(prefixFS); ok {
+				if cfs, ok := pf.FS.(*kube.ContainerFS); ok && cfs.ListMode() == "builtin" {
+					info += "\nNo ls, stat or find: names and types only, sizes and dates unknown"
+				}
+			}
+			info += "\nCommands run in the container; the shell stays local"
 		}
-		info += "\nCommands run in the container; the shell stays local"
 		state := p.beginLoad(abs)
 		p.cancelPanelLoad()
 		p.cancelTree()
@@ -660,7 +682,7 @@ func (kubeBackend) Caps(p *Panel) panelCaps {
 	case kubeContainers:
 		return capQuickView
 	case kubeContainerFS:
-		return capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute
+		return capNewFile | capEdit | capMkdir | capDelete | capRename | capCopyIn | capExecute | capFolderSize | capQuickView
 	}
 	return 0
 }
@@ -672,7 +694,15 @@ func (kubeBackend) Endpoint(p *Panel) remotefs.Endpoint {
 }
 func (kubeBackend) CommandPrompt(p *Panel) string {
 	if r := p.kubeLevel(); r.Level == kubeContainerFS && r.Object != nil {
-		return "pod:" + r.Namespace + "/" + r.Object.Name + "/" + r.Container + ":" + r.FSPath
+		label := "pod:" + r.Namespace + "/" + r.Object.Name + "/" + r.Container + ":" + r.FSPath
+		if d, ok := p.Kube.debugShell(kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container}); ok {
+			if d.PodToast {
+				label += " [PodToast]"
+			} else {
+				label += " [ephemeral " + d.Ref.Container + "]"
+			}
+		}
+		return label
 	}
 	return ""
 }
@@ -817,9 +847,14 @@ func (kubeBackend) Key(a *App, p *Panel, m Message) bool {
 }
 func (kubeBackend) MenuSection(a *App, p *Panel) *menuSection {
 	return &menuSection{Name: "Kubernetes", Items: []menuItem{
+		{"Live metrics and charts…", "", func() { a.openPodMetrics(p) }},
 		{"Logs…", "⇧F3", func() { a.kubeLogs(p, false) }},
 		{"Follow logs in terminal", "⌥F3", func() { a.kubeLogs(p, true) }},
 		{"Describe", "⇧F4", func() { a.kubeDescribe(p) }},
+		{"Attach ephemeral container…", "", func() { a.ephemeralChoices(p) }},
+		{"PodToast live monitor", "", func() { a.podToastMonitor(p) }},
+		{"PodToast snapshot", "", func() { a.podToastSnapshot(p) }},
+		{"PodToast network / HTTP load test…", "", func() { a.podToastProbe(p) }},
 		{"Open shell in container", "", func() { a.kubeShell(p) }},
 		{"Copy / export…", "F5", func() { a.transferDialog(false) }},
 		{"Move resources…", "F6", func() { a.transferDialog(true) }},

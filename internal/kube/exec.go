@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/httpstream"
@@ -60,11 +62,14 @@ func (x *apiExecutor) Stream(ctx context.Context, ref ContainerRef, opts ExecOpt
 		Stderr:    opts.Stderr != nil && !opts.TTY,
 		TTY:       opts.TTY,
 	}, scheme.ParameterCodec)
-	spdy, err := remotecommand.NewSPDYExecutor(x.cfg, http.MethodPost, req.URL())
+	return x.streamURL(ctx, req.URL(), opts)
+}
+func (x *apiExecutor) streamURL(ctx context.Context, endpoint *url.URL, opts ExecOptions) error {
+	spdy, err := remotecommand.NewSPDYExecutor(x.cfg, http.MethodPost, endpoint)
 	if err != nil {
 		return err
 	}
-	ws, err := remotecommand.NewWebSocketExecutor(x.cfg, http.MethodGet, req.URL().String())
+	ws, err := remotecommand.NewWebSocketExecutor(x.cfg, http.MethodGet, endpoint.String())
 	if err != nil {
 		return err
 	}
@@ -121,3 +126,40 @@ func ExitCode(err error) (int, bool) {
 
 // Executor returns the exec transport of this client.
 func (c *Client) Executor() Executor { return NewExecutor(c.streamConfig, c.stream) }
+
+// Attacher streams the existing ephemeral-container entrypoint; it does not
+// start a second shell or override the chosen image command.
+func (c *Client) Attacher(tty bool) Executor {
+	return &apiAttacher{apiExecutor: &apiExecutor{cfg: c.streamConfig, core: c.stream}, tty: tty}
+}
+
+type apiAttacher struct {
+	*apiExecutor
+	tty bool
+}
+
+func (x *apiAttacher) Stream(ctx context.Context, ref ContainerRef, opts ExecOptions) error {
+	opts.TTY = x.tty
+	req := x.core.CoreV1().RESTClient().Post().Resource("pods").Namespace(ref.Namespace).Name(ref.Pod).SubResource("attach")
+	req.VersionedParams(&corev1.PodAttachOptions{Container: ref.Container, Stdin: true, Stdout: true, Stderr: !x.tty, TTY: x.tty}, scheme.ParameterCodec)
+	if !x.tty {
+		w := opts.Stdout
+		if w == nil {
+			w = io.Discard
+		}
+		combined := &serialAttachWriter{w: w}
+		opts.Stdout, opts.Stderr = combined, combined
+	}
+	return x.streamURL(ctx, req.URL(), opts)
+}
+
+type serialAttachWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *serialAttachWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}

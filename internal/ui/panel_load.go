@@ -122,6 +122,7 @@ func (p *Panel) pollPanelLoad() bool {
 		p.installEntries(entries, job.state)
 		p.Descriptions, p.TotalBytes, p.ItemCount, p.InfoText = result.panel.Descriptions, result.panel.TotalBytes, result.panel.ItemCount, result.panel.InfoText
 		p.Err = ""
+		p.restoreConnectionLocation()
 		return true
 	default:
 		return false

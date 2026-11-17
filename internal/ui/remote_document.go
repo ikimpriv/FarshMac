@@ -46,3 +46,34 @@ func resolveRemoteLink(f remotefs.FS, remotePath string, info os.FileInfo) (stri
 	}
 	return remotePath, info, nil
 }
+
+// New files are staged locally and created remotely only when the editor saves.
+func (a *App) newRemoteFile(p *Panel) {
+	if !p.can(capNewFile) {
+		a.Status = "File creation is unavailable in this panel"
+		return
+	}
+	base := p.Path
+	backend := p.backend()
+	a.prompt("Edit file", "Existing file or new file name", "", func(name string) {
+		if name == "" {
+			return
+		}
+		destination := name
+		if !path.IsAbs(name) {
+			destination = path.Join(base, name)
+		} else if p.Docker != nil {
+			_, prefix, _, _ := p.Docker.location(p.Path)
+			destination = path.Join(prefix, name)
+		} else if p.Kube != nil {
+			destination = path.Join(p.kubeLevel().Prefix, name)
+		}
+		src, ok := backend.DocumentSource(p, path.Clean(destination)).(*remoteSource)
+		if !ok {
+			a.Status = "File creation is unavailable in this panel"
+			return
+		}
+		src.AllowCreate = true
+		a.openSourceDocument(src, true, a.showDocument, nil)
+	})
+}

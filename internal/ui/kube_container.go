@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"farshmac/internal/kube"
+	"farshmac/internal/podtoast"
 	"farshmac/internal/remotefs"
 )
 
@@ -20,14 +22,15 @@ type prefixFS struct {
 	remotefs.FS
 	prefix   string
 	identity string
+	root     string
 }
 
 func (f prefixFS) strip(p string) string {
 	rel := strings.TrimPrefix(path.Clean(p), f.prefix)
 	if rel == "" {
-		return "/"
+		return path.Join("/", f.root)
 	}
-	return rel
+	return path.Join("/", f.root, rel)
 }
 func (f prefixFS) ReadDir(p string) ([]os.FileInfo, error) { return f.FS.ReadDir(f.strip(p)) }
 func (f prefixFS) Lstat(p string) (os.FileInfo, error)     { return f.FS.Lstat(f.strip(p)) }
@@ -59,7 +62,43 @@ type containerOpener struct {
 }
 
 func (c *containerOpener) Open(ctx context.Context) (remotefs.FS, error) {
+	toast, connectErr := c.k.existingToast(ctx, c.ref)
+	if connectErr != nil && !errors.Is(connectErr, kube.ErrNoPodToast) {
+		return nil, connectErr
+	}
+	if toast != nil {
+		if !toast.Healthy() {
+			return nil, fmt.Errorf("PodToast disconnected; reconnect via Alt+Enter / F11 > Attach ephemeral container > PodToast")
+		}
+		return prefixFS{FS: toast.FS(ctx), prefix: c.prefix, identity: c.Identity()}, nil
+	}
+	if binding, ok := c.k.debugShell(c.ref); ok {
+		d, err := c.k.client.ResolveDebugShell(ctx, c.ref, binding.Ref.Container)
+		if err != nil {
+			return nil, err
+		}
+		c.k.setDebugShell(d)
+		fs, err := kube.OpenContainerFS(ctx, c.k.exec(), d.Ref, d.Probe)
+		if err != nil {
+			return nil, err
+		}
+		return prefixFS{FS: fs, prefix: c.prefix, identity: c.Identity(), root: d.Root}, nil
+	}
 	probe, err := c.k.probe(ctx, c.ref)
+	if errors.Is(err, kube.ErrNoShell) {
+		d, e := c.k.client.ResolveDebugShell(ctx, c.ref, "")
+		if e == nil {
+			c.k.setDebugShell(d)
+			fs, e := kube.OpenContainerFS(ctx, c.k.exec(), d.Ref, d.Probe)
+			if e != nil {
+				return nil, e
+			}
+			return prefixFS{FS: fs, prefix: c.prefix, identity: c.Identity(), root: d.Root}, nil
+		}
+		if !errors.Is(e, kube.ErrNoDebugShell) {
+			return nil, e
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +175,31 @@ func (c *containerOpener) CopyWithin(ctx context.Context, source string, other r
 			return err
 		}
 	}
+	if toast := c.k.toast(c.ref); toast != nil {
+		prefix := prefixFS{prefix: c.prefix}
+		if previous != "" {
+			previous = prefix.strip(previous)
+		}
+		fs := toast.FS(ctx)
+		defer fs.Close()
+		return fs.CopyFile(prefix.strip(source), prefix.strip(mapped), previous)
+	}
+	if binding, ok := c.k.debugShell(c.ref); ok {
+		d, err := c.k.client.ResolveDebugShell(ctx, c.ref, binding.Ref.Container)
+		if err != nil {
+			return err
+		}
+		fs, err := kube.OpenContainerFS(ctx, c.k.exec(), d.Ref, d.Probe)
+		if err != nil {
+			return err
+		}
+		defer fs.Close()
+		prefix := prefixFS{prefix: c.prefix, root: d.Root}
+		if previous != "" {
+			previous = prefix.strip(previous)
+		}
+		return fs.CopyFile(prefix.strip(source), prefix.strip(mapped), previous)
+	}
 	probe, err := c.k.probe(ctx, c.ref)
 	if err != nil {
 		return err
@@ -150,4 +214,26 @@ func (c *containerOpener) CopyWithin(ctx context.Context, source string, other r
 		previous = prefix.strip(previous)
 	}
 	return fs.CopyFile(prefix.strip(source), prefix.strip(mapped), previous)
+}
+
+func (k *kubePanel) debugShell(ref kube.ContainerRef) (kube.DebugShell, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	d, ok := k.debugShells[toastKey(ref)]
+	return d, ok
+}
+func (k *kubePanel) setDebugShell(d kube.DebugShell) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.debugShells == nil {
+		k.debugShells = map[string]kube.DebugShell{}
+	}
+	k.debugShells[toastKey(d.Target)] = d
+}
+
+func (f prefixFS) DirectorySummary(p string, ignore bool, update func(podtoast.DirectorySummary) error) (podtoast.DirectorySummary, error) {
+	if scanner, ok := f.FS.(directorySummarizer); ok {
+		return scanner.DirectorySummary(f.strip(p), ignore, update)
+	}
+	return podtoast.DirectorySummary{}, podtoast.ErrDirectorySummaryUnsupported
 }

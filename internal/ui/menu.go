@@ -29,13 +29,14 @@ func (a *App) menuSections() []menuSection {
 			}
 			items = append(items, menuItem{label, "", func() { a.setView(index, view) }})
 		}
-		return append(items, []menuItem{
+		items = append(items, []menuItem{
 			{},
 			{"Sort modes…", "⌃F12", func() { a.sortMenu(index) }},
 			{"Panel on/off", []string{"⌘F1", "⌘F2"}[index], func() { a.togglePanel(index) }},
 			{"Re-read", "⌘R", func() { a.rereadPanel(index) }},
 			{"Change volume…", []string{"⌥F1", "⌥F2"}[index], func() { a.volumes(index) }},
 		}...)
+		return append(items, a.connectionMenuItems(index)...)
 	}
 	settings := func(kind string) func() { return func() { a.settingsMenu(kind) } }
 	sections := []menuSection{
@@ -57,6 +58,7 @@ func (a *App) menuSections() []menuSection {
 		{"Commands", 21, []menuItem{
 			{"Network connections…", "", a.networkMenu},
 			{"Quick view on/off", "⌃Q", func() { a.toggleOtherView("Quick view") }},
+			{"Quick Live Metrics", "⌃⇧Q", a.toggleQuickMetrics},
 			{"New window", "⌘N", func() { a.NewWindow = true }},
 			{"Find file…", "⌥F7", func() { a.findFiles(false) }}, {"Command history", "⌥F8", func() { a.historyMenu("Commands") }},
 			{"Find folder…", "", func() { a.findFiles(true) }}, {"Folder tree", "⌥F10", a.treeMenu},
@@ -202,6 +204,7 @@ func (a *App) drawMenu(g *Grid) {
 	section := sections[a.Menu.Column]
 	g.Text(section.X, 0, section.Name, White, Black, len(section.Name))
 	x, y, w, h := a.menuBounds()
+	g.Occlusions = append(g.Occlusions, modalRect{x, y, w, h}, modalRect{x + 1, y + 1, w, h})
 	g.Fill(x+1, y+1, w, h, Black, Black)
 	g.Box(x, y, w, h, White, Cyan)
 	for row := 0; row < h-2; row++ {

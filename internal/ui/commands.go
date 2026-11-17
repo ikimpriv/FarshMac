@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/fsops"
 	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
@@ -562,6 +563,12 @@ func (a *App) treeMenu() {
 	})
 }
 func (a *App) updatePreview() {
+	if a.traffic != nil {
+		return
+	}
+	if a.compactMetrics != nil {
+		return
+	}
 	if a.Doc != nil || a.Image != nil || a.TermVisible || a.Busy {
 		return
 	}
@@ -576,6 +583,13 @@ func (a *App) updatePreview() {
 		return
 	}
 	source := &a.Panels[1-index]
+	if a.updateFolderPreview(source) {
+		return
+	}
+	if source.Docker != nil {
+		a.updateDockerPreview(source)
+		return
+	}
 	if source.Kube != nil {
 		a.updateKubePreview(source)
 		return
@@ -620,14 +634,18 @@ func (a *App) updatePreview() {
 	a.previewPending = true
 	o := fsops.NewOperation("Quick view")
 	o.IgnoreDSStore = a.Settings.IgnoreDSStore
-	hideHidden := !a.Settings.ShowHidden
 	a.previewOperation = o
 	a.previewText = "Loading…"
 	a.previewImage = ""
-	go func() {
+	go func(path string) {
 		text := ""
 		imageData := ""
-		info, e := os.Stat(path)
+		resolved, e := cloudfiles.Prepare(o.Context(), path)
+		var info os.FileInfo
+		if e == nil {
+			path = resolved
+			info, e = os.Stat(path)
+		}
 		if e != nil {
 			if link, le := os.Lstat(path); le == nil && link.Mode()&os.ModeSymlink != 0 {
 				target, _ := os.Readlink(path)
@@ -638,39 +656,17 @@ func (a *App) updatePreview() {
 		} else if kind := specialFileKind(info.Mode()); kind != "" {
 			text = fmt.Sprintf("%s\n%s (no preview)", filepath.Base(path), kind)
 		} else if info.IsDir() {
-			var entries []os.DirEntry
-			e := fsops.ReadDirectory(path, o, func(entry os.DirEntry) error {
-				if hideHidden {
-					info, _ := entry.Info()
-					if hiddenEntry(entry.Name(), info) {
-						return nil
+			text = directoryPreview(path, o, fsops.WalkDir, true, func(partial string) {
+				select {
+				case a.jobs <- func() {
+					if a.previewKey == key && o.Check() == nil {
+						a.previewText = partial
+						a.dirty = true
 					}
+				}:
+				default:
 				}
-				entries = append(entries, entry)
-				if len(entries) >= 101 {
-					return fs.SkipAll
-				}
-				return nil
 			})
-			if e == fs.SkipAll {
-				e = nil
-			}
-			text = fmt.Sprintf("%s\nDirectory (preview, up to 100 entries)\n", path)
-			if e != nil {
-				footer, hint := describeReadError(path, e)
-				text += footer
-				if hint != "" {
-					text += "\n" + hint
-				}
-			} else {
-				for i, entry := range entries {
-					if i == 100 {
-						text += "…"
-						break
-					}
-					text += entry.Name() + "\n"
-				}
-			}
 		} else if info.Mode().IsRegular() && preview.Supported(path) {
 			r, err := preview.Run(o.Context(), path)
 			text = fmt.Sprintf("%s\n%d bytes · %s", filepath.Base(path), info.Size(), info.ModTime().Format("2006-01-02 15:04"))
@@ -698,7 +694,7 @@ func (a *App) updatePreview() {
 			}
 		}
 		a.jobs <- func() {
-			if a.previewKey == key && o.Check() == nil {
+			if a.previewKey == key {
 				a.previewText = text
 				a.previewImage = imageData
 			}
@@ -706,7 +702,7 @@ func (a *App) updatePreview() {
 			a.previewPending = false
 			a.dirty = true
 		}
-	}()
+	}(path)
 }
 func sortedKeys(m map[string]string) []string {
 	keys := []string{}

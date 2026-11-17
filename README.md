@@ -9,9 +9,15 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.22.1 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.23.0 · macOS 12+ · Apple Silicon and Intel**
 
-[Changelog](CHANGELOG.md) · [File operations](docs/FILE_OPERATIONS.md) · [Contributing](CONTRIBUTING.md)
+**File context menu (F11 / Alt+Enter):** compose a message with attachments in the macOS Mail sharing service, create a ZIP / tar.gz / tar.bz2 archive, or choose an installed application compatible with all selected files. FarshMac does not send email itself. Remote files are staged locally for external applications and retained until the FarshMac window closes.
+
+**Connections:** Left / Right and Alt+F1 / Alt+F2 include FTP/SFTP, Kubernetes and Docker connection actions. The Recent connections section shows five entries; older connection locations remain saved. Choosing a recent connection starts restoration directly, without opening its settings form. The last folder and cursor are restored when available.
+
+**Pod context menu:** Alt+Enter / F11 → Attach ephemeral container… selects PodToast, a saved launch preset, or a new image with configurable access and startup options. Alt+F9 maximizes/restores the window.
+
+[Changelog](CHANGELOG.md) · [File operations](docs/FILE_OPERATIONS.md) · [Contributing](CONTRIBUTING.md) · [PodToast container agent](podtoast/README.md)
 
 FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an independent implementation, not the official Far Manager or a source-compatible port. Far Group does not endorse this project.
 
@@ -21,20 +27,22 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.22.1)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.23.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.22.1.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.23.0.md) for installation details and known limitations.
 
 ## Features
 
 - Two file panels, masks and selection, window bookmarks for folders and documents, sorting, directory sizes, and multiple windows with saved positions and folders.
 - Persistent bash, sh, or zsh terminal with bidirectional folder synchronization, color, mouse support, and bounded scrollback spooled to temporary files.
 - Internal viewer and editor, Chroma syntax highlighting, autoindent, search, and external application integration.
+- On-demand iCloud / macOS File Provider materialization for F3, F4 and Quick view. Esc cancels FarshMac’s wait; the provider may continue its download in the background.
 - ZIP, TAR, compressed TAR, and other archive formats; enter archives as folders and copy files out.
-- FTP, FTPS, and SFTP panels, saved connection profiles, and configurable parallel copying.
+- FTP, FTPS, and SFTP panels, saved connection profiles, configurable parallel copying, and a persistent SSH terminal for SFTP panels.
 - Kubernetes panels (client-go, no kubectl needed): namespaces, resource types and objects as folders, manifests in the viewer/editor, logs, describe, container file systems and commands run inside containers.
+- Live pod metrics dashboards: discover Prometheus endpoints and PodToast, search and overlay series, normalize charts, and detach an independent window. See [Metrics](docs/METRICS.md).
 - Trash by default, explicit permanent deletion, cancellable background operations, and copy metadata options.
 - Link-aware local copy and move: relative symbolic links keep pointing at the same object (Smart, the default; As is and Copy contents are also available in the F5/F6 dialog), and hard-linked files copied together stay hard links.
 - Graphical image/PDF quick view and an information panel with macOS disk, memory, and power data.
@@ -82,6 +90,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Cmd+O | Switch between panels and terminal; synchronize the folder |
 | Cmd+Option+F3 | Calculate all displayed folder sizes |
 | Shift+F3 / Alt+F3 / Shift+F4 | Kubernetes panel: logs / follow logs in the terminal / describe |
+| Ctrl+Shift+Q | Toggle Quick Live Metrics in the opposite panel for selected Kubernetes pods/containers or Docker containers; 1/2/3 toggle CPU/memory/storage, P pauses, PgUp/PgDn pages the legend |
 | F3 / F4 | View / edit; F3 on an image or PDF opens a graphical view (black background, picture centred, Esc closes); F3 on a folder calculates selected folder sizes, F4 on a folder opens File attributes |
 | Alt+F3 / Alt+F4 | Alternate viewer / editor; Cmd+Shift+F3 / Cmd+Shift+F4 force the internal one |
 | F5 / F6 / F7 | Copy / move / make folder (asks before overwriting; a new destination ending in `/` is created as a folder) |
@@ -98,7 +107,7 @@ Most ⌘ shortcuts also work with Ctrl (handy on external keyboards). Ctrl-only:
 | Cmd+Enter | Insert the selected filename into the command line |
 | Cmd+F / Cmd+; | Insert the full path from the active / inactive panel |
 | Ctrl+Insert / Cmd+C | Copy the command line or selected names (on `..`, the panel path) |
-| Shift+Enter | Open with macOS / Finder (launches `.app` bundles; Enter enters them as folders) |
+| Shift+Enter | Open with macOS / Finder (the parent entry opens the current folder; launches `.app` bundles; Enter enters them as folders) |
 | Ctrl+Q / Ctrl+L | Toggle quick view / information in the other panel |
 | ⌘⌥0…9 / ⌘0…9 | Save / go to a bookmark, the same keys as in the viewer/editor. A folder bookmark remembers the folder and the file under the cursor. Bookmarks are shared with the viewer/editor and belong to the window: they are not saved and other windows do not see them |
 | Ctrl+↑/↓, Cmd+↑/↓ | Previous / next command from history |
@@ -142,7 +151,7 @@ The cluster is shown as folders: `/` lists namespaces, a namespace lists resourc
 | Type folder | F3 manifest without managedFields (read-only), F4 edit without status, managedFields and other server-managed fields and save with Update (conflicts are reported, your text is kept); manifests are highlighted as YAML, checked against the kind's schema from the cluster (CRDs included) with problem lines marked, Ctrl+Space completes fields and enum values (required first; objects and arrays are inserted with their first child line or `- ` item), a dim hint after the cursor line shows what the field expects, Alt+F2 jumps to the next problem, F5 export `name.yaml` (or a folder tree), F8 delete, Shift+F8 delete keeping children, Shift+F3 logs, Alt+F3 follow logs in the terminal, Shift+F4 describe |
 | Pod | Enter lists containers (a pod with one ordinary container opens its file system directly); Shift+F3 / Alt+F3 / Shift+F4 on a container |
 | Namespace, type folder, object | F5 from a local panel applies the selected YAML/JSON files (folders recursively, as exported) with server-side apply into that namespace, which replaces the namespace named in the manifests; F5 from another cluster panel applies the selected objects' cleaned manifests there; a Force toggle takes fields over from other field managers |
-| Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls`/`cat` found in the container (GNU, BusyBox and shell-only images: without ls/stat/find the listing shows names and types only, without cat files are read-only); a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the next key returns to the panels; **Kubernetes → Open shell in container** gives an interactive shell |
+| Container file system | Enter, F3, F4, F5 (both directions, also between containers), F6, F7, F8 work through `sh`/`tar`/`find`/`stat`/`ls`/`cat` found in the container (GNU, BusyBox and shell-only images: without ls/stat/find the listing shows names and types only, without cat files are read-only); a command typed at the prompt runs in the container (`pod:ns/pod/container:/dir>`), ⌘. stops it, and when it ends the panels return automatically; Cmd+O shows the retained output and live shell; **Kubernetes → Open shell in container** gives an interactive shell |
 
 Shift+F5 copies the current resource under a new name in the same namespace; Shift+F6 renames it by creating a new object and deleting the original. F6 between Kubernetes resource panels moves selected resources to the destination namespace or cluster. These operations use the same resource abstraction for built-in kinds and CRs. Existing names are not overwritten by rename/move. A move deletes the source only after the destination is created, with UID/resourceVersion preconditions; if deletion fails, both objects remain and an error is shown. Moves are not atomic, and owned resources remain orphaned rather than being deleted or silently reparented. Namespace rename/move is not supported.
 
@@ -150,7 +159,7 @@ F5/F6 use the other panel as their destination, including local volumes, FTP/SFT
 
 When both filesystem panels point to the same pod/container, file contents are copied inside the container and moves use its `mv`; no file payload is downloaded to the Mac. The same applies to Shift+F5/F6. Collision handling, staged publication, metadata options, progress and cancellation still apply. Archive panels remain read-only.
 
-After a namespace is listed its resource types are watched, so the panel updates itself when objects appear, change or disappear (Cmd+R forces a full re-list). Ctrl+Q opens a Quick view that shows `kubectl describe` of the entry under the cursor (headers and keys highlighted) or the start of a file inside a container; Tab into the Quick view and scroll it with the arrows, PageUp/PageDown, Home and End. Objects that own nothing are shown as files (Enter shows the manifest); owners and pods are folders. The columns show kind, status and age (Detailed: creation time). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. The terminal stays a local shell except while a container command or followed log runs in it.
+After a namespace is listed its resource types are watched, so the panel updates itself when objects appear, change or disappear (Cmd+R forces a full re-list). Ctrl+Q opens a Quick view that shows `kubectl describe` of the entry under the cursor (headers and keys highlighted) or the start of a file inside a container; Tab into the Quick view and scroll it with the arrows, PageUp/PageDown, Home and End. Objects that own nothing are shown as files (Enter shows the manifest); owners and pods are folders. The columns show kind, status and age (Detailed: creation time). The F9 **Kubernetes** menu lists these commands plus **Switch context…** and **Disconnect**. Exporting Secrets asks first. In a container filesystem, Cmd+O and panel commands share the container shell (or an attached ephemeral toolbox); in a local filesystem, they use the local shell.
 
 ## Tests
 
@@ -173,6 +182,7 @@ See [archive support](ARCHIVE_SUPPORT.md), [terminal behavior](TERMINAL_PARITY.m
 
 - `cmd/farshmac/` — application entry point.
 - `internal/ui/` — file panels, menus, dialogs, viewer, and editor.
+- internal/shellsession/ — session ownership, context synchronization and command lifecycle; see [architecture](docs/SHELL_SESSIONS.md).
 - `internal/terminal/`, `internal/native/` — PTY sessions, scrollback storage, Cocoa bridge, and bundled renderer.
 - `internal/fsops/`, `internal/remotefs/` — local/archive operations and network filesystems.
 - `internal/highlight/`, `internal/preview/`, `internal/sysinfo/` — isolated highlighting/preview helpers and macOS information.
@@ -182,3 +192,50 @@ See [archive support](ARCHIVE_SUPPORT.md), [terminal behavior](TERMINAL_PARITY.m
 ## License
 
 Our code is licensed under [MIT](LICENSE). Third-party components retain their respective licenses; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). The original Far Manager icon is distributed with its upstream BSD-3-Clause notice and [provenance](resources/upstream/README.md).
+
+### Pod traffic monitoring and faults
+
+F11 / Alt+Enter → Traffic monitoring / faults opens a separate graphical window for the selected pod. PodToast **0.7.0** observes existing TCP/UDP sockets over IPv4/IPv6 and counts per-flow IP bytes without redirecting traffic. Select connections or incoming/outgoing port groups for an overlay and optional sum. Short-lived flows remain in port totals. Fault injection is a separate explicit action for one IPv4 TCP port; its proxy supports Conditions, Block/Unblock, Clear and Reset, per connection or port. Stop fault injection keeps passive monitoring open; Esc / Cmd+W closes and cleans up. Requires an allowed Network profile. Counters start at monitor launch, have bounded retention and report capture limitations; TLS decryption is not supported. See [scope and cleanup](podtoast/TRAFFIC.md).
+
+### Metric display and chart assignment
+
+Adding a metric opens a destination dialog: create a separate chart or choose an existing one, with an explicit display mode (Auto, raw value, interval change, rate per second). Selected metrics have visible chart and transform controls; click a legend item to locate its settings. Chart removal deselects its metrics instead of moving them into an unrelated chart. Mixed units are flagged; normalize the chart to compare shapes. Layouts retain these choices.
+
+Auto uses exporter types, falling back to known cumulative names (including untyped MediaMTX byte/packet counters). It does not infer a counter merely because values increase. Override the value type as cumulative counter or gauge when the exporter is ambiguous. Counter decreases are treated as resets; first samples and failed/long scrape gaps remain missing. Interval change is per scrape, not per fixed chart pixel or time bucket. Raw values remain available.
+
+### Container storage and context shells
+
+In container file panels, mounted filesystems have an amber `↳` marker. A dedicated `Storage / volume` column identifies entries directly in the list (for example `PVC: database`, `emptyDir: cache`, or `Secret: credentials`). The manifest alone supplies declared volume types; PodToast is not required for this classification. Narrow columns retain the marker and full details in the footer. The selected item's footer identifies the container filesystem, disk/RAM emptyDir, PVC, ephemeral PVC/CSI, hostPath or configuration volume. PodToast 0.7.1 adds observed mount identity, including runtime-created mounts and directory symlink resolution; older agents and native shells use pod-declared mounts, explicitly labeled as such. No remote stat per entry or recursive disk scan is added.
+
+Ephemeral storage comes from kubelet `/stats/summary` through the Kubernetes API server (requires existing `nodes/proxy` read access), independently of metrics-server. Requests are cached for ten seconds per session. Compact container usage is writable layer plus runtime logs; shared emptyDir usage belongs to pod-level accounting and is not duplicated per container. The chart catalog also exposes pod totals and volume usage. Missing, stale or forbidden statistics remain unavailable rather than zero. PodToast still provides CPU and memory directly from verified cgroups without metrics-server.
+
+Cmd+O in a container filesystem opens its native shell or a compatible attached ephemeral toolbox in the panel directory. Toggle back to resume the same live session. Commands submitted from the panel run in this session, starting in the panel directory, and return to the panels automatically at the next shell prompt. Their output remains available through Cmd+O. If a program is reading input, a panel command waits for the shell prompt rather than being sent to that program. A missing shell shows a cleared terminal with an error, without falling back to the local shell or history. Esc/Ctrl+C cancels connection setup; Cmd+. stops the session. Native container history is available through Up/Ctrl+R; local command-history actions are disabled in this context. No ephemeral container is attached automatically by Cmd+O.
+
+### Remote terminal context
+
+In an SFTP panel, Cmd+O and commands entered in the panel use an SSH terminal on the same server with the connection's credentials and host-key verification. Commands start in the panel directory; completion returns to the panels automatically, and Cmd+O resumes the same session with its output. SSH terminal resizing and connection setup are asynchronous; Esc/Ctrl+C cancels setup, and Cmd+. stops the session. The server must allow a PTY and command execution and provide /bin/sh (bash is used when available); SFTP-only accounts show an explicit error.
+
+FTP/FTPS has no standard interactive shell. Those panels show a shell-unavailable error and recommend SFTP/SSH. Remote commands are never silently executed locally. No FTP credentials are sent to a separate SSH service. Remote shell history stays in the remote session; the local command-history overlay is unavailable there.
+
+
+### Docker
+
+Use Left / Right → Docker… or Alt+F1 / Alt+F2. The installed Docker CLI supplies
+contexts and credentials. Compose projects and standalone containers have separate
+folders; Volumes, Networks and Images expose the corresponding Engine catalogs.
+
+Running containers support file viewing/editing, Shift+F4 creation, copy/move,
+rename, deletion, folder creation and persistent shells. Same-container copies
+stay inside the container. Mount points are identified from Docker inspect.
+F11 offers processes, logs, inspect, start/stop/restart, compact live metrics and
+detached charts. Metrics use Docker Engine CPU, memory, network and block I/O
+statistics; block I/O is not reported as ephemeral-storage usage.
+
+PodToast toolboxes are attached explicitly through F11, including for distroless
+containers and named volumes. Network monitoring/fault controls use an explicitly
+attached network helper and the existing detached traffic window. No listener
+port is published. Helpers persist for reuse and can be removed through Docker;
+closing a traffic window closes its monitoring session and clears its active
+experiments. See [Docker integration](docs/DOCKER.md).
+
+Quick Live Metrics uses **Working set** by default. Press **M** with the metrics panel active, or click its memory selector, to choose **Applications (anonymous)**, **File cache**, or **Total**. Working set is total cgroup memory minus inactive file cache; it includes active cache and kernel memory. File cache includes tmpfs/shared memory. These components are not additive. Missing breakdown metrics are shown as unavailable, never replaced with Total. PodToast 0.8.2 provides the breakdown and retains it in metrics history.

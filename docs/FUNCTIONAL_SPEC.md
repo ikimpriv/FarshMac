@@ -522,6 +522,9 @@ Ten slots 0–9 per window instance: a folder bookmark (panel) or a document boo
 - Hides the panels and shows the built-in terminal (closes the menu and fast find); on showing, syncs the shell cwd with the active local panel (when the shell is at a prompt). Returning: with a ready shell the active panel is re-read in the shell cwd (`syncCwd`), otherwise deferred until the prompt; then `refresh()` of both panels. Terminal footer: `⌘O  Panels    ·    Shell ready    ·    <cwd>` / `⌘O  Panels    ·    ⌘.  Interrupt` / `⌘O  Panels    ·    Starting <shell> (loading shell configuration)…    ·    ⌘. Interrupt`.
 - **Code:** `app.go: key, showTerminal, returnFromTerminal, syncCwd`.
 
+#### Alt+Enter / F11 — context menu
+- Shows actions for the active panel/selected object. Pods offer explicit ephemeral-container attachment with image history and launch options.
+
 #### Alt+F9 — window zoom
 - `Update.Zoom = true` → native `[window zoom:]` (maximize/restore the macOS window). Font scale: `Options → General settings → Font size (10–24)` (`Font size must be 10–24`); there are no separate zoom keys in the panels.
 - **Code:** `far_keys.go`, `window_darwin.m`.

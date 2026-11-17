@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -57,8 +58,15 @@ func resourcePath(gvr schema.GroupVersionResource, ns string) string {
 
 // listTable lists a resource in Table form; every row becomes an Object.
 // The list's resourceVersion is returned for watches.
+func tableObjectPolicy(r Resource) string {
+	if r.GVR.Group == "" && r.GVR.Resource == "pods" {
+		return "Object"
+	}
+	return "Metadata"
+}
+
 func (c *Client) listTable(ctx context.Context, r Resource, ns string) ([]*Object, string, error) {
-	raw, err := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).SetHeader("Accept", tableAccept).Param("includeObject", "Metadata").Do(ctx).Raw()
+	raw, err := c.raw.Get().AbsPath(resourcePath(r.GVR, ns)).SetHeader("Accept", tableAccept).Param("includeObject", tableObjectPolicy(r)).Do(ctx).Raw()
 	if err != nil {
 		return nil, "", err
 	}
@@ -110,6 +118,13 @@ func decodeTableRows(table *metav1.Table, r Resource, ns string, defs []metav1.T
 			var meta metav1.PartialObjectMetadata
 			if err := json.Unmarshal(row.Object.Raw, &meta); err == nil {
 				applyMetadata(o, meta.ObjectMeta)
+				if r.GVR.Group == "" && r.GVR.Resource == "pods" {
+					var pod corev1.Pod
+					if json.Unmarshal(row.Object.Raw, &pod) == nil {
+						summary := PodSummaryOf(&pod)
+						o.Pod = &summary
+					}
+				}
 			}
 		}
 		if o.Name == "" {
@@ -143,16 +158,26 @@ func applyMetadata(o *Object, m metav1.ObjectMeta) {
 // plainItem is an object as a server without Table support sends it.
 type plainItem struct {
 	Metadata metav1.ObjectMeta `json:"metadata"`
-	Status   struct {
-		Phase string `json:"phase"`
-	} `json:"status"`
+	Spec     json.RawMessage   `json:"spec"`
+	Status   json.RawMessage   `json:"status"`
 }
 
 func (item plainItem) object(r Resource, ns string) *Object {
 	o := &Object{GVR: r.GVR, Kind: r.Kind, Namespace: ns}
 	applyMetadata(o, item.Metadata)
-	if item.Status.Phase != "" {
-		o.Columns = []TableColumn{{Name: "STATUS", Value: item.Status.Phase}}
+	if r.GVR.Group == "" && r.GVR.Resource == "pods" {
+		var pod corev1.Pod
+		_ = json.Unmarshal(item.Spec, &pod.Spec)
+		_ = json.Unmarshal(item.Status, &pod.Status)
+		summary := PodSummaryOf(&pod)
+		o.Pod = &summary
+	}
+	var status struct {
+		Phase string `json:"phase"`
+	}
+	_ = json.Unmarshal(item.Status, &status)
+	if status.Phase != "" {
+		o.Columns = []TableColumn{{Name: "STATUS", Value: status.Phase}}
 	}
 	return o
 }

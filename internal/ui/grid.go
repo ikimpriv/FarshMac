@@ -22,8 +22,9 @@ type Cell struct {
 	FG, BG uint32
 }
 type Grid struct {
-	W, H  int
-	Cells []Cell
+	W, H       int
+	Cells      []Cell
+	Occlusions []modalRect
 }
 
 func NewGrid(w, h int) *Grid {

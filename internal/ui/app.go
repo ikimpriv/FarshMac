@@ -15,7 +15,9 @@ import (
 	"unicode/utf8"
 
 	"farshmac/internal/fsops"
+	"farshmac/internal/metrics"
 	"farshmac/internal/remotefs"
+	"farshmac/internal/shellsession"
 	"farshmac/internal/terminal"
 )
 
@@ -25,6 +27,7 @@ type Entry struct {
 	Dir  bool
 }
 type Panel struct {
+	restoreLocation        *recentConnection
 	lastFileView           string
 	kubeWatchRevision      uint64
 	kubeWatchUpdated       time.Time
@@ -40,6 +43,7 @@ type Panel struct {
 	RemoteLocalPath        string // Local folder behind a remote or Kubernetes panel.
 	Archive                *fsops.ArchiveIndex
 	Kube                   *kubePanel
+	Docker                 *dockerPanel
 	Async                  bool
 	load                   *panelLoad
 	rollback               *panelRollback
@@ -101,6 +105,12 @@ func (p *Panel) Load(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
+	}
+	if p.Docker != nil {
+		if p.Async {
+			return p.loadPanel(abs)
+		}
+		return p.loadDocker(abs)
 	}
 	if p.Kube != nil {
 		if p.Async {
@@ -255,6 +265,7 @@ type Dialog struct {
 	Back                  int // caret position counted from the end of Input
 }
 type Message struct {
+	Context                  string
 	History                  []json.RawMessage
 	Start, Request           int64
 	Count, Delta             int
@@ -265,32 +276,45 @@ type Message struct {
 	X, Y, Clicks, Cols, Rows int
 }
 type Update struct {
-	ShellReady         bool                   `json:"shellReady"`
-	Commands           *[]string              `json:"commands,omitempty"`
-	CommandsError      string                 `json:"commandsError,omitempty"`
-	Zoom               bool                   `json:"zoom,omitempty"`
-	Preview            *ImagePreview          `json:"preview,omitempty"`
-	History            terminal.HistoryStatus `json:"history"`
-	HistoryPage        *terminal.HistoryPage  `json:"historyPage,omitempty"`
-	Title              string                 `json:"title"`
-	QuitApplication    bool                   `json:"quitApplication,omitempty"`
-	AttentionWindow    int                    `json:"attentionWindow,omitempty"`
-	NewWindow          bool                   `json:"newWindow,omitempty"`
-	PanelKeys          bool                   `json:"panelKeys"`
-	FontSize           int                    `json:"fontSize"`
-	Fullscreen         bool                   `json:"fullscreen,omitempty"`
-	DiskAccessSettings bool                   `json:"diskAccessSettings,omitempty"`
-	Cols               int                    `json:"cols"`
-	Rows               int                    `json:"rows"`
-	Grid               string                 `json:"grid,omitempty"`
-	Terminal           string                 `json:"terminal,omitempty"`
-	Mode               string                 `json:"mode"`
-	Footer             string                 `json:"footer"`
-	Document           bool                   `json:"document"`
-	Clipboard          *string                `json:"clipboard,omitempty"`
-	Quit               bool                   `json:"quit,omitempty"`
+	TerminalContext     string                 `json:"terminalContext"`
+	BackgroundTerminals []terminalPacket       `json:"backgroundTerminals,omitempty"`
+	NativeFileAction    *nativeFileAction      `json:"nativeFileAction,omitempty"`
+	Traffic             *trafficPacket         `json:"traffic,omitempty"`
+	Metrics             *metrics.Packet        `json:"metrics,omitempty"`
+	ShellReady          bool                   `json:"shellReady"`
+	Commands            *[]string              `json:"commands,omitempty"`
+	CommandsError       string                 `json:"commandsError,omitempty"`
+	Zoom                bool                   `json:"zoom,omitempty"`
+	Preview             *ImagePreview          `json:"preview,omitempty"`
+	History             terminal.HistoryStatus `json:"history"`
+	HistoryPage         *terminal.HistoryPage  `json:"historyPage,omitempty"`
+	Title               string                 `json:"title"`
+	QuitApplication     bool                   `json:"quitApplication,omitempty"`
+	AttentionWindow     int                    `json:"attentionWindow,omitempty"`
+	NewWindow           bool                   `json:"newWindow,omitempty"`
+	PanelKeys           bool                   `json:"panelKeys"`
+	FontSize            int                    `json:"fontSize"`
+	Fullscreen          bool                   `json:"fullscreen,omitempty"`
+	DiskAccessSettings  bool                   `json:"diskAccessSettings,omitempty"`
+	Cols                int                    `json:"cols"`
+	Rows                int                    `json:"rows"`
+	Grid                string                 `json:"grid,omitempty"`
+	Terminal            string                 `json:"terminal,omitempty"`
+	Mode                string                 `json:"mode"`
+	Footer              string                 `json:"footer"`
+	Document            bool                   `json:"document"`
+	Clipboard           *string                `json:"clipboard,omitempty"`
+	Quit                bool                   `json:"quit,omitempty"`
 }
 type App struct {
+	traffic        *trafficMonitor
+	Metrics        *metrics.Session
+	MetricsOnly    bool
+	TrafficOnly    bool
+	detachTraffic  bool
+	compactMetrics *compactMetricsPanel
+	detachMetrics  bool
+	metricsLaunch  *metricsLaunch
 	shellState
 	shellCommands         *[]string
 	infoJobs              [2]*infoJob
@@ -308,18 +332,18 @@ type App struct {
 	mouseAnchors          [2]int
 	mouseAnchorPath       [2]string
 	documentScrollbarDrag bool
-	terminalHistory       *terminal.History
-	historyStatus         terminal.HistoryStatus
-	historyWrite          chan terminal.HistoryStatus
-	historyRead           chan terminal.HistoryPage
-	historyPage           *terminal.HistoryPage
-	historyQueue          [][]json.RawMessage
-	historyQueuedBytes    int
-	task                  *uiTask
-	Async                 bool
-	previewOperation      *fsops.Operation
-	nextScreenID          int
-	Operation             *fsops.Operation
+	restoreNextConnection bool
+	requestedRestore      *recentConnection
+	recentSavedAt         time.Time
+	terminalHistoryState
+	terminalKey     string
+	parkedTerminals map[string]*parkedTerminal
+
+	task             *uiTask
+	Async            bool
+	previewOperation *fsops.Operation
+	nextScreenID     int
+	Operation        *fsops.Operation
 
 	LastProgress                                              fsops.Progress
 	FastFind                                                  *FastFind
@@ -335,6 +359,12 @@ type App struct {
 	Image                                                     *imageView       // F3 graphical view of an image or PDF.
 	mods                                                      modifiers        // Modifier keys held, for the key bar.
 	Foreign                                                   foreignStream    // Stream shown in the terminal instead of the shell (exec, logs).
+	Shells                                                    shellsession.Manager
+	shellCommandPanel                                         *Panel
+	nativeFileAction                                          *nativeFileAction
+	fileActionID                                              int64
+	fileActions                                               map[int64]pendingFileAction
+	shellContextReturn                                        string
 	foreignLabel                                              string
 	foreignDone                                               func()
 	foreignEnded                                              bool // The next key returns to the panels.
@@ -394,6 +424,7 @@ func (a *App) startTerminalAt(cwd string) error {
 		return err
 	}
 	a.Term = t
+	a.Shells.AttachLocal(t)
 	a.shellStartedAt = time.Now()
 	a.shellStopped = ""
 	a.integrationSentAt = time.Time{}
@@ -406,22 +437,48 @@ func (a *App) startTerminalAt(cwd string) error {
 	return nil
 }
 func (a *App) Close() {
+	a.rememberConnections()
+	a.closeTraffic()
 	if a.closed {
 		return
 	}
 	a.closed = true
+	for _, action := range a.fileActions {
+		if action.temp != "" {
+			os.RemoveAll(action.temp)
+		}
+	}
+	a.stopCompactMetrics(false)
+	if a.Metrics != nil {
+		a.Metrics.Close()
+		a.Metrics = nil
+	}
 	a.stopSyntax()
 	a.stopForeign()
+	a.Shells.Close()
 	for i := range a.Panels {
 		if a.Panels[i].Kube != nil {
 			a.Panels[i].Kube.close()
 		}
 	}
+	histories := []*terminal.History{}
+	for _, p := range a.parkedTerminals {
+		if p.terminalHistory != nil {
+			histories = append(histories, p.terminalHistory)
+		}
+	}
 	if a.terminalHistory != nil {
-		h := a.terminalHistory
+		histories = append(histories, a.terminalHistory)
+	}
+	if len(histories) > 0 {
 		a.historyCleanup = make(chan struct{})
 		done := a.historyCleanup
-		go func() { h.Close(); close(done) }()
+		go func() {
+			for _, h := range histories {
+				h.Close()
+			}
+			close(done)
+		}()
 	}
 	for i := range a.Panels {
 		a.Panels[i].cancelTree()
@@ -455,7 +512,7 @@ func (a *App) Close() {
 		}
 	}
 	if a.Term != nil {
-		a.Term.Close()
+		a.Shells.DetachLocal()
 	}
 }
 func (a *App) refresh() {
@@ -498,6 +555,14 @@ func (a *App) prompt(title, msg, value string, fn func(string)) {
 func (a *App) RequestQuit()  { a.requestQuit(false) }
 func (a *App) RequestClose() { a.requestQuit(true) }
 func (a *App) requestQuit(closeWindow bool) {
+	if a.TrafficOnly {
+		a.closeTrafficWindow()
+		return
+	}
+	if a.MetricsOnly {
+		a.Quit = true
+		return
+	}
 	if a.Busy {
 		a.Status = "Wait for the file operation to finish"
 		a.dirty = true
@@ -563,10 +628,19 @@ func (a *App) Handle(raw string) {
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return
 	}
+	if a.handleTrafficWindow(m) {
+		return
+	}
+	if a.handleMetrics(m) {
+		return
+	}
 	if m.Type == "resize" && max(60, min(300, m.Cols)) == a.Cols && max(15, min(120, m.Rows)) == a.Rows {
 		return
 	}
 	// Terminal protocol traffic must continue while a file operation is running.
+	if a.routeBackgroundTerminalInput(m) {
+		return
+	}
 	switch m.Type {
 	case "mouseUp":
 		a.mouse.active = false
@@ -576,6 +650,11 @@ func (a *App) Handle(raw string) {
 		a.Status = "Terminal renderer: " + m.Text
 		return
 	case "commandHistory":
+		if a.Foreign != nil || a.Shells.RemoteKey() != "" {
+			a.shellCommands = &[]string{}
+			a.commandsError = "Use the remote shell history (Up / Ctrl+R); local history is unavailable in this context"
+			return
+		}
 		// Always answer, so the overlay never waits for a reply that cannot come.
 		if a.Term == nil {
 			a.shellCommands = &[]string{}
@@ -592,6 +671,9 @@ func (a *App) Handle(raw string) {
 		}
 		return
 	case "commandHistoryRun":
+		if a.Foreign != nil || a.Shells.RemoteKey() != "" {
+			return
+		}
 		if a.Term != nil && a.ShellReady && strings.TrimSpace(m.Text) != "" {
 			if err := a.Term.Run(a.ShellCwd, m.Text); err != nil {
 				a.error(err)
@@ -602,10 +684,15 @@ func (a *App) Handle(raw string) {
 		}
 		return
 	case "historyAppend":
-		a.appendTerminalHistory(m.History)
+		a.withTerminalHistory(m.Context, func() { a.appendTerminalHistory(m.History) })
+		return
+	case "nativeFileActionDone":
+		a.finishNativeFileAction(m)
 		return
 	case "historyRead":
-		a.readTerminalHistory(m)
+		if m.Context == "" || m.Context == a.currentTerminalKey() {
+			a.readTerminalHistory(m)
+		}
 		return
 	case "modifiers":
 		if mods := modifiersOf(m); mods != a.mods {
@@ -617,10 +704,10 @@ func (a *App) Handle(raw string) {
 	case "inputBinary":
 		if data, err := base64.StdEncoding.DecodeString(m.Text); err == nil {
 			if a.Foreign != nil {
-				a.error(a.Foreign.Write(data))
+				a.error(a.writeForeignInput(data))
 			} else if a.TermVisible && a.foreignReturn() {
 				return
-			} else if a.Term != nil {
+			} else if a.Term != nil && a.Shells.RemoteKey() == "" {
 				a.error(a.Term.Write(string(data)))
 			}
 		}
@@ -647,10 +734,13 @@ func (a *App) Handle(raw string) {
 		a.RequestQuit()
 	case "input":
 		if a.Foreign != nil {
-			a.error(a.Foreign.Write([]byte(m.Text)))
+			a.error(a.writeForeignInput([]byte(m.Text)))
 			return
 		}
 		if a.TermVisible && a.foreignReturn() {
+			return
+		}
+		if a.Shells.RemoteKey() != "" {
 			return
 		}
 		if a.Term == nil && strings.ContainsAny(m.Text, "\r\n") {
@@ -791,6 +881,10 @@ func (a *App) key(m Message) {
 		}
 		return
 	}
+	if a.Foreign != nil && m.Meta && !m.Shift && !m.Ctrl && !m.Alt && (m.Code == "Period" || m.Key == ".") {
+		a.stopForeign()
+		return
+	}
 	if a.TermVisible {
 		return
 	}
@@ -918,6 +1012,12 @@ func (a *App) key(m Message) {
 	}
 	if (m.Key == "F3" || m.Key == "F4") && m.Shift && (m.Meta || m.Ctrl) {
 		a.openConfigured(m.Key == "F4", false, true)
+		return
+	}
+	if a.Menu == nil && a.Form == nil && a.Dialog == nil && a.trafficKey(m) {
+		return
+	}
+	if a.Menu == nil && a.Form == nil && a.Dialog == nil && a.compactMetricsKey(m) {
 		return
 	}
 	if a.Menu == nil && a.Form == nil && a.Dialog == nil && a.Panels[a.Active].View == "Quick view" && a.quickViewKey(m) {
@@ -1179,11 +1279,12 @@ func (a *App) function(n int) {
 	}
 }
 func (a *App) execute() {
-	if a.Foreign != nil {
-		a.Status = "A command is running in the container; ⌘O to see it, ⌘. to stop it"
-		a.TermVisible = true
+	a.Shells.PanelChanged(a.panelShellContext())
+	if m := a.Shells.Remote(); a.Foreign != nil && m != nil && m.Context().ID == a.panelShellContext().ID && m.Pending() {
+		a.Status = "A panel command is already pending; ⌘O to view it"
 		return
 	}
+
 	if p := &a.Panels[a.Active]; p.can(capExecute) {
 		if command := a.Command; strings.TrimSpace(command) != "" && p.backend().Execute(a, p, command) {
 			a.history = appendUnique(a.history, command, a.Settings.HistoryLimit)
@@ -1192,7 +1293,10 @@ func (a *App) execute() {
 			return
 		}
 	}
+	a.activateTerminal("local")
+
 	if a.Term == nil {
+		a.error(a.Shells.Local().Queue(shellsession.Command{Text: a.Command, Path: a.Panels[a.Active].filesystemPath()}))
 		if a.retryShell() || !a.shellRestartAt.IsZero() {
 			a.Status = "Shell unavailable; retrying…"
 		} else {
@@ -1201,13 +1305,19 @@ func (a *App) execute() {
 		return
 	}
 	if !a.ShellReady {
+		if !a.shellStarted {
+			a.error(a.Shells.Local().Queue(shellsession.Command{Text: a.Command, Path: a.Panels[a.Active].filesystemPath()}))
+		}
 		a.Status = "Shell is busy; ⌘O to return to it"
 		a.TermVisible = true
 		return
 	}
-	command := a.Command
-	path := a.Panels[a.Active].filesystemPath()
-	if err := a.Term.Run(path, command); err != nil {
+	a.runLocalPanelCommand(shellsession.Command{Text: a.Command, Path: a.Panels[a.Active].filesystemPath()})
+}
+
+func (a *App) runLocalPanelCommand(c shellsession.Command) {
+	command := c.Text
+	if err := a.Term.Run(c.Path, command); err != nil {
 		a.error(err)
 		return
 	}
@@ -1216,12 +1326,18 @@ func (a *App) execute() {
 	a.Command = ""
 	a.TermVisible = true
 	a.ShellReady = false
+	a.Shells.Local().Sent()
 	a.integrationSent(command, false)
 }
 
 // A directory request waits for the prompt; never send integration keys to a
 // running program (ssh, editors, or commands consuming stdin).
 func (a *App) showTerminal() {
+	a.Shells.PanelChanged(a.panelShellContext())
+	if a.showRemoteTerminal() || a.showContainerTerminal() || a.showDockerTerminal() {
+		return
+	}
+	a.activateTerminal("local")
 	a.TermVisible = true
 	a.retryShell()
 	if r := a.shellPanelReturn; r != nil {
@@ -1258,6 +1374,10 @@ type shellPanelReturn struct {
 }
 
 func (a *App) returnFromTerminal() {
+	if a.Shells.RemoteKey() != "" {
+		a.returnRemoteContext()
+		return
+	}
 	if a.ShellReady {
 		a.syncCwd()
 		return
@@ -1307,6 +1427,12 @@ func (a *App) syncCwd() {
 	}
 }
 func (a *App) click(m Message) {
+	if a.traffic != nil && !a.Busy && a.Form == nil && a.Dialog == nil {
+		if m.Button == 0 && m.Y == a.Rows-2 {
+			a.stopTraffic()
+		}
+		return
+	}
 	if m.Button != 0 && (a.Form != nil || a.Dialog != nil || a.Doc != nil || a.Menu != nil || a.Busy) {
 		return
 	}
@@ -1364,13 +1490,34 @@ func (a *App) click(m Message) {
 		a.function(min(10, m.X*10/a.Cols+1))
 		return
 	}
-	if a.infoPanelClick(m) || a.quickViewClick(m) {
+	if a.compactMetricsClick(m) || a.infoPanelClick(m) || a.quickViewClick(m) {
 		return
 	}
 	a.panelMouse(m)
 }
 func (a *App) Poll() Update {
-	a.pollTerminalHistory()
+	if a.TrafficOnly {
+		return a.pollTrafficWindow()
+	}
+	if a.MetricsOnly {
+		a.pollTask()
+		u := Update{Mode: "metrics", Cols: a.Cols, Rows: a.Rows, FontSize: a.Settings.FontSize, Title: "Metrics", Quit: a.Quit, Zoom: a.Zoom, Footer: a.Status}
+		a.Zoom = false
+		if a.metricsLaunch != nil {
+			u.Title = a.metricsLaunch.title()
+		}
+		if a.Metrics != nil {
+			u.Metrics = a.Metrics.Packet(false)
+			if u.Metrics != nil {
+				u.Metrics.Detached = true
+			}
+		}
+		return u
+	}
+
+	a.pollTraffic()
+	a.pollCompactMetrics()
+	a.pollAllTerminals()
 	a.pollTask()
 	a.pollSyntax()
 	a.pollManifestCheck()
@@ -1402,15 +1549,21 @@ jobsDone:
 	a.updateInfoPanels()
 	a.updatePreview()
 	a.pollKubeWatches()
+	a.pollShellContext()
+	if time.Since(a.recentSavedAt) > 2*time.Second {
+		a.rememberConnections()
+		a.recentSavedAt = time.Now()
+	}
 	if a.terminalCanDrain() {
 		a.pollForeign()
 	}
-	if a.Term != nil && a.terminalCanDrain() {
-		for i := 0; i < 8 && len(a.pending) < 256*1024; i++ {
+	if a.Term != nil && a.localTerminalCanDrain() {
+		for i := 0; i < 8 && a.localTerminalCanDrain(); i++ {
 			select {
 			case e := <-a.Term.Events:
-				a.pending = append(a.pending, e.Data...)
+				a.appendLocalTerminal(e.Data)
 				if e.Running {
+					a.Shells.Local().Busy()
 					a.ShellReady = false
 					a.integrationSentAt = time.Time{}
 					a.dirty = true
@@ -1425,8 +1578,18 @@ jobsDone:
 					a.ShellReady = true
 					a.shellStarted = true
 					a.ShellCwd = e.Cwd
+					a.Shells.LocalDirectory(e.Cwd)
 					a.finishPanelReturn()
+					if a.Shells.Local().Prompt() {
+						if a.currentTerminalKey() == "local" {
+							a.TermVisible = false
+						}
+					}
 					a.setShellStatus(fmt.Sprintf("Exit %d · ⌘O panels / terminal", e.Status))
+					if c := a.Shells.Local().TakeQueued(); c != nil {
+						a.runLocalPanelCommand(*c)
+					}
+
 					a.dirty = true
 				}
 				if e.Exit {
@@ -1443,6 +1606,8 @@ termDone:
 	a.restartShellIfDue()
 	a.syncShellCwd()
 	u := Update{Zoom: a.Zoom, History: a.historyStatus, HistoryPage: a.historyPage, NewWindow: a.NewWindow, PanelKeys: a.Doc == nil && a.Image == nil && a.Form == nil && a.Dialog == nil && a.Menu == nil && !a.Busy, FontSize: a.Settings.FontSize, Fullscreen: a.Fullscreen, Cols: a.Cols, Rows: a.Rows, Mode: "panels", Footer: a.Status, Quit: a.Quit, Document: a.Doc != nil || a.Image != nil, Clipboard: a.Clipboard}
+	u.TerminalContext = a.currentTerminalKey()
+	u.BackgroundTerminals = a.backgroundTerminalPackets()
 	u.ShellReady = a.ShellReady
 	u.Commands = a.shellCommands
 	if u.Commands != nil {
@@ -1450,6 +1615,8 @@ termDone:
 		a.commandsError = ""
 	}
 	a.shellCommands = nil
+	u.NativeFileAction = a.nativeFileAction
+	a.nativeFileAction = nil
 	u.Title = a.Panels[a.Active].Path
 	u.DiskAccessSettings = a.DiskAccessSettings
 	if a.Doc != nil {
@@ -1478,6 +1645,13 @@ termDone:
 			u.Footer = "⌘O  Panels    ·    ⌘.  Interrupt"
 		}
 	}
+	if a.TermVisible && a.currentTerminalKey() != "local" {
+		u.Footer = a.foreignLabel + " · ⌘O Panels / terminal"
+		if managed := a.Shells.Remote(); managed != nil {
+			u.ShellReady = managed.Ready()
+			u.Footer += " · " + managed.Context().Directory
+		}
+	}
 	if len(a.pending) > 0 && a.terminalCanDrain() {
 		n := min(len(a.pending), 16*1024)
 		u.Terminal = base64.StdEncoding.EncodeToString(a.pending[:n])
@@ -1487,9 +1661,26 @@ termDone:
 		}
 	}
 	if a.dirty && !a.TermVisible {
-		u.Grid = a.Draw().ANSI()
+		grid := a.Draw()
+		u.Grid = grid.ANSI()
 		u.Preview = a.imagePreview()
+		if u.Preview != nil {
+			u.Preview.Occlusions = grid.Occlusions
+		}
 		a.dirty = false
+	}
+	if a.Metrics != nil {
+		u.Mode = "metrics"
+		u.PanelKeys = false
+		u.Grid = ""
+		u.Preview = nil
+		u.Metrics = a.Metrics.Packet(false)
+		if a.metricsLaunch != nil {
+			u.Title = a.metricsLaunch.title()
+		}
+		if u.Metrics != nil {
+			u.Metrics.Detached = a.MetricsOnly
+		}
 	}
 	return u
 }
@@ -1506,6 +1697,8 @@ Arrows / PgUp/PgDn   Navigate files
 Shift+arrows/PgUp/PgDn/Home/End  Mark a range of files
 Quick view / Info / Tree / hidden panel: file keys need a file panel (Tab)
 Ctrl+Q             Toggle inactive Quick view (restore previous view)
+Ctrl+Shift+Q       Quick Live Metrics for selected pods/containers (toggle)
+M                  Choose memory metric when Quick Live Metrics is active
 Ctrl+L / Ctrl+T    Toggle inactive Info / Tree
 Ctrl+P / Ctrl+B    Toggle inactive panel / key bar
 Ctrl+F3..F11       Sort (name, ext, modified, size, unsorted, created, accessed, description, owner)
@@ -1548,9 +1741,13 @@ Kubernetes panel:   New Kubernetes cluster… (kubeconfig + context). Folders:
                     F5 export manifests, F7 new namespace, F8 delete (Shift+F8
                     keeps children), Shift+F3 logs, Alt+F3 follow logs, Shift+F4
                     describe, Cmd+R refresh, F9 > Kubernetes > Open shell.
+                    PodToast: Alt+Enter / F11 > Attach ephemeral container > PodToast; then
+                    shell-free file operations, live monitor (Esc stops), snapshot,
+                    DNS/TCP/HTTP probes and bounded HTTP load tests.
                     In a container: files as on a server; a typed command runs
                     in the container (Cmd+. stops it)
-FTP / FTPS / SFTP    Remote panel; terminal stays local
+SFTP                Cmd+O and panel commands use the server SSH shell
+FTP / FTPS          Shell unavailable; use SFTP/SSH for remote commands
 F5 Parallel transfers: 1-8 workers, Esc cancels
 
 Enter               Open directory / view file / execute command
@@ -1574,6 +1771,8 @@ F5 / F6             Copy / move or rename (asks before overwriting)
 F7                  Make folder
 F8 / Delete         Move selected items to Trash
 Shift+F8 / Shift+Del Delete permanently (always asks)
+Alt+Enter / F11    Context menu; pods: attach an ephemeral container
+Alt+F9             Maximize / restore window
 F9 / Cmd+9          Main menu (arrows, Enter, Esc)
 Cmd+L              Change directory
 F2 / Cmd+2          User menu

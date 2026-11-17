@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/fsops"
 	"farshmac/internal/kube"
 	"farshmac/internal/textfile"
@@ -197,7 +198,11 @@ func (a *App) recordView(path string, edit bool) {
 // on a worker. Expected refusals are openRefusal; anything else is a failure
 // worth a dialog. For the editor it also predicts whether saving can work.
 func (a *App) loadDocument(path string, edit bool) (*Document, error) {
-	resolved, err := filepath.EvalSymlinks(path)
+	prepared, err := cloudfiles.Prepare(a.Operation.Context(), path)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(prepared)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +422,9 @@ func (a *App) saveAsThen(d *Document, done func()) {
 	})
 }
 func (a *App) newFile() {
-	if a.remoteUnsupported() {
+	p := &a.Panels[a.Active]
+	if p.served() {
+		a.newRemoteFile(p)
 		return
 	}
 	if a.archiveReadOnly() {

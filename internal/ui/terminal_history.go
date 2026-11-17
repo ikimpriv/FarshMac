@@ -89,5 +89,9 @@ func (a *App) readTerminalHistory(m Message) {
 // Overlap rendering with asynchronous disk writes. Keep a strict queue budget
 // and leave headroom for the one renderer frame currently in flight.
 func (a *App) terminalCanDrain() bool {
-	return a.historyStatus.Error != "" || len(a.historyQueue) < 2 && a.historyQueuedBytes < terminal.MaxHistoryBatch/2
+	return a.terminalHistoryState.canDrain()
+}
+
+func (s terminalHistoryState) canDrain() bool {
+	return s.historyStatus.Error != "" || len(s.historyQueue) < 2 && s.historyQueuedBytes < terminal.MaxHistoryBatch/2
 }

@@ -83,8 +83,11 @@ func TestPanelDirectorySyncWaitsForShell(t *testing.T) {
 	if err != nil || string(data) != "ONLY_USER_INPUT" {
 		t.Fatalf("injected into running command: %q %v", data, err)
 	}
+	// Completion has already returned to panels.
+	if a.TermVisible {
+		t.Fatal("command did not return to panels")
+	}
 	// Ordinary folder change while the panels are visible.
-	a.key(Message{Key: "o", Meta: true})
 	if err = a.Panels[a.Active].Load(target); err != nil {
 		t.Fatal(err)
 	}

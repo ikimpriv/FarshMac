@@ -77,9 +77,11 @@ func (a *App) calculateFolderSizes(all bool) {
 	p := &a.Panels[index]
 	base := p.Path
 	remote, archive := p.Remote, p.Archive
-	var config remotefs.Config
-	if remote != nil {
-		config = *remote
+	endpoint := p.endpoint()
+	sourceKey := p.sizeKey(base)
+	if (p.Kube != nil || p.Docker != nil) && endpoint.Opener == nil {
+		a.Status = "Choose a filesystem folder"
+		return
 	}
 	var names []string
 	for _, e := range p.Entries {
@@ -95,6 +97,7 @@ func (a *App) calculateFolderSizes(all bool) {
 	}
 	a.backgroundProgress("Calculating folder sizes", func(o *fsops.Operation) (func(), error) {
 		walk := fsops.WalkDir
+		var remoteFS remotefs.FS
 		if archive != nil {
 			if err := archive.Check(); err != nil {
 				return nil, err
@@ -102,12 +105,13 @@ func (a *App) calculateFolderSizes(all bool) {
 			walk = func(root string, o *fsops.Operation, visit fs.WalkDirFunc) error {
 				return walkArchiveSizes(archive, root, o, visit)
 			}
-		} else if remote != nil {
-			client, err := config.Dial(o.Context())
+		} else if endpoint.Opener != nil {
+			client, err := endpoint.Opener.Open(o.Context())
 			if err != nil {
 				return nil, err
 			}
 			defer client.Close()
+			remoteFS = client
 			walk = func(root string, o *fsops.Operation, visit fs.WalkDirFunc) error {
 				return walkRemoteSizes(client, root, o, visit, 0, nil)
 			}
@@ -116,10 +120,16 @@ func (a *App) calculateFolderSizes(all bool) {
 		if remote != nil {
 			workers = 1
 		} // A remote protocol session is owned by one worker.
-		results, stopped := measureFolders(base, names, o, walk, workers)
+		var results map[string]folderSizeResult
+		var stopped error
+		if remoteFS != nil {
+			results, stopped = measureRemoteFolders(base, names, o, remoteFS, walk)
+		} else {
+			results, stopped = measureFolders(base, names, o, walk, workers)
+		}
 		return func() {
 			p := &a.Panels[index]
-			if p.Path != base || p.Remote != remote || p.Archive != archive {
+			if p.Path != base || p.Remote != remote || p.Archive != archive || p.sizeKey(base) != sourceKey {
 				return
 			}
 			cache := make(map[string]folderSizeResult, len(p.folderSizes)+len(results))

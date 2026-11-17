@@ -19,6 +19,9 @@ type statusLog struct {
 // setShellStatus reports a finished shell command without overwriting a
 // panel message the user has not seen in the terminal.
 func (a *App) setShellStatus(status string) {
+	if a.Shells.RemoteKey() != "" {
+		return
+	}
 	if a.TermVisible || a.Status == "" || a.Status == a.shellStatus {
 		a.Status = status
 	}

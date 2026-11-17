@@ -15,6 +15,7 @@ func modalBounds(cols, rows, width, height int) modalRect {
 	return modalRect{(cols - w) / 2, (rows - h) / 2, w, h}
 }
 func drawModal(g *Grid, r modalRect, title string) {
+	g.Occlusions = append(g.Occlusions, r, modalRect{r.X + 2, r.Y + 1, r.W, r.H})
 	g.Fill(r.X+2, r.Y+1, r.W, r.H, Black, Black)
 	g.Fill(r.X, r.Y, r.W, r.H, Black, Gray)
 	g.Box(r.X+2, r.Y+1, r.W-4, r.H-2, Black, Gray)

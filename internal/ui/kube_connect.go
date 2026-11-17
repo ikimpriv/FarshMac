@@ -12,6 +12,7 @@ import (
 // kubeConnectionForm asks for the kubeconfig file and then the context; the
 // profile is saved once the connection works (5.6).
 func (a *App) kubeConnectionForm(index int, p kube.Profile) {
+	a.requestedRestore = nil
 	if p.Kubeconfig == "" {
 		p.Kubeconfig = kube.DefaultKubeconfig()
 	}
@@ -45,6 +46,7 @@ func (a *App) kubeConnectionForm(index int, p kube.Profile) {
 		}
 		a.choose("Context", labels, func(i int) {
 			profile.Context = names[i]
+			a.restoreNextConnection = true
 			a.connectKube(index, profile)
 		})
 		if i := slices.Index(names, current); i >= 0 && a.Form != nil {
@@ -58,6 +60,11 @@ func (a *App) kubeConnectionForm(index int, p kube.Profile) {
 // discovery and the namespace list. Success switches the panel to the
 // cluster root and saves the profile.
 func (a *App) connectKube(index int, profile kube.Profile) {
+	requested := a.requestedRestore
+	a.requestedRestore = nil
+	restore := a.restoreNextConnection
+	a.restoreNextConnection = false
+	a.rememberConnection(index, false)
 	label := profile.Label()
 	a.backgroundTask("Connecting to "+label, func(o *fsops.Operation) (func(), func(), error) {
 		kube.EnsureLoginPath(profile.ExtraPath)
@@ -98,6 +105,7 @@ func (a *App) connectKube(index int, profile kube.Profile) {
 				p.Kube.close()
 			}
 			p.rememberFileView()
+			p.Docker = nil
 			p.Remote, p.Archive = nil, nil
 			p.Kube = newKubePanel(profile, client, nil, a.Settings)
 			_ = namespaces
@@ -110,6 +118,9 @@ func (a *App) connectKube(index int, profile kube.Profile) {
 			p.Cursor, p.Offset = 0, 0
 			saveErr := a.saveKubeProfile(profile)
 			a.error(p.Load("/"))
+			if restore {
+				a.restoreConnection(index, requested)
+			}
 			a.Status = "Connected: " + label + " (terminal is local)"
 			if saveErr != nil {
 				a.Status += "; profile not saved: " + saveErr.Error()

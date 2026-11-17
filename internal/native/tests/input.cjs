@@ -5,7 +5,7 @@ const event=extra=>({clientX:25,clientY:70,button:0,buttons:1,pointerId:1,detail
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  flushTimers();sent.length=0;
- for(const extra of [{key:'F1',metaKey:true},{key:'F2',altKey:true},{key:'|',metaKey:true,shiftKey:true},{key:'=',metaKey:true},{key:'>',code:'Period',metaKey:true,shiftKey:true}]) {
+ for(const extra of [{key:'Q',code:'KeyQ',ctrlKey:true,shiftKey:true},{key:'F1',metaKey:true},{key:'F2',altKey:true},{key:'|',metaKey:true,shiftKey:true},{key:'=',metaKey:true},{key:'>',code:'Period',metaKey:true,shiftKey:true}]) {
   docListeners.keydown(event(extra));assert.equal(sent.at(-1).Type,'key');assert.equal(sent.at(-1).Key,extra.key);
  }
  // Non-Latin layouts: Cmd/Ctrl letters map to the physical Latin key; Dvorak keeps e.key.
@@ -63,5 +63,13 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  const reads=sent.filter(m=>m.Type==='historyRead').length;
  context.window.farshmacToggleOutputHistory();assert.equal(sent.filter(m=>m.Type==='historyRead').length,reads+1,'native menu must reopen history');
  docListeners.keydown(event({key:'Escape'}));
+ context.window.farshmacUpdate({mode:'metrics'});await settle();
+ let dialogOpen=true,paste='',copied=false,selectedAll=false;
+ context.window.farshmacMetrics={dialogOpen:()=>dialogOpen,paste:t=>paste=t,copy:()=>copied=true,selectAll:()=>selectedAll=true};
+ const modalEscape=event({key:'Escape'});sent.length=0;docListeners.keydown(modalEscape);
+ assert.equal(modalEscape.prevented,undefined,'Escape belongs to the metric dialog');assert.equal(sent.filter(m=>m.Type==='key').length,0);
+ dialogOpen=false;docListeners.keydown(event({key:'Escape'}));assert.equal(sent.at(-1).Key,'Escape');
+ context.window.farshmacPaste('metric name');context.window.farshmacCopy();context.window.farshmacSelectAll();
+ assert.equal(paste,'metric name');assert.equal(copied,true);assert.equal(selectedAll,true);
  console.log('mouse buttons, coalesced drag, wheel, clipboard, binary mouse and paged history: OK');
 })().catch(e=>{console.error(e);process.exitCode=1});

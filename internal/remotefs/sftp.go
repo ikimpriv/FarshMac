@@ -68,7 +68,7 @@ type sftpFS struct {
 func (f *sftpFS) Identity() string                   { return "ssh:" + f.sockets.identity() }
 func (f *sftpFS) Canonical(p string) (string, error) { return f.client.RealPath(p) }
 
-func (c Config) dialSFTP(ctx context.Context) (FS, error) {
+func (c Config) dialSSH(ctx context.Context) (*ssh.Client, *socketSet, error) {
 	sockets := newSockets(ctx)
 	ok := false
 	defer func() {
@@ -79,11 +79,11 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 	home, _ := os.UserHomeDir()
 	verify, err := HostKeyCallback(c, filepath.Join(home, ".ssh", "known_hosts"), filepath.Join(home, ".ssh", "known_hosts2"), "/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	keys, keyHint, err := defaultPrivateKeys(c, home)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if socket := os.Getenv("SSH_AUTH_SOCK"); socket != "" {
 		if conn, e := sockets.dial(ctx, "unix", socket); e == nil {
@@ -100,26 +100,34 @@ func (c Config) dialSFTP(ctx context.Context) (FS, error) {
 		auth = append(auth, ssh.Password(c.Password), ssh.KeyboardInteractive(passwordChallenge(c.Password)))
 	}
 	if len(auth) == 0 {
-		return nil, fmt.Errorf("no usable SSH identity: provide a password, private key or ssh-agent. %s", keyHint)
+		return nil, nil, fmt.Errorf("no usable SSH identity: provide a password, private key or ssh-agent. %s", keyHint)
 	}
 	conn, err := sockets.dial(ctx, "tcp", c.Address())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cc, ch, req, err := ssh.NewClientConn(conn, c.Address(), &ssh.ClientConfig{User: c.User, Auth: auth, HostKeyCallback: verify, HostKeyAlgorithms: hostKeyAlgorithms(c, verify), Timeout: 15 * time.Second})
 	if err != nil {
 		if keyHint != "" {
-			return nil, fmt.Errorf("%w (%s)", err, keyHint)
+			return nil, nil, fmt.Errorf("%w (%s)", err, keyHint)
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	sc := ssh.NewClient(cc, ch, req)
+	ok = true
+	return sc, sockets, nil
+}
+func (c Config) dialSFTP(ctx context.Context) (FS, error) {
+	sc, sockets, err := c.dialSSH(ctx)
+	if err != nil {
+		return nil, err
+	}
 	client, err := sftp.NewClient(sc, sftp.UseConcurrentReads(false), sftp.UseConcurrentWrites(false))
 	if err != nil {
 		sc.Close()
+		sockets.finish()
 		return nil, err
 	}
-	ok = true
 	return &sftpFS{client, sc, sockets, ctx}, nil
 }
 func (f *sftpFS) ReadDir(p string) ([]os.FileInfo, error) { return f.client.ReadDirContext(f.ctx, p) }

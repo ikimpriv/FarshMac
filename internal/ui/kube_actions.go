@@ -523,30 +523,20 @@ func (a *App) kubeDescribe(p *Panel) {
 	}
 }
 
-// kubeRunInContainer runs a command line typed at the prompt inside the
-// container shown by the panel, in the panel's folder, with a TTY in the
-// terminal area (5.5). There is no persistent shell: each command starts
-// fresh, which is why cd must come from the panel.
+// Panel commands share the interactive shell and return when its prompt reappears.
 func (a *App) kubeRunInContainer(p *Panel, r kubePath, command string) {
-	k := p.Kube
-	ref := kube.ContainerRef{Namespace: r.Namespace, Pod: r.Object.Name, Container: r.Container}
-	probe, err := k.probe(backgroundContext{}, ref)
-	if err != nil {
-		a.error(err)
+	if !a.showContainerTerminal() {
 		return
 	}
-	if probe.Shell == "" {
-		a.Status = "No shell in this container; commands cannot run"
-		return
-	}
-	argv := []string{probe.Shell, "-c", "cd " + terminal.Quote(r.FSPath) + " && " + command}
-	a.kubeStartExec(p, ref, argv, "pod:"+ref.Pod+"/"+ref.Container+" "+command)
+	a.queueContextCommand(p, r.FSPath, command)
 }
 
 // kubeShell opens an interactive shell in the container under the cursor or
 // shown by the panel ("Open shell in container").
 func (a *App) kubeShell(p *Panel) {
-	k := p.Kube
+	if p == &a.Panels[a.Active] && a.showContainerTerminal() {
+		return
+	}
 	r := p.kubeLevel()
 	var ref kube.ContainerRef
 	switch r.Level {
@@ -562,16 +552,7 @@ func (a *App) kubeShell(p *Panel) {
 		a.Status = "Open shell: enter a pod's container first"
 		return
 	}
-	probe, err := k.probe(backgroundContext{}, ref)
-	if err != nil {
-		a.error(err)
-		return
-	}
-	if probe.Shell == "" {
-		a.Status = "No shell in this container"
-		return
-	}
-	a.kubeStartExec(p, ref, []string{probe.Shell}, "pod:"+ref.Pod+"/"+ref.Container+" "+probe.Shell)
+	a.runDebugCommand(p, ref, r.FSPath, "", true)
 }
 
 // kubeStartExec attaches an exec stream to the terminal area; when it ends
@@ -729,4 +710,65 @@ func (a *App) updateContainerFilePreview(source *Panel, level kubePath) {
 			a.dirty = true
 		}
 	}()
+}
+
+func (a *App) runDebugCommand(p *Panel, ref kube.ContainerRef, cwd, command string, interactive bool) bool {
+	binding, _ := p.Kube.debugShell(ref)
+	k := p.Kube
+	a.backgroundTask("Resolving container execution context", func(o *fsops.Operation) (func(), func(), error) {
+		d, err := k.client.ResolveDebugShell(o.Context(), ref, binding.Ref.Container)
+		if err == nil {
+			return func() {
+				k.setDebugShell(d)
+				a.kubeStartExec(p, d.Ref, d.Command(cwd, command, interactive), "target "+ref.Container+" · exec ephemeral "+d.Ref.Container)
+			}, nil, nil
+		}
+		if errors.Is(err, kube.ErrNoDebugToolbox) {
+			return func() {
+				if p.Kube == k {
+					a.confirm("Shell unavailable", "The existing ephemeral agent has no usable shell. Attach PodToast 0.7.1 toolbox and run the command?", []string{"Attach and run", "Cancel"}, func(i int) {
+						if i == 0 {
+							a.attachCommandToolbox(p, ref, cwd, command, interactive)
+						}
+					})
+				}
+			}, nil, nil
+		}
+		if !errors.Is(err, kube.ErrNoDebugShell) {
+			return nil, nil, err
+		}
+		probe, err := k.probe(o.Context(), ref)
+		if err != nil {
+			return nil, nil, fmt.Errorf("target %s has no usable shell and no compatible running ephemeral toolbox was found: %w", ref.Container, err)
+		}
+		script := "cd " + terminal.Quote(path.Clean("/"+cwd)) + " && " + command
+		if interactive {
+			script = "cd " + terminal.Quote(path.Clean("/"+cwd)) + " && exec " + terminal.Quote(probe.Shell) + " -i"
+		}
+		return func() {
+			a.kubeStartExec(p, ref, []string{probe.Shell, "-c", script}, "target "+ref.Container+" · native shell")
+		}, nil, nil
+	})
+	return true
+}
+
+func (a *App) attachCommandToolbox(p *Panel, ref kube.ContainerRef, cwd, command string, interactive bool) {
+	k := p.Kube
+	a.backgroundTask("Attaching PodToast toolbox", func(o *fsops.Operation) (func(), func(), error) {
+		client, e := k.client.EnsurePodToastImage(o.Context(), ref, defaultPodToastImage)
+		if e != nil {
+			return nil, nil, e
+		}
+		defer client.Close()
+		d, e := k.client.ResolveDebugShell(o.Context(), ref, "")
+		if e != nil {
+			return nil, nil, e
+		}
+		return func() {
+			if p.Kube == k {
+				k.setDebugShell(d)
+				a.kubeStartExec(p, d.Ref, d.Command(cwd, command, interactive), "target "+ref.Container+" · exec ephemeral "+d.Ref.Container)
+			}
+		}, nil, nil
+	})
 }

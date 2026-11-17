@@ -10,6 +10,7 @@ esac
 command -v go >/dev/null
 command -v node >/dev/null
 # The normal suite must not read personal shell profiles or contact real servers.
+unset FARSHMAC_KUBE_AUTH_PROBE FARSHMAC_KUBE_AUTH_CONTEXT FARSHMAC_DOCKER_TEST_IMAGE FARSHMAC_DOCKER_CONTEXT
 unset FARSHMAC_PROBE_STARTUP FARSHMAC_PROBE_CUSTOM_PROMPT FARSHMAC_SFTP_CHECK
 unformatted=$(gofmt -l cmd internal)
 if [ -n "$unformatted" ]; then
@@ -24,7 +25,7 @@ else
   go test ./...
 fi
 # grid.cjs consumes JSON on stdin; harness.cjs is a helper, not a test program.
-for test in input resize terminal commands preview switch throughput; do
+for test in input resize terminal commands preview switch sessions throughput metrics traffic; do
   node "internal/native/tests/$test.cjs"
 done
 

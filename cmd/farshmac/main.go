@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/highlight"
 	"farshmac/internal/native"
 	"farshmac/internal/preview"
@@ -14,6 +15,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == cloudfiles.HelperFlag {
+		os.Exit(cloudfiles.HelperMain(os.Args[2]))
+	}
 	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == preview.HelperFlag {
 		pixels := 0
 		if len(os.Args) == 4 {

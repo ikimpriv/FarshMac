@@ -1,0 +1,21 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const ctx={};ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../assets/traffic.js'),'utf8'),ctx);
+const h=new ctx.FarTrafficMath.History();h.select(7);
+function update(time,sent,received){h.update({time,state:{Sent:sent,Received:received,connections:[{id:7,Sent:sent/2,Received:received/2,closed:false}]}})}
+update(1000,100,200);assert.equal(h.points[0].tx,null);update(2000,1124,2248);assert.equal(h.points[1].tx,1024);assert.equal(h.flow[1].rx,1024);
+update(2100,1124,2248);assert.equal(h.points.length,2,'control updates must not add false zero-rate samples');
+update(3000,10,20);assert.equal(h.points[2].tx,null,'counter resets are gaps');
+for(let i=4;i<1000;i++)update(i*1000,i*1024,i*2048);
+assert.equal(h.points.length,300);assert.equal(h.flow.length,300);
+h.select(8);assert.equal(h.flow.length,0);assert.equal(h.flowPrevious,null);assert.equal(h.points.length,300);
+console.log('Traffic rates, selected scope, counter resets and bounded history: OK');
+const comparison=new ctx.FarTrafficMath.Comparison(),selected=new Set(['f:1']);
+const packet=(at,n,error)=>({time:at,state:{capture:{at,since:1,error,flows:[{id:1,sent:n,received:n*2}],groups:[{id:'tcp/80',sent:n,received:n*2}]}}});
+comparison.update(packet(1000,100),selected);comparison.update(packet(3000,300),selected);
+assert.equal(comparison.rates.get('f:1').tx,100);assert.equal(comparison.rates.get('g:tcp/80').rx,200);
+comparison.update(packet(3000,300),selected);assert.equal(comparison.rings.get('f:1').size,2);
+comparison.update(packet(4000,400,'capture unavailable'),selected);assert.equal(comparison.rates.get('f:1').tx,null);
+for(let i=5;i<400;i++)comparison.update(packet(i*1000,i*100),selected);
+assert.equal(comparison.rings.get('g:tcp/80').size,300);assert.equal(comparison.rings.get('f:1').size,300);
+console.log('Comparison rates, duplicate snapshot suppression, missing capture and bounded rings: OK');

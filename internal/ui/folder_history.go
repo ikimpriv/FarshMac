@@ -59,6 +59,19 @@ func archiveContaining(path string) string {
 // source it was visited from.
 func (a *App) goFolderHistory(entry string) {
 	index := a.Active
+	if tail, ok := strings.CutPrefix(entry, "docker:"); ok {
+		name, location, found := strings.Cut(tail, "/")
+		if !found {
+			return
+		}
+		r := recentConnection{Kind: "docker", Docker: name, Key: name, Label: "docker:" + name, Path: "/" + location}
+		if err := saveRecentConnection(r, false); err != nil {
+			a.error(err)
+			return
+		}
+		a.openRecentConnection(index, r)
+		return
+	}
 	if path, ok := strings.CutPrefix(entry, archiveHistoryPrefix); ok {
 		archive := archiveContaining(path)
 		if archive == "" {
@@ -91,6 +104,7 @@ func (a *App) goFolderHistory(entry string) {
 	p.cancelPanelLoad()
 	p.cancelTree()
 	previous := *p
+	p.Docker, p.Kube = nil, nil
 	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
 	a.error(p.loadSource(entry, previous, ""))
 }

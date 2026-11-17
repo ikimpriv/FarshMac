@@ -16,6 +16,7 @@ type TableColumn struct{ Name, Value string }
 // Object is the panel's view of one resource instance: metadata and printer
 // columns, never the full manifest.
 type Object struct {
+	Pod             *PodSummary
 	GVR             schema.GroupVersionResource
 	Kind            string
 	Name            string

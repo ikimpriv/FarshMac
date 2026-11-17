@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"farshmac/internal/cloudfiles"
 	"farshmac/internal/fsops"
 	"farshmac/internal/preview"
 	"farshmac/internal/terminal"
@@ -105,6 +106,9 @@ func (a *App) openSystemSelected() {
 		return
 	}
 	path := p.Current()
+	if len(p.Entries) > 0 && p.Entries[p.Cursor].Name == ".." {
+		path = p.Path
+	}
 	if path == "" {
 		return
 	}
@@ -131,6 +135,22 @@ func (a *App) openConfigured(edit, alternate, forceInternal bool) {
 	if path == "" {
 		return
 	}
+	if cloudfiles.Candidate(path) {
+		a.backgroundTask("Downloading cloud file", func(o *fsops.Operation) (func(), func(), error) {
+			resolved, err := cloudfiles.Prepare(o.Context(), path)
+			if err != nil {
+				if isCancelled(err) {
+					return nil, nil, err
+				}
+				return func() { a.openFailed(path, edit, err) }, nil, nil
+			}
+			return func() { a.openConfiguredPath(resolved, edit, alternate, forceInternal) }, nil, nil
+		})
+		return
+	}
+	a.openConfiguredPath(path, edit, alternate, forceInternal)
+}
+func (a *App) openConfiguredPath(path string, edit, alternate, forceInternal bool) {
 	info, err := os.Stat(path)
 	if err != nil {
 		a.openFailed(path, edit, err)

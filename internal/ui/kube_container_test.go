@@ -77,25 +77,22 @@ func TestKubeContainerFileSystem(t *testing.T) {
 	// A command typed at the prompt runs in the container, in the panel folder.
 	a.Command = "printf hello > made-here.txt"
 	a.key(Message{Key: "Enter"})
+	deadline := time.Now().Add(10 * time.Second)
+	for a.Busy && time.Now().Before(deadline) {
+		a.pollTask()
+		time.Sleep(time.Millisecond)
+	}
 	if a.Foreign == nil || !a.TermVisible {
 		t.Fatal("command must run as a foreign stream", a.Status)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for a.Foreign != nil && time.Now().Before(deadline) {
+	deadline = time.Now().Add(10 * time.Second)
+	for a.TermVisible && time.Now().Before(deadline) {
 		a.Poll()
 		time.Sleep(10 * time.Millisecond)
 	}
 	waitNetwork(t, a)
-	if a.Foreign != nil {
-		t.Fatal("stream did not end")
-	}
-	// The terminal keeps the output; the next key returns to the panels.
-	if !a.TermVisible || !a.foreignEnded {
-		t.Fatal("terminal should wait for a key", a.TermVisible, a.foreignEnded)
-	}
-	a.Handle(`{"Type":"input","Text":"x"}`)
-	if a.TermVisible || a.foreignEnded {
-		t.Fatal("key did not return to the panels")
+	if a.Foreign == nil || a.TermVisible || a.foreignEnded {
+		t.Fatal("command must return to panels and keep the shell", a.Status)
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "made-here.txt")); err != nil || string(got) != "hello" {
 		t.Fatal("command output", err, string(got), a.Status)

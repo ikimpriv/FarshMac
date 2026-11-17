@@ -83,7 +83,9 @@ func TestSimpleDeleteConfirmation(t *testing.T) {
 	}
 }
 func TestMenuScrollClickAndViews(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	a, _ := New(t.TempDir(), t.TempDir())
+	defer a.Close()
 	a.Rows = 15
 	a.Cols = 60
 	a.key(Message{Key: "F9"})
@@ -97,7 +99,7 @@ func TestMenuScrollClickAndViews(t *testing.T) {
 		t.Fatal("menu exceeds window")
 	}
 	a.click(Message{X: x + 3, Y: y + h - 2})
-	if a.Form == nil || !strings.Contains(a.Form.Title, "volume") && !strings.Contains(a.Form.Title, "Volume") {
+	if a.Form == nil || !strings.Contains(a.Form.Title, "Kubernetes") {
 		t.Fatal("scrolled click dispatched wrong command")
 	}
 	a.Form = nil

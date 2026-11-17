@@ -14,6 +14,12 @@ type panelViewReturn struct {
 }
 
 func (a *App) toggleOtherView(view string) {
+	if a.compactMetrics != nil && a.compactMetrics.index == 1-a.Active {
+		a.stopCompactMetrics(true)
+		if view == "Quick view" {
+			return
+		}
+	}
 	p := &a.Panels[1-a.Active]
 	if view == "Tree panel" && !p.can(capTree) && p.kind() == backendArchive {
 		a.Status = "Tree view is unavailable inside archives"
@@ -80,6 +86,14 @@ func (a *App) farPanelKey(m Message) bool {
 	p := &a.Panels[a.Active]
 	cmd := m.Ctrl || m.Meta
 	k := strings.ToLower(m.Key)
+	if m.Ctrl && m.Shift && !m.Meta && !m.Alt && k == "q" {
+		a.toggleQuickMetrics()
+		return true
+	}
+	if !cmd && !m.Shift && ((m.Key == "Enter" && m.Alt) || (m.Key == "F11" && !m.Alt)) {
+		a.panelContextMenu()
+		return true
+	}
 	if cmd && m.Alt && !m.Shift && m.Key == "F3" {
 		a.calculateFolderSizes(true)
 		return true

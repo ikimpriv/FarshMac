@@ -41,9 +41,34 @@ func (g *WindowGroup) NewWindow(parent int) (int, error) {
 	if g.quitting || g.Terminating {
 		return 0, fmt.Errorf("finish quitting before opening a new window")
 	}
+	if p := g.Apps[parent]; p != nil && p.detachTraffic && p.traffic != nil {
+		p.detachTraffic = false
+		a := &App{Async: true, Settings: p.Settings, Cols: p.Cols, Rows: p.Rows, jobs: make(chan func(), 8), traffic: p.traffic, TrafficOnly: true}
+		a.traffic.changed = true
+		p.traffic = nil
+		p.dirty = true
+		g.next++
+		g.Apps[g.next] = a
+		g.Order = append(g.Order, g.next)
+		return g.next, nil
+	}
+	if p := g.Apps[parent]; p != nil && p.detachMetrics && p.Metrics != nil {
+		p.detachMetrics = false
+		a := &App{Async: true, Settings: p.Settings, Cols: p.Cols, Rows: p.Rows, jobs: make(chan func(), 8), Metrics: p.Metrics, MetricsOnly: true, metricsLaunch: p.metricsLaunch}
+		a.Metrics.Force()
+		p.Metrics = nil
+		p.dirty = true
+		g.next++
+		g.Apps[g.next] = a
+		g.Order = append(g.Order, g.next)
+		return g.next, nil
+	}
 	home, _ := os.UserHomeDir()
 	l, r := home, home
 	p := g.Apps[parent]
+	if p != nil && (p.MetricsOnly || p.TrafficOnly) {
+		p = nil
+	}
 	if p != nil {
 		l, r = p.Panels[0].filesystemPath(), p.Panels[1].filesystemPath()
 	}
@@ -226,9 +251,11 @@ func (g *WindowGroup) saveSessionPeriodically(a *App) {
 func (g *WindowGroup) CloseWindow(id int) {
 	var autoSaveErr error
 	if a := g.Apps[id]; a != nil {
-		s := g.windowSnapshot(id)
-		g.lastWindow = &s
-		autoSaveErr = a.autoSaveSetup()
+		if !a.MetricsOnly && !a.TrafficOnly {
+			s := g.windowSnapshot(id)
+			g.lastWindow = &s
+			autoSaveErr = a.autoSaveSetup()
+		}
 		a.Close()
 		if a.historyCleanup != nil {
 			g.historyCleanups = append(g.historyCleanups, a.historyCleanup)

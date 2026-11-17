@@ -22,6 +22,9 @@ var errSessionOwned = errors.New("Another FarshMac instance owns the window sess
 // any window that later saves writes the current values (P1-06, P5-10).
 // It runs on the engine queue, which owns every App of the group.
 func (g *WindowGroup) syncSettings(src *App) {
+	if src.MetricsOnly || src.TrafficOnly {
+		return
+	}
 	current, err := json.Marshal(src.Settings)
 	if err != nil {
 		return
@@ -32,7 +35,7 @@ func (g *WindowGroup) syncSettings(src *App) {
 	g.settingsJSON = current
 	for _, id := range g.Order {
 		b := g.Apps[id]
-		if b == nil || b == src || b.closed {
+		if b == nil || b == src || b.closed || b.MetricsOnly || b.TrafficOnly {
 			continue
 		}
 		old := b.Settings
@@ -55,6 +58,9 @@ func (g *WindowGroup) syncSettings(src *App) {
 // primeSettings records the shared settings before the first change, so the
 // first edit in any window is recognized and propagated.
 func (g *WindowGroup) primeSettings(a *App) {
+	if a.MetricsOnly || a.TrafficOnly {
+		return
+	}
 	if g.settingsJSON == nil {
 		g.settingsJSON, _ = json.Marshal(a.Settings)
 	}
@@ -75,6 +81,15 @@ func panelSettingsChanged(a, b Settings) bool {
 // focused window, before any window closes.
 func (g *WindowGroup) quitAutoSave() error {
 	a := g.Apps[g.focused]
+	if a != nil && (a.MetricsOnly || a.TrafficOnly) {
+		a = nil
+		for _, id := range g.Order {
+			if other := g.Apps[id]; other != nil && !other.MetricsOnly && !other.TrafficOnly {
+				a = other
+				break
+			}
+		}
+	}
 	if a == nil && len(g.Order) > 0 {
 		a = g.Apps[g.Order[len(g.Order)-1]]
 	}

@@ -10,6 +10,7 @@ type Field struct {
 	Label, Value    string
 	Toggle, Checked bool
 	Secret          bool
+	Combo           bool
 	// Options makes a one-line choice (with Toggle set): Value is the selected
 	// option; Space and arrows cycle through them, a click picks one.
 	Options []string
@@ -32,6 +33,9 @@ func (field *Field) cycle(delta int) {
 
 // choiceText renders an option field; starts holds each option's offset.
 func (field *Field) choiceText() (string, []int) {
+	if field.Combo {
+		return field.Label + ": [ " + field.Value + " ▾ ]", []int{0}
+	}
 	text := field.Label + ": "
 	var starts []int
 	for _, option := range field.Options {
@@ -59,6 +63,7 @@ type Form struct {
 	Focus, Cursor             int
 	Selected                  bool
 	Submit                    func([]Field)
+	DisabledChoices           map[int]bool // original choice indices; separators cannot receive focus
 	Choice                    []string
 	Select                    func(int)
 	OnKey                     func(Message) bool // handles list-specific keys first
@@ -129,6 +134,10 @@ func (a *App) formKey(m Message) {
 		}
 		return
 	}
+	if f.Focus < len(f.Fields) && f.Fields[f.Focus].Combo && (m.Key == " " || m.Key == "Enter" || m.Key == "F4" || m.Alt && m.Key == "ArrowDown") {
+		a.formCombo(f, f.Focus)
+		return
+	}
 	count := len(f.Fields) + 2
 	if len(f.Choice) > 0 {
 		count = len(f.Choice)
@@ -167,6 +176,8 @@ func (a *App) formKey(m Message) {
 				f.Selected = false
 				if i >= len(f.Fields) {
 					a.formKey(Message{Key: "Enter"})
+				} else if f.Fields[i].Combo {
+					a.formCombo(f, i)
 				} else if f.Fields[i].Toggle {
 					f.Fields[i].cycle(1)
 				} else {
@@ -196,6 +207,9 @@ func (a *App) formKey(m Message) {
 		}
 		return
 	case "Enter":
+		if len(f.Choice) > 0 && !f.choiceSelectable(f.Focus) {
+			return
+		}
 		a.Form = nil
 		if len(f.Choice) > 0 {
 			f.Select(f.choiceIndex(f.Focus))
@@ -427,6 +441,10 @@ func (a *App) drawForm(g *Grid) {
 	if len(f.Choice) > 0 {
 		for i := f.Scroll; i < len(f.Choice) && box.Top+i-f.Scroll < box.Bottom; i++ {
 			y := box.Top + i - f.Scroll
+			if !f.choiceSelectable(i) {
+				g.Text(box.X+4, y, strings.Repeat("─", box.W-8), Black, Gray, box.W-8)
+				continue
+			}
 			bg := uint32(Gray)
 			if i == f.Focus {
 				bg = Cyan
@@ -623,7 +641,7 @@ func (a *App) formClick(m Message) {
 	}
 	if len(f.Choice) > 0 {
 		index := m.Y - box.Top + f.Scroll
-		if m.X >= box.X+4 && m.X < box.X+box.W-4 && index >= 0 && index < len(f.Choice) {
+		if m.X >= box.X+4 && m.X < box.X+box.W-4 && index >= 0 && index < len(f.Choice) && f.choiceSelectable(index) {
 			f.Focus = index
 			a.formKey(Message{Key: "Enter"})
 		}
@@ -637,6 +655,10 @@ func (a *App) formClick(m Message) {
 			f.Focus = i
 			f.Selected = false
 			f.Cursor = utf8.RuneCountInString(f.Fields[i].Value)
+			if f.Fields[i].Combo {
+				a.formCombo(f, i)
+				return
+			}
 			if field := &f.Fields[i]; len(field.Options) > 0 {
 				_, starts := field.choiceText()
 				for j := len(starts) - 1; j >= 0; j-- {
@@ -654,4 +676,15 @@ func (a *App) formClick(m Message) {
 			return
 		}
 	}
+}
+
+func (a *App) formCombo(parent *Form, index int) {
+	field := &parent.Fields[index]
+	a.choose(field.Label, field.Options, func(i int) { field.Value = field.Options[i]; a.Form = parent })
+	for i, value := range field.Options {
+		if value == field.Value {
+			a.Form.Focus = i
+		}
+	}
+	a.Form.Cancel = func() { a.Form = parent }
 }

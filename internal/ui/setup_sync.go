@@ -215,6 +215,9 @@ func (a *App) reportSetupSaved(err error) {
 
 // autoSaveSetup is the non-interactive save used when a window closes.
 func (a *App) autoSaveSetup() error {
+	if a.MetricsOnly {
+		return nil
+	}
 	if !a.Settings.AutoSave || a.autoSaveDone {
 		return nil
 	}

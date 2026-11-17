@@ -67,6 +67,10 @@ func TestCommandTerminalToggleAndShellExit(t *testing.T) {
 	if actual != want {
 		t.Fatalf("shell cwd %s, want %s", actual, want)
 	}
+	if a.TermVisible {
+		t.Fatal("completed panel command did not return to panels")
+	}
+	a.key(Message{Key: "o", Meta: true})
 	old := a.Term
 	a.Handle(`{"Type":"input","Text":"exit\r"}`)
 	wait(func() bool { return a.Term != nil && a.Term != old && a.ShellReady })
