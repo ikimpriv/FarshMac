@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.20.0
-	github.com/creack/pty v1.1.18
+	github.com/creack/pty v1.1.24
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/pkg/sftp v1.13.12
