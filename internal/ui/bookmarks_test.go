@@ -119,3 +119,44 @@ func TestBookmarksCrossPanelsAndDocuments(t *testing.T) {
 		t.Fatal("menu labels", labels)
 	}
 }
+
+func TestKubernetesFolderBookmarksRoundTrip(t *testing.T) {
+	a, _ := kubeApp(t)
+	// A local bookmark must switch out of the Kubernetes backend as well.
+	local := a.Panels[1].Path
+	a.Active = 1
+	a.key(Message{Key: "1", Code: "Digit1", Meta: true, Alt: true})
+	a.Active = 0
+	enterKube(t, a, "shop")
+	selectName(t, &a.Panels[0], "pods")
+	a.key(Message{Key: "2", Code: "Digit2", Meta: true, Alt: true})
+	b := a.Bookmarks[2]
+	if b.Connection == nil || b.Connection.Cluster == nil || b.Connection.Kind != "kubernetes" || b.Path != "/shop" || b.Cursor != "pods" {
+		t.Fatalf("cluster bookmark lost context: %+v", b)
+	}
+	profile := *b.Connection.Cluster
+	a.key(Message{Key: "1", Code: "Digit1", Meta: true})
+	waitNetwork(t, a)
+	if a.Panels[0].Kube != nil || a.Panels[0].Path != local {
+		t.Fatal("local bookmark retained cluster backend", a.Panels[0].Path)
+	}
+	// Reconnect from a local panel, not just within the original cluster view.
+	a.key(Message{Key: "2", Code: "Digit2", Meta: true})
+	waitNetwork(t, a)
+	p := &a.Panels[0]
+	if p.Kube == nil || kubeProfileKey(p.Kube.profile) != kubeProfileKey(profile) || p.Path != "/shop" || p.Entries[p.Cursor].Name != "pods" {
+		t.Fatal("cluster bookmark not restored", p.Path, p.Err, a.Status)
+	}
+	// Cluster-scoped paths also retain their source and can open in the other panel.
+	a.error(p.Load("/@cluster/namespaces"))
+	waitNetwork(t, a)
+	selectName(t, p, "shop")
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true, Alt: true})
+	a.Active = 1
+	a.key(Message{Key: "3", Code: "Digit3", Meta: true})
+	waitNetwork(t, a)
+	p = &a.Panels[1]
+	if p.Kube == nil || p.Path != "/@cluster/namespaces" || p.Entries[p.Cursor].Name != "shop" {
+		t.Fatal("cross-panel cluster bookmark not restored", p.Path, p.Err, a.Status)
+	}
+}

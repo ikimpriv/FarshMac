@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"k8s.io/apimachinery/pkg/version"
+	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +59,17 @@ func Connect(ctx context.Context, p Profile) (*Client, error) {
 	EnsureLoginPath(p.ExtraPath)
 	rules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: p.Kubeconfig}
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: p.Context}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	var cfg *rest.Config
+	var err error
+	if p.RemoteConfig || p.StoredConfig && p.SSHHost != "" {
+		raw, e := remoteClientConfig(ctx, p)
+		if e != nil {
+			return nil, e
+		}
+		cfg, err = clientcmd.NewDefaultClientConfig(*raw, overrides).ClientConfig()
+	} else {
+		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("kubeconfig %s: %w", p.Kubeconfig, err)
 	}
@@ -68,6 +80,17 @@ func Connect(ctx context.Context, p Profile) (*Client, error) {
 // against a fake API server) and verifies the connection.
 func NewFromConfig(ctx context.Context, cfg *rest.Config, p Profile) (*Client, error) {
 	cfg = rest.CopyConfig(cfg)
+	if p.SSHHost != "" {
+		if _, err := p.sshArgs(); err != nil {
+			return nil, err
+		}
+		if err := validateSSHServer(cfg.Host); err != nil {
+			return nil, err
+		}
+		cfg.Dial = p.dialSSHAPI
+		// API requests must not escape via the Mac's HTTP(S)_PROXY environment.
+		cfg.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
+	}
 	if err := freshOIDCConfig(cfg); err != nil {
 		return nil, err
 	}

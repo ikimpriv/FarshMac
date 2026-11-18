@@ -151,7 +151,7 @@ func (a *App) networkMenu() {
 		if c.Name != "" {
 			label = c.Name + " (" + label + ")"
 		}
-		choices = append(choices, label+"  "+c.Kubeconfig)
+		choices = append(choices, label+"  "+kubeConfigDisplayName(c))
 	}
 	choices = append(choices, "Disconnect active panel")
 	first := 2

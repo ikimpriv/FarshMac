@@ -47,8 +47,21 @@ func (d *dockerPanel) refresh(ctx context.Context) error {
 	if d.helpers == nil {
 		d.helpers = map[string]string{}
 	}
+	superseded := map[string]bool{}
 	for _, c := range list {
-		if c.State != "running" {
+		if c.State == "running" {
+			if old := c.Label("io.farshmac.podtoast.replaces"); old != "" {
+				superseded[old] = true
+			}
+		}
+	}
+	for target, id := range d.helpers {
+		if superseded[id] {
+			delete(d.helpers, target)
+		}
+	}
+	for _, c := range list {
+		if c.State != "running" || superseded[c.ID] {
 			continue
 		}
 		if target := c.Label("io.farshmac.podtoast.target"); target != "" {
@@ -314,6 +327,9 @@ func (p *Panel) loadDocker(target string) error {
 			return fmt.Errorf("Docker location no longer exists")
 		}
 	}
+	if !files {
+		d.markPodToastEntries(target, entries)
+	}
 	state := p.beginLoad(target)
 	p.sortEntries(entries)
 	p.installEntries(entries, state)
@@ -322,12 +338,9 @@ func (p *Panel) loadDocker(target string) error {
 	return nil
 }
 func (a *App) dockerConnections(index int) {
-	a.backgroundTask("Docker contexts", func(o *fsops.Operation) (func(), func(), error) {
-		kube.EnsureLoginPath("")
-		names, err := (docker.Client{}).Names(o.Context(), "context")
-		return func() { a.choose("Docker context", names, func(i int) { a.connectDocker(index, names[i]) }) }, nil, err
-	})
+	a.dockerConnectionsSelected(index, "")
 }
+
 func (a *App) connectDocker(index int, name string) {
 	requested := a.requestedRestore
 	a.requestedRestore = nil
@@ -339,18 +352,6 @@ func (a *App) connectDocker(index int, name string) {
 		if err != nil {
 			return nil, nil, err
 		}
-		d.mu.Lock()
-		for _, c := range d.containers {
-			if id := c.Label("io.farshmac.podtoast.target"); id != "" && c.State == "running" {
-				d.helpers[id] = c.ID
-			}
-		}
-		for _, c := range d.containers {
-			if volume := c.Label("io.farshmac.podtoast.volume"); volume != "" && c.State == "running" {
-				d.helpers["volume:"+volume] = c.ID
-			}
-		}
-		d.mu.Unlock()
 		return func() {
 			p := &a.Panels[index]
 			local := p.filesystemPath()
@@ -447,6 +448,9 @@ func (a *App) showDockerTerminal() bool {
 	return true
 }
 func (a *App) dockerContextItems(p *Panel) []menuItem {
+	if len(p.Selected()) > 1 {
+		return a.dockerBatchItems(p)
+	}
 	if items, handled := a.dockerObjectItems(p); handled {
 		return items
 	}
@@ -482,7 +486,7 @@ func (a *App) dockerContextItems(p *Panel) []menuItem {
 			continue
 		}
 		if item.Label == "Attach PodToast toolbox…" && p.Docker.helper(c.ID) != "" {
-			continue
+			item.Label = "Reconnect / repair PodToast toolbox…"
 		}
 		filteredItems = append(filteredItems, item)
 	}
@@ -510,7 +514,7 @@ func (a *App) dockerContextItems(p *Panel) []menuItem {
 	return items
 }
 func (a *App) attachDockerToast(p *Panel, c docker.Container) {
-	a.prompt("Attach PodToast toolbox", "Image (shares target PID and network namespaces; adds SYS_PTRACE)", defaultPodToastImage, func(image string) {
+	a.prompt("Attach PodToast toolbox", "Image (root toolbox; target PID/network and AppArmor profile; SYS_PTRACE)", defaultPodToastImage, func(image string) {
 		if strings.TrimSpace(image) == "" {
 			return
 		}
@@ -519,19 +523,18 @@ func (a *App) attachDockerToast(p *Panel, c docker.Container) {
 			if err := d.refresh(o.Context()); err != nil {
 				return nil, nil, err
 			}
-			if existing := d.helper(c.ID); existing != "" {
-				return func() { a.Status = "Using existing PodToast toolbox" }, nil, nil
-			}
-			b, err := d.client.Run(o.Context(), "run", "-d", "--label", "io.farshmac.podtoast.target="+c.ID, "--pid=container:"+c.ID, "--network=container:"+c.ID, "--cap-add=SYS_PTRACE", image, "idle")
+			id, err := d.client.EnsureToolbox(o.Context(), c.ID, image, d.helper(c.ID))
 			if err != nil {
 				return nil, nil, err
 			}
-			id := strings.TrimSpace(string(b))
 			d.mu.Lock()
 			d.helpers[c.ID] = id
 			d.mu.Unlock()
 			return func() { a.Status = "PodToast attached to " + c.Names; a.refresh() }, nil, nil
 		})
+		if a.task != nil {
+			a.task.reportError = true
+		}
 	})
 }
 
@@ -634,8 +637,12 @@ func (a *App) attachDockerVolume(p *Panel, volume string) {
 // Catalog rows are virtual, but every row still supplies the FileInfo contract
 // used by sorting, status and alternative panel views.
 type dockerCatalogInfo struct {
-	name string
-	dir  bool
+	name                   string
+	dir                    bool
+	toastCount, toastTotal int
+	container              bool
+	state, status          string
+	created                time.Time
 }
 
 func (i dockerCatalogInfo) Name() string { return i.name }
@@ -646,9 +653,9 @@ func (i dockerCatalogInfo) Mode() os.FileMode {
 	}
 	return 0444
 }
-func (i dockerCatalogInfo) ModTime() time.Time { return time.Time{} }
+func (i dockerCatalogInfo) ModTime() time.Time { return i.created }
 func (i dockerCatalogInfo) IsDir() bool        { return i.dir }
 func (i dockerCatalogInfo) Sys() any           { return nil }
 func dockerCatalogEntry(name string, dir bool) Entry {
-	return Entry{Name: name, Dir: dir, Info: dockerCatalogInfo{name, dir}}
+	return Entry{Name: name, Dir: dir, Info: dockerCatalogInfo{name: name, dir: dir}}
 }

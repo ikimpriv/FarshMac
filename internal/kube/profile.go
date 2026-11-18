@@ -5,6 +5,7 @@ package kube
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,14 +20,36 @@ import (
 // Profile is a saved cluster connection: a kubeconfig file and the context
 // in it. It carries no secrets; credentials stay in the kubeconfig.
 type Profile struct {
-	Name       string
-	Kubeconfig string
-	Context    string
-	ExtraPath  string // Folders appended to PATH for exec auth plugins (C13).
+	Name                                                 string
+	Kubeconfig                                           string
+	Context                                              string
+	SSHHost, SSHUser, SSHPort, SSHKeyFile, SSHConfigFile string
+	SSHTrustFile                                         string // Explicitly confirmed host keys, never an insecure bypass.
+	SSHAuth                                              string // automatic, key or password.
+	SSHSecret                                            string `json:"-"` // Password/passphrase retained only for this app session.
+	StoredConfig                                         bool   // Managed, named pasted kubeconfig.
+	RemoteBase                                           string // Original remote config path for relative credential references.
+	RemoteConfig                                         bool   // Kubeconfig and referenced credential files are read on the SSH server.
+	ExtraPath                                            string // Folders appended to PATH for exec auth plugins (C13).
 }
 
 // Label names the connection the way the panel shows it.
-func (p Profile) Label() string { return "k8s:" + p.Context }
+func (p Profile) Label() string {
+	label := "k8s:" + p.Context
+	if p.SSHHost != "" {
+		label += " via " + p.SSHHost
+	}
+	return label
+}
+
+// Identity distinguishes equal context names on different SSH hosts/config sources.
+func (p Profile) Identity() string {
+	base := p.Kubeconfig + "\x00" + p.Context
+	if p.SSHHost == "" && !p.RemoteConfig {
+		return base
+	}
+	return base + "\x00" + strings.Join([]string{p.SSHHost, p.SSHUser, p.SSHPort, p.SSHKeyFile, p.SSHConfigFile, fmt.Sprint(p.RemoteConfig)}, "\x00")
+}
 
 // DefaultKubeconfig is the first path of $KUBECONFIG, else ~/.kube/config.
 func DefaultKubeconfig() string {

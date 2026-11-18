@@ -31,8 +31,8 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>FarshMac</string>
 <key>CFBundleIconFile</key><string>FarshMac.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.25.0</string>
-<key>CFBundleVersion</key><string>47</string>
+<key>CFBundleShortVersionString</key><string>0.26.0</string>
+<key>CFBundleVersion</key><string>48</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

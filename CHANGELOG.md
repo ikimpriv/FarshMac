@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+## 0.26.0 — Remote connections and batch actions
+
+- Show up to 15 recent connections and rename the saved configuration library to Custom kubeconfig files.
+
+- Simplify Kubernetes connection setup to server and optional username, with automatic SSH authentication, fallback credential dialogs and remembered authentication methods. Browse local and remote config files and their contexts in a two-column master/details dialog.
+
+- Add Kubernetes connections through system SSH, including loopback kind/k3s APIs, remote kubeconfig/context discovery and local ~/.kube discovery. Preserve TLS/SSH host verification and route shell/exec streams through SSH.
+- Add a library of named pasted kubeconfigs with private credential storage, multiple context-specific connections, and direct or SSH access.
+
+- Show Docker container Status and Age columns, including health and exit codes. Age uses creation time; the footer preserves Docker uptime/status details. Dim inactive containers and highlight failures without losing PodToast badges.
+
+- Mark Docker containers and volumes with running PodToast toolboxes. Show full/partial coverage for Compose projects and a PodToast coverage summary in the panel footer; keep selection markers and object names unchanged.
+
+- Add Create Context to Docker connections: SSH host/user/port, private-key picker and existing SSH aliases. Create standard Docker CLI contexts, preserve SSH configuration and keep the current default context unchanged.
+- Fix PodToast target-root access on remote Docker hosts when the target uses a different AppArmor profile. Match the target profile for the toolbox, verify the agent before reporting success, and offer reconnect/repair for existing helpers. Prefer replacements over superseded helpers after refresh/reconnect.
+
+- Make context menus selection-aware across files, Kubernetes and Docker. Add batch ephemeral attachment/PodToast updates, Docker lifecycle and diagnostics, image exports, volume backups, network membership changes and Compose recreation. Hide single-context interactive actions for multiple objects; preserve per-object results and cancellation.
+
+- Preserve Kubernetes connection profiles in folder bookmarks and restore the saved path/cursor across panels and reconnections. Clear the Kubernetes backend when jumping to a local folder bookmark.
+
+- Prevent Ctrl+Q and Ctrl+Shift+Q in the viewer/editor from quitting the application. Cmd+Q remains the application exit shortcut; panel metrics shortcuts do not escape the document context.
+
 ## 0.25.0 — Streaming search and Kubernetes node insights
 
 - Scale node pod-usage charts to Allocatable without rounding up to unused headroom; show percentages against Allocatable and omit redundant Capacity lines. Expand only for actual usage above Allocatable.

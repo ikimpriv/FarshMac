@@ -22,7 +22,7 @@ type Client struct {
 	Context string
 	Binary  string
 }
-type Container struct{ ID, Names, State, Status, Image, Labels string }
+type Container struct{ ID, Names, State, Status, Image, Labels, CreatedAt string }
 
 func (c Container) Label(key string) string {
 	for _, s := range strings.Split(c.Labels, ",") {

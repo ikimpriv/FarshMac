@@ -138,6 +138,23 @@ func (a *App) scrollMouse(m Message) {
 	if delta == 0 {
 		return
 	}
+	if a.Form != nil && a.Form.ConfigBrowser != nil {
+		r := a.kubeBrowserRect()
+		if m.Y >= r.Y+4 && m.Y < r.Y+r.H-5 && m.X >= r.X+4 && m.X < r.X+r.W-4 {
+			a.Form.ConfigBrowser.column = 0
+			if m.X >= r.X+r.W/2 {
+				a.Form.ConfigBrowser.column = 1
+			}
+		}
+		key := "ArrowDown"
+		if delta < 0 {
+			key = "ArrowUp"
+		}
+		for i := 0; i < max(delta, -delta); i++ {
+			a.kubeBrowserKey(Message{Key: key})
+		}
+		return
+	}
 	if a.Form != nil && len(a.Form.Choice) > 0 && !a.Form.Buttons {
 		a.listWheel(delta)
 		return

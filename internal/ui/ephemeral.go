@@ -22,39 +22,54 @@ type EphemeralPreset struct {
 
 func (a *App) panelContextMenu() {
 	p := &a.Panels[a.Active]
+	// A single marked item is the target even when the cursor is elsewhere.
+	if selected := p.Selected(); len(selected) == 1 {
+		for i, e := range p.Entries {
+			if e.Name == path.Base(selected[0]) {
+				p.Cursor = i
+				break
+			}
+		}
+	}
+	multiFiles := p.fileContextActions() && len(p.Selected()) > 1
 	items := []menuItem{}
 	if p.Docker != nil {
 		items = append(items, a.dockerContextItems(p)...)
-		if len(dockerMetricSelection(p)) > 0 {
+		if !multiFiles && len(dockerMetricSelection(p)) > 0 {
 			items = append(items, menuItem{"Quick Live Metrics", "⌃⇧Q", a.toggleQuickMetrics})
 		}
 	}
 	if p.fileContextActions() && len(p.Selected()) > 0 {
 		items = append(items, menuItem{"Send by Email…", "", func() { a.nativeSelectedFiles("email") }}, menuItem{"Create archive…", "", a.archiveSelectionMenu}, menuItem{"Open In…", "", func() { a.nativeSelectedFiles("openIn") }})
 	}
-	if p.Kube != nil {
+	if p.Kube != nil && !multiFiles {
 		if len(metricSelection(p)) > 0 {
 			items = append(items, menuItem{"Live metrics…", "", func() { a.openPodMetrics(p) }}, menuItem{"Quick Live Metrics", "⌃⇧Q", a.toggleQuickMetrics})
 		}
-		if _, ok := podToastTarget(p); ok {
+		targets := kubeContextTargets(p)
+		if len(targets) > 1 {
+			items = append(items, a.podToastBatchItems(p, targets)...)
+		}
+		if len(targets) > 0 {
 			items = append(items, menuItem{"Attach ephemeral container…", "", func() { a.ephemeralChoices(p) }})
 			label := "PodToast version / update…"
-			if ref, ok := podToastTarget(p); ok {
+			if len(targets) == 1 {
+				ref := targets[0]
 				if client := p.Kube.toast(ref); client != nil && client.ImageRef != "" {
 					label = "PodToast: " + client.ImageRef + " · version / update…"
 				}
 			}
 			items = append(items, menuItem{label, "", func() { a.startPodToast(p) }})
-			items = append(items, menuItem{"Traffic monitoring / faults…", "", func() { a.trafficForm(p) }})
-			if ref, _ := podToastTarget(p); p.Kube.toast(ref) != nil {
-				items = append(items, menuItem{"PodToast live monitor", "", func() { a.podToastMonitor(p) }}, menuItem{"PodToast snapshot", "", func() { a.podToastSnapshot(p) }})
+			if len(targets) == 1 && len(p.Selected()) <= 1 {
+				items = append(items, menuItem{"Traffic monitoring / faults…", "", func() { a.trafficForm(p) }})
+				if ref, _ := podToastTarget(p); p.Kube.toast(ref) != nil {
+					items = append(items, menuItem{"PodToast live monitor", "", func() { a.podToastMonitor(p) }}, menuItem{"PodToast snapshot", "", func() { a.podToastSnapshot(p) }})
+				}
+				if ref, _ := podToastTarget(p); p.Kube.podNetworkToast(ref) != nil {
+					items = append(items, menuItem{"Pod network diagnostics…", "", func() { a.podToastProbe(p) }})
+				}
+				items = append(items, menuItem{"Open shell in container", "", func() { a.kubeShell(p) }})
 			}
-			if ref, _ := podToastTarget(p); p.Kube.podNetworkToast(ref) != nil {
-				items = append(items, menuItem{"Pod network diagnostics…", "", func() { a.podToastProbe(p) }})
-			}
-		}
-		if _, ok := podToastTarget(p); ok {
-			items = append(items, menuItem{"Open shell in container", "", func() { a.kubeShell(p) }})
 		}
 	}
 	if len(items) == 0 {
@@ -112,6 +127,10 @@ func (a *App) rememberEphemeral(preset EphemeralPreset) {
 	}
 }
 func (a *App) ephemeralForm(p *Panel, preset EphemeralPreset) {
+	if targets := kubeContextTargets(p); len(targets) > 1 {
+		a.batchEphemeralForm(p, preset, targets)
+		return
+	}
 	ref, ok := podToastTarget(p)
 	if !ok {
 		a.Status = "Select a pod or container"

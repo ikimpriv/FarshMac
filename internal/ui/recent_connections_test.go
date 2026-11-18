@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func TestRecentConnectionsKeepAllLocationsButShowFive(t *testing.T) {
+func TestRecentConnectionsKeepAllLocationsButShowFifteen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 18; i++ {
 		c := remotefs.Config{Protocol: "sftp", Host: fmt.Sprintf("server-%d.invalid", i), Port: 22, User: "test", Password: "secret", Directory: "/"}
 		p := Panel{Remote: &c, Path: fmt.Sprintf("/location/%d", i), Marked: map[string]bool{}}
 		r, ok := panelConnection(&p)
@@ -22,7 +22,7 @@ func TestRecentConnectionsKeepAllLocationsButShowFive(t *testing.T) {
 		}
 	}
 	records := readRecentConnections()
-	if len(records) != 8 {
+	if len(records) != 18 {
 		t.Fatalf("locations lost: %d", len(records))
 	}
 	b, err := readConfigFile(recentConnectionsPath())
@@ -40,7 +40,7 @@ func TestRecentConnectionsKeepAllLocationsButShowFive(t *testing.T) {
 			found++
 		}
 	}
-	if found != 5 {
+	if found != 15 {
 		t.Fatalf("recent menu has %d connections", found)
 	}
 	r := records[0]

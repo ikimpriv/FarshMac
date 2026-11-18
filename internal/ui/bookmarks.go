@@ -118,7 +118,7 @@ func (a *App) documentBookmarkKey(d *Document, m Message) bool {
 func (a *App) saveFolderBookmark(n int) {
 	p := &a.Panels[a.Active]
 	b := bookmark{Kind: "folder", Path: p.Path}
-	if p.Docker != nil {
+	if p.Docker != nil || p.Kube != nil {
 		r, _ := panelConnection(p)
 		b.Connection = &r
 	}
@@ -210,6 +210,10 @@ func (a *App) goFolderBookmark(b bookmark) {
 	// Remembered cursor positions and marks of visited folders survive the
 	// jump; going up still focuses the folder just left (see beginLoad).
 	previous := *p
+	p.Kube = nil
+	if previous.Kube != nil && previous.Kube != a.Panels[1-a.Active].Kube {
+		previous.Kube.stopWatches()
+	}
 	p.Docker = nil
 	p.Remote = nil
 	p.RemoteLocalPath = ""

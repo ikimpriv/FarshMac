@@ -65,11 +65,16 @@ func (x *apiExecutor) Stream(ctx context.Context, ref ContainerRef, opts ExecOpt
 	return x.streamURL(ctx, req.URL(), opts)
 }
 func (x *apiExecutor) streamURL(ctx context.Context, endpoint *url.URL, opts ExecOptions) error {
-	spdy, err := remotecommand.NewSPDYExecutor(x.cfg, http.MethodPost, endpoint)
+	cfg, endpoint, cleanup, err := streamDialBridge(ctx, x.cfg, endpoint)
 	if err != nil {
 		return err
 	}
-	ws, err := remotecommand.NewWebSocketExecutor(x.cfg, http.MethodGet, endpoint.String())
+	defer cleanup()
+	spdy, err := remotecommand.NewSPDYExecutor(cfg, http.MethodPost, endpoint)
+	if err != nil {
+		return err
+	}
+	ws, err := remotecommand.NewWebSocketExecutor(cfg, http.MethodGet, endpoint.String())
 	if err != nil {
 		return err
 	}

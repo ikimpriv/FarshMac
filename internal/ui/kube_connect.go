@@ -2,58 +2,98 @@ package ui
 
 import (
 	"os"
-	"slices"
 	"strings"
 
 	"farshmac/internal/fsops"
 	"farshmac/internal/kube"
 )
 
-// kubeConnectionForm asks for the kubeconfig file and then the context; the
-// profile is saved once the connection works (5.6).
+// Connection discovery reads metadata in the background; credentials remain in
+// the source file (local or remote) and never enter saved connection profiles.
 func (a *App) kubeConnectionForm(index int, p kube.Profile) {
 	a.requestedRestore = nil
-	if p.Kubeconfig == "" {
-		p.Kubeconfig = kube.DefaultKubeconfig()
-	}
-	a.form("Kubernetes cluster", []Field{
-		{Label: "Kubeconfig file", Value: p.Kubeconfig},
-		{Label: "Profile name (blank = context name)", Value: p.Name},
-		{Label: "Extra PATH for auth plugins (optional)", Value: p.ExtraPath},
-	}, func(fields []Field) {
-		profile := p
-		profile.Kubeconfig = expand(strings.TrimSpace(fields[0].Value), a.Panels[a.Active].filesystemPath())
-		profile.Name = strings.TrimSpace(fields[1].Value)
-		profile.ExtraPath = strings.TrimSpace(fields[2].Value)
-		names, current, err := kube.Contexts(profile.Kubeconfig)
-		if err != nil {
-			a.reopenForm(fields, 0, err.Error())
+	a.choose("Kubernetes connection", []string{"Local kubeconfig files…", "SSH server · discover configs…", "Custom kubeconfig files…"}, func(i int) {
+		if i == 2 {
+			a.kubeConfigLibrary(index, p)
 			return
 		}
-		if len(names) == 0 {
-			a.reopenForm(fields, 0, "kubeconfig has no contexts")
-			return
+		changed := p.StoredConfig || p.RemoteConfig != (i == 1)
+		p.StoredConfig = false
+		p.RemoteConfig = i == 1
+		if changed {
+			p.Kubeconfig = ""
+			p.Context = ""
 		}
-		if slices.Contains(names, profile.Context) {
-			current = profile.Context
+		if i == 0 {
+			p.SSHAuth = ""
+			p.SSHSecret = ""
+			p.SSHTrustFile = ""
+			p.SSHHost = ""
+			p.SSHUser = ""
+			p.SSHPort = ""
+			p.SSHKeyFile = ""
+			p.SSHConfigFile = ""
 		}
-		labels := make([]string, len(names))
-		for i, name := range names {
-			labels[i] = name
-			if name == current {
-				labels[i] = "✓ " + name
-			}
-		}
-		a.choose("Context", labels, func(i int) {
-			profile.Context = names[i]
-			a.restoreNextConnection = true
-			a.connectKube(index, profile)
-		})
-		if i := slices.Index(names, current); i >= 0 && a.Form != nil {
-			a.Form.Focus = i
-		}
+		a.kubeSourceForm(index, p, i == 1)
 	})
-	a.Form.Primary = "Next"
+	if p.StoredConfig {
+		a.Form.Focus = 2
+	} else if p.RemoteConfig {
+		a.Form.Focus = 1
+	}
+}
+func (a *App) kubeSourceForm(index int, p kube.Profile, ssh bool) {
+	if ssh {
+		a.kubeSSHServerForm(index, p)
+	} else {
+		a.discoverKubeContexts(index, p)
+	}
+}
+func (a *App) discoverKubeContexts(index int, p kube.Profile) {
+	a.backgroundTask("Discovering Kubernetes contexts", func(o *fsops.Operation) (func(), func(), error) {
+		var sources []kube.ConfigSource
+		var warnings []string
+		var err error
+		if p.Kubeconfig != "" {
+			var source kube.ConfigSource
+			source, err = kube.ReadConfigSource(o.Context(), p)
+			if err == nil {
+				sources = []kube.ConfigSource{source}
+			}
+		} else {
+			sources, warnings, err = kube.DiscoverConfigs(o.Context(), p)
+		}
+		if o.Check() != nil {
+			return nil, nil, o.Check()
+		}
+		return func() {
+			if err != nil || len(sources) == 0 {
+				text := "No readable kubeconfigs with contexts found. Enter a file path explicitly."
+				if err != nil {
+					text = err.Error()
+				}
+				if len(warnings) > 0 {
+					text += "\n" + strings.Join(warnings, "\n")
+				}
+				a.confirm("Kubernetes configuration", text, []string{"Edit", "Retry", "Cancel"}, func(i int) {
+					if i == 0 {
+						if p.StoredConfig {
+							a.storedKubeConnectForm(index, p)
+						} else {
+							a.kubeOtherFile(index, p)
+						}
+					} else if i == 1 {
+						a.discoverKubeContexts(index, p)
+					}
+				})
+				return
+			}
+			a.chooseKubeContext(index, p, sources, warnings)
+		}, nil, nil
+	})
+	if a.task != nil {
+		a.task.cancelStatus = "Kubernetes discovery cancelled"
+	}
 }
 
 // connectKube connects in the background: the auth plugin PATH, client,
@@ -135,6 +175,15 @@ func (a *App) connectKube(index int, profile kube.Profile) {
 // kubeConnectFailed shows client-go's message (including an auth plugin's
 // stderr) and offers to edit the profile or try again.
 func (a *App) kubeConnectFailed(index int, profile kube.Profile, err error) {
+	if profile.SSHHost != "" && strings.Contains(err.Error(), "Permission denied") {
+		a.kubeSSHAuthFailed(index, profile, err)
+		return
+	}
+	if strings.Contains(err.Error(), "relative credential paths require") {
+		a.prompt("Referenced credential files", "Original kubeconfig path on the SSH server", profile.RemoteBase, func(name string) { profile.RemoteBase = strings.TrimSpace(name); a.connectKube(index, profile) })
+		return
+	}
+
 	a.confirm("Connection failed", profile.Label()+"\n"+err.Error(), []string{"Edit", "Retry", "Cancel"}, func(i int) {
 		switch i {
 		case 0:

@@ -11,6 +11,7 @@ type Field struct {
 	Label, Value    string
 	Toggle, Checked bool
 	Secret          bool
+	PasteDocument   bool // Paste-only multiline data, shown as a summary, never raw text.
 	Combo           bool
 	// Options makes a one-line choice (with Toggle set): Value is the selected
 	// option; Space and arrows cycle through them, a click picks one.
@@ -51,6 +52,7 @@ func (field *Field) choiceText() (string, []int) {
 }
 
 type Form struct {
+	ConfigBrowser             *kubeConfigBrowser
 	SearchResults             bool
 	OwnershipTree             bool
 	Remember, RememberChecked bool
@@ -123,6 +125,10 @@ func (a *App) confirm(title, message string, buttons []string, selectItem func(i
 	a.Form = &Form{Title: title, Message: message, Buttons: true, Choice: buttons, Select: selectItem, Cancel: func() { selectItem(len(buttons) - 1) }}
 }
 func (a *App) formKey(m Message) {
+	if a.Form.ConfigBrowser != nil {
+		a.kubeBrowserKey(m)
+		return
+	}
 	f := a.Form
 	if f.OnKey != nil && f.OnKey(m) {
 		return
@@ -251,6 +257,13 @@ func (a *App) formKey(m Message) {
 		}
 		return
 	}
+	if field.PasteDocument {
+		if m.Key == "Backspace" || m.Key == "Delete" {
+			field.Value = ""
+			f.Cursor = 0
+		}
+		return
+	}
 	r := []rune(field.Value)
 	f.Cursor = max(0, min(f.Cursor, len(r)))
 	if m.Meta && strings.EqualFold(m.Key, "a") {
@@ -297,6 +310,16 @@ func (a *App) formPaste(s string) {
 	}
 	field := &f.Fields[f.Focus]
 	if field.Toggle {
+		return
+	}
+	if field.PasteDocument {
+		if len(s) > 4<<20 {
+			a.Status = "Kubeconfig exceeds 4 MiB"
+			return
+		}
+		field.Value = strings.ReplaceAll(s, "\r\n", "\n")
+		f.Cursor = 0
+		f.Selected = false
 		return
 	}
 	if field.Secret {
@@ -355,6 +378,9 @@ type formGeometry struct {
 }
 
 func (a *App) formGeometry() formGeometry {
+	if a.Form.ConfigBrowser != nil {
+		return formGeometry{modalRect: a.kubeBrowserRect()}
+	}
 	f := a.Form
 	rows := 0
 	var fields []formFieldRect
@@ -429,6 +455,10 @@ func (a *App) formGeometry() formGeometry {
 	return out
 }
 func (a *App) drawForm(g *Grid) {
+	if a.Form.ConfigBrowser != nil {
+		a.drawKubeConfigBrowser(g)
+		return
+	}
 	f := a.Form
 	if f.Buttons {
 		a.drawConfirmation(g)
@@ -499,7 +529,14 @@ func (a *App) drawForm(g *Grid) {
 					cursor = f.Cursor
 				}
 				value := field.Value
-				if field.Secret {
+				if field.PasteDocument {
+					if value == "" {
+						value = "Cmd+V to paste kubeconfig YAML"
+					} else {
+						value = fmt.Sprintf("Kubeconfig pasted · %d bytes · Cmd+V to replace", len(value))
+					}
+					cursor = 0
+				} else if field.Secret {
 					value = strings.Repeat("•", utf8.RuneCountInString(value))
 				}
 				modalInput(g, pos.X, pos.Y+1, pos.W, value, cursor, i == f.Focus, i == f.Focus && f.Selected)
@@ -625,6 +662,10 @@ func (a *App) drawConfirmation(g *Grid) {
 	drawModalButtons(g, r, by, f.Choice, f.Focus, f.mnemonics())
 }
 func (a *App) formClick(m Message) {
+	if a.Form.ConfigBrowser != nil {
+		a.kubeBrowserClick(m)
+		return
+	}
 	f := a.Form
 	if f.Buttons {
 		r, _, by, ry := a.confirmationLayout()

@@ -28,7 +28,7 @@ func metricSelection(p *Panel) []kube.ContainerRef {
 	if r.Level == kubeTypeFolder {
 		for _, name := range p.Selected() {
 			for _, obj := range r.Objects {
-				if obj.Name == path.Base(name) && isPodObject(obj) {
+				if (obj.Name == path.Base(name) || obj.Namespace+":"+obj.Name == path.Base(name)) && isPodObject(obj) {
 					refs = append(refs, kube.ContainerRef{Namespace: obj.Namespace, Pod: obj.Name})
 				}
 			}
@@ -41,7 +41,7 @@ func metricSelection(p *Panel) []kube.ContainerRef {
 			}
 		}
 	}
-	if len(refs) == 0 {
+	if len(refs) == 0 && len(p.Selected()) <= 1 {
 		if ref, ok := podToastTarget(p); ok {
 			refs = append(refs, ref)
 		}

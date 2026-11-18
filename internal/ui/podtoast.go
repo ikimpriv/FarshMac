@@ -70,6 +70,10 @@ func (a *App) startPodToast(p *Panel) {
 }
 func (a *App) startPodToastPreset(p *Panel, preset EphemeralPreset) {
 	preset.Options.Image = preferredPodToastImage(preset.Options.Image)
+	if targets := kubeContextTargets(p); len(targets) > 1 {
+		a.batchEphemeralForm(p, preset, targets)
+		return
+	}
 	ref, ok := podToastTarget(p)
 	if !ok {
 		a.Status = "PodToast: select a pod or enter a container"

@@ -294,54 +294,10 @@ func (a *App) dockerComposeItems(p *Panel, project string) []menuItem {
 func (a *App) dockerComposeRecreate(p *Panel, project string, c docker.Container) {
 	client := p.Docker.client
 	a.backgroundTask("Checking Compose configuration", func(o *fsops.Operation) (func(), func(), error) {
-		// These labels are paths on the creator's machine. Never read matching local
-		// paths for a remote daemon without an explicit configuration selection.
-		contextName := client.Context
-		if contextName == "" {
-			contextName = "default"
-		}
-		b, err := client.Run(o.Context(), "context", "inspect", contextName, "--format", "{{.Endpoints.docker.Host}}")
+		args, configPaths, err := dockerComposeRecreateArgs(o, client, project, c)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !strings.HasPrefix(strings.TrimSpace(string(b)), "unix://") {
-			return nil, nil, fmt.Errorf("Compose recreation requires a locally accessible configuration; this Docker context is remote")
-		}
-		labelData, err := client.Run(o.Context(), "container", "inspect", "--format", "{{json .Config.Labels}}", c.ID)
-		if err != nil {
-			return nil, nil, err
-		}
-		var labels map[string]string
-		if err = json.Unmarshal(labelData, &labels); err != nil {
-			return nil, nil, err
-		}
-		if labels["com.docker.compose.project.config_files"] == "" {
-			return nil, nil, fmt.Errorf("Compose configuration location is unavailable")
-		}
-		args := []string{"compose", "--project-name", project}
-		dir := labels["com.docker.compose.project.working_dir"]
-		if dir != "" {
-			args = append(args, "--project-directory", dir)
-		}
-		var configPaths []string
-		for _, file := range strings.Split(labels["com.docker.compose.project.config_files"], ",") {
-			if !filepath.IsAbs(file) {
-				file = filepath.Join(dir, file)
-			}
-			st, e := os.Stat(file)
-			if e != nil {
-				return nil, nil, e
-			}
-			if !st.Mode().IsRegular() {
-				return nil, nil, fmt.Errorf("not a Compose file: %s", file)
-			}
-			configPaths = append(configPaths, file)
-			args = append(args, "--file", file)
-		}
-		if _, err = client.Run(o.Context(), append(append([]string{}, args...), "config", "--quiet")...); err != nil {
-			return nil, nil, err
-		}
-		args = append(args, "up", "--detach", "--force-recreate", "--no-build")
 		return func() {
 			a.dockerConfirm(p, "Recreate project "+project+" (services will be replaced)\nConfiguration:\n"+strings.Join(configPaths, "\n"), args)
 		}, nil, nil
@@ -419,4 +375,56 @@ func (w dockerArchiveWriter) Write(b []byte) (int, error) {
 	n, err := w.w.Write(b)
 	w.o.Advance(int64(n))
 	return n, err
+}
+
+func dockerComposeRecreateArgs(o *fsops.Operation, client docker.Client, project string, c docker.Container) ([]string, []string, error) {
+	// These labels are paths on the creator's machine. Never read matching local
+	// paths for a remote daemon without an explicit configuration selection.
+	contextName := client.Context
+	if contextName == "" {
+		contextName = "default"
+	}
+	b, err := client.Run(o.Context(), "context", "inspect", contextName, "--format", "{{.Endpoints.docker.Host}}")
+	if err != nil {
+		return nil, nil, err
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(b)), "unix://") {
+		return nil, nil, fmt.Errorf("Compose recreation requires a locally accessible configuration; this Docker context is remote")
+	}
+	labelData, err := client.Run(o.Context(), "container", "inspect", "--format", "{{json .Config.Labels}}", c.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var labels map[string]string
+	if err = json.Unmarshal(labelData, &labels); err != nil {
+		return nil, nil, err
+	}
+	if labels["com.docker.compose.project.config_files"] == "" {
+		return nil, nil, fmt.Errorf("Compose configuration location is unavailable")
+	}
+	args := []string{"compose", "--project-name", project}
+	dir := labels["com.docker.compose.project.working_dir"]
+	if dir != "" {
+		args = append(args, "--project-directory", dir)
+	}
+	var configPaths []string
+	for _, file := range strings.Split(labels["com.docker.compose.project.config_files"], ",") {
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(dir, file)
+		}
+		st, e := os.Stat(file)
+		if e != nil {
+			return nil, nil, e
+		}
+		if !st.Mode().IsRegular() {
+			return nil, nil, fmt.Errorf("not a Compose file: %s", file)
+		}
+		configPaths = append(configPaths, file)
+		args = append(args, "--file", file)
+	}
+	if _, err = client.Run(o.Context(), append(append([]string{}, args...), "config", "--quiet")...); err != nil {
+		return nil, nil, err
+	}
+	args = append(args, "up", "--detach", "--force-recreate", "--no-build")
+	return args, configPaths, nil
 }

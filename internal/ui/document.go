@@ -873,9 +873,6 @@ func (a *App) documentKey(m Message) {
 			return
 		}
 		switch strings.ToLower(key) {
-		case "q":
-			a.RequestQuit()
-			return
 		case "s":
 			if d.Edit {
 				if m.Shift {

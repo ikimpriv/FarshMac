@@ -12,7 +12,7 @@ import (
 // connections.json, keep working. Profiles carry no secrets (G7).
 func kubeProfilesPath() string { return filepath.Join(filepath.Dir(setupPath()), "kubernetes.json") }
 
-func kubeProfileKey(p kube.Profile) string { return p.Kubeconfig + "\x00" + p.Context }
+func kubeProfileKey(p kube.Profile) string { return p.Identity() }
 
 func (a *App) loadKubeProfiles() {
 	profilesMu.Lock()

@@ -108,6 +108,7 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			break
 		}
 	}
+	dockerContainers := p.dockerContainerCatalog()
 	rows := max(1, h-5)
 	columns := panelColumns(p)
 	capacity := rows * columns
@@ -174,6 +175,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			}
 			preferred = min(preferred, max(0, width*2/3))
 		}
+		if dockerContainers {
+			preferred = min(30, max(0, width/2))
+		}
 		extraWidth := min(width-4, max(sizeWidth, preferred))
 		nameWidth := max(0, width-extraWidth-3)
 		metadata := columns == 1 && p.View != "Tree panel" && width >= 12
@@ -201,6 +205,15 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 				g.Text(xx+nameWidth+4+storageWidth+sizeWidth, y+1, "Modified", Yellow, Blue, 14)
 			}
 		}
+		dockerAgeWidth := min(6, max(0, extraWidth/3))
+		dockerStatusWidth := extraWidth - dockerAgeWidth - 1
+		if dockerContainers && metadata {
+			g.Fill(xx, y+1, width, 1, Yellow, Blue)
+			g.Text(xx+1, y+1, "Name", Yellow, Blue, nameWidth)
+			g.Text(xx+nameWidth+2, y+1, "Status", Yellow, Blue, dockerStatusWidth)
+			g.Text(xx+nameWidth+3+dockerStatusWidth, y+1, "Age", Yellow, Blue, dockerAgeWidth)
+		}
+
 		for row := 0; row < rows; row++ {
 			i := p.Offset + c*rows + row
 			yy := y + 2 + row
@@ -237,6 +250,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 					fg = 0xff5555
 				}
 			}
+			if info, ok := e.Info.(dockerCatalogInfo); ok && info.container {
+				fg = info.stateColor()
+			}
 			if p.Marked[e.Name] {
 				fg = Yellow
 			}
@@ -254,6 +270,9 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			if k, ok := e.Info.(*kubeEntry); ok && k.covered {
 				marker = "◆"
 			}
+			if info, ok := e.Info.(dockerCatalogInfo); ok && info.toastCount > 0 {
+				marker = info.toastMarker()
+			}
 			if p.Marked[e.Name] {
 				marker = "√"
 			}
@@ -264,6 +283,14 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 			}
 			if !metadata {
 				g.Text(xx+1, yy, name, fg, bg, width-2)
+				continue
+			}
+			if dockerContainers {
+				g.Text(xx+1, yy, name, fg, bg, nameWidth)
+				if info, ok := e.Info.(dockerCatalogInfo); ok && info.container {
+					g.Text(xx+nameWidth+2, yy, info.containerStatus(), fg, bg, dockerStatusWidth)
+					g.Text(xx+nameWidth+3+dockerStatusWidth, yy, info.containerAge(), fg, bg, dockerAgeWidth)
+				}
 				continue
 			}
 			size, date := "<DIR>", ""
@@ -375,6 +402,20 @@ func (a *App) drawPanel(g *Grid, index, x, y, w, h int) {
 	if p.Cursor >= 0 && p.Cursor < len(p.Entries) {
 		if storage, ok := p.Entries[p.Cursor].Info.(storageFileInfo); ok {
 			status = storage.label + " · " + status
+		}
+		if info, ok := p.Entries[p.Cursor].Info.(dockerCatalogInfo); ok && info.container {
+			detail := info.status
+			if detail == "" {
+				detail = info.containerStatus()
+			}
+			status = detail + " · Age " + info.containerAge() + " · " + status
+		}
+		if info, ok := p.Entries[p.Cursor].Info.(dockerCatalogInfo); ok && info.toastCount > 0 {
+			label := info.toastMarker() + " PodToast"
+			if info.toastTotal > 1 {
+				label += fmt.Sprintf(" %d/%d containers", info.toastCount, info.toastTotal)
+			}
+			status = label + " · " + status
 		}
 	}
 	status = p.filterFooter(status)

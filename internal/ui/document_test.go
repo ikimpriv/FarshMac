@@ -427,3 +427,20 @@ func TestYAMLEditorNeverInsertsTabs(t *testing.T) {
 		t.Fatalf("text files keep real tabs when configured: %q", a.Doc.Text)
 	}
 }
+
+func TestDocumentControlQDoesNotQuit(t *testing.T) {
+	for _, edit := range []bool{false, true} {
+		a := textApp(t, "viewer content", edit)
+		d := a.Doc
+		for _, m := range []Message{{Key: "Q", Code: "KeyQ", Ctrl: true, Shift: true}, {Key: "q", Ctrl: true}, {Key: "q", Ctrl: true, Shift: true}} {
+			a.key(m)
+			if a.Quit || a.Doc != d || a.Form != nil || a.Dialog != nil || a.compactMetrics != nil || d.Dirty {
+				t.Fatalf("control shortcut escaped document context: edit=%v key=%+v", edit, m)
+			}
+		}
+		a.key(Message{Key: "q", Meta: true})
+		if !a.Quit {
+			t.Fatal("Cmd+Q must still quit")
+		}
+	}
+}
