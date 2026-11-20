@@ -9,11 +9,11 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.26.0 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.27.0 · macOS 12+ · Apple Silicon and Intel**
 
 **File context menu (F11 / Alt+Enter):** compose a message with attachments in the macOS Mail sharing service, create a ZIP / tar.gz / tar.bz2 archive, or choose an installed application compatible with all selected files. FarshMac does not send email itself. Remote files are staged locally for external applications and retained until the FarshMac window closes.
 
-**Connections:** Left / Right and Alt+F1 / Alt+F2 include FTP/SFTP, Kubernetes and Docker connection actions. The Recent connections section shows five entries; older connection locations remain saved. Choosing a recent connection starts restoration directly, without opening its settings form. The last folder and cursor are restored when available.
+**Connections:** Left / Right and Alt+F1 / Alt+F2 include FTP/SFTP, Kubernetes and Docker connection actions. The Recent connections section shows 15 entries, newest first regardless of connection type; older connection locations remain saved. Choosing a recent connection starts restoration directly, without opening its settings form. The last folder and cursor are restored when available.
 
 **Pod context menu:** Alt+Enter / F11 → Attach ephemeral container… selects PodToast, a saved launch preset, or a new image with configurable access and startup options. Alt+F9 maximizes/restores the window.
 
@@ -27,11 +27,11 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.26.0)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.27.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.26.0.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.27.0.md) for installation details and known limitations.
 
 ## Features
 

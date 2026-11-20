@@ -43,6 +43,7 @@ func (a *App) panelContextMenu() {
 		items = append(items, menuItem{"Send by Email…", "", func() { a.nativeSelectedFiles("email") }}, menuItem{"Create archive…", "", a.archiveSelectionMenu}, menuItem{"Open In…", "", func() { a.nativeSelectedFiles("openIn") }})
 	}
 	if p.Kube != nil && !multiFiles {
+		items = append(items, a.kubeRestartItems(p)...)
 		if len(metricSelection(p)) > 0 {
 			items = append(items, menuItem{"Live metrics…", "", func() { a.openPodMetrics(p) }}, menuItem{"Quick Live Metrics", "⌃⇧Q", a.toggleQuickMetrics})
 		}

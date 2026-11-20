@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"farshmac/internal/podtoast"
 	"fmt"
 	"os"
@@ -27,6 +28,11 @@ func (a *App) contextBatch(p *Panel, title string, jobs []contextJob, mutate boo
 	start := func() {
 		receipt := p.selectionReceipt()
 		a.backgroundTask(title, func(o *fsops.Operation) (func(), func(), error) {
+			a.operationQuestions(o)
+			for _, j := range jobs {
+				o.Add(j.name, 0)
+			}
+			o.Ready()
 			var report strings.Builder
 			success := 0
 			completedNames := map[string]bool{}
@@ -35,8 +41,27 @@ func (a *App) contextBatch(p *Panel, title string, jobs []contextJob, mutate boo
 					report.WriteString("Cancelled; remaining objects were not processed.\n")
 					break
 				}
-				o.Add(j.name, 0)
-				b, err := j.run(o)
+				o.Begin(j.name, 0)
+				var b []byte
+				var err error
+				if mutate {
+					err = o.Attempt(title, j.name, "", func() error { var e error; b, e = j.run(o); return e })
+					if errors.Is(err, fsops.ErrCancelled) {
+						o.Cancel()
+						break
+					}
+				} else {
+					b, err = j.run(o)
+				}
+
+				if mutate {
+					if err == nil {
+						success++
+						completedNames[j.name] = true
+					}
+					o.Complete(j.name)
+					continue
+				}
 				fmt.Fprintf(&report, "\n── %s ──\n", j.name)
 				if err != nil {
 					fmt.Fprintf(&report, "Error: %v\n", err)
@@ -66,7 +91,9 @@ func (a *App) contextBatch(p *Panel, title string, jobs []contextJob, mutate boo
 					receipt.complete()
 					a.refresh()
 				}
-				a.showText(fmt.Sprintf("%s · %d/%d completed", title, success, len(jobs)), report.String())
+				if !mutate {
+					a.showText(fmt.Sprintf("%s · %d/%d completed", title, success, len(jobs)), report.String())
+				}
 			}, nil, nil
 		})
 		if a.task != nil {

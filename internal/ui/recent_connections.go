@@ -118,19 +118,7 @@ func (a *App) connectionMenuItems(index int) []menuItem {
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Used > records[j].Used })
 	if len(records) > 0 {
 		items = append(items, menuItem{})
-		// Choose the 15 most recent first, then group their presentation.
 		records = records[:min(15, len(records))]
-		rank := func(kind string) int {
-			switch kind {
-			case "docker":
-				return 0
-			case "kubernetes":
-				return 1
-			default:
-				return 2
-			}
-		}
-		sort.SliceStable(records, func(i, j int) bool { return rank(records[i].Kind) < rank(records[j].Kind) })
 		for _, r := range records {
 			r := r
 			items = append(items, menuItem{r.Label, "", func() { a.Active = index; a.openRecentConnection(index, r) }})

@@ -242,8 +242,13 @@ func TestEphemeralBatchRejectsReplacedPodAndContinues(t *testing.T) {
 		{Ref: kube.ContainerRef{Namespace: "shop", Pod: "first", Container: "app"}, UID: "old-first"},
 		{Ref: kube.ContainerRef{Namespace: "shop", Pod: "second", Container: "app"}, UID: "old-second"},
 	})
+	waitOperationQuestion(t, a, "Error")
+	if !strings.Contains(a.Form.Message, "pod was replaced") {
+		t.Fatal(a.Form.Message)
+	}
+	chooseOperation(t, a, "Skip all")
 	waitNetwork(t, a)
-	if a.Doc == nil || strings.Count(a.Doc.Text, "pod was replaced") != 2 || len(p.Kube.toasts) != 0 {
-		t.Fatal("replacement protection/report", a.Doc)
+	if a.Doc != nil || a.Form != nil || len(p.Kube.toasts) != 0 || a.LastProgress.Skipped != 2 {
+		t.Fatal("replacement protection/progress", a.Doc, a.LastProgress)
 	}
 }

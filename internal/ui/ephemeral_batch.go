@@ -2,11 +2,12 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
+	"farshmac/internal/fsops"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"farshmac/internal/fsops"
 	"farshmac/internal/kube"
 	"farshmac/internal/podtoast"
 	"k8s.io/apimachinery/pkg/types"
@@ -174,8 +175,30 @@ func (a *App) showBatchEphemeralForm(p *Panel, preset EphemeralPreset, targets [
 	}
 }
 func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, targets []ephemeralBatchTarget) {
+	receipt := p.selectionReceipt()
+	markedTargets := map[string][]string{}
+	level := p.kubeLevel()
+	for name := range receipt.marks {
+		for _, entry := range p.Entries {
+			if entry.Name != name {
+				continue
+			}
+			for _, target := range targets {
+				ref := target.Ref
+				ke, ok := entry.Info.(*kubeEntry)
+				if ok && isPodObject(ke.object) && ke.object.Namespace == ref.Namespace && ke.object.Name == ref.Pod || level.Level == kubeContainers && containerName(name) == ref.Container && level.Namespace == ref.Namespace && level.Object.Name == ref.Pod {
+					markedTargets[name] = append(markedTargets[name], toastKey(ref))
+				}
+			}
+		}
+	}
 	a.backgroundTask("Applying to selected targets", func(op *fsops.Operation) (func(), func(), error) {
-		var report []string
+		a.operationQuestions(op)
+		for _, target := range targets {
+			op.Add(toastKey(target.Ref), 0)
+		}
+		op.Ready()
+		succeeded := map[string]bool{}
 		completed := 0
 		changed := map[string]kube.ContainerRef{}
 		type retirement struct {
@@ -185,13 +208,12 @@ func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, 
 		retirements := map[string]retirement{}
 		for _, target := range targets {
 			if op.Check() != nil {
-				report = append(report, "Cancelled; remaining targets were not started.")
 				break
 			}
 			ref := target.Ref
 			key := toastKey(ref)
-			op.Add(key, 0)
-			err := func() error {
+			op.Begin(key, 0)
+			err := op.Attempt("attach ephemeral container", key, "", func() error {
 				pod, err := k.client.Pod(op.Context(), ref.Namespace, ref.Pod)
 				if err != nil {
 					return err
@@ -226,8 +248,6 @@ func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, 
 					}
 					if shell, e := k.client.ResolveDebugShell(op.Context(), ref, ""); e == nil {
 						k.setDebugShell(shell)
-					} else {
-						report = append(report, key+" shell: "+e.Error())
 					}
 					if oldAgent != "" && oldAgent != client.AgentName {
 						retirements[ref.Namespace+"/"+ref.Pod+"/"+oldAgent] = retirement{ref, oldAgent, client.AgentName}
@@ -240,18 +260,18 @@ func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, 
 					if ref.Container != "" {
 						if shell, e := k.client.ResolveDebugShell(op.Context(), ref, started.Container); e == nil {
 							k.setDebugShell(shell)
-						} else {
-							report = append(report, key+" attached; shell unavailable: "+e.Error())
 						}
 					}
 				}
 				return nil
-			}()
-			if err != nil {
-				report = append(report, key+": "+err.Error())
-			} else {
+			})
+			if errors.Is(err, fsops.ErrCancelled) {
+				op.Cancel()
+				break
+			}
+			if err == nil {
 				completed++
-				report = append(report, key+": connected")
+				succeeded[key] = true
 			}
 			op.Complete(key)
 		}
@@ -271,11 +291,21 @@ func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, 
 			}
 			k.mu.Unlock()
 			if inUse {
-				report = append(report, r.old+": retained for another connected container")
 				continue
 			}
-			if err := k.client.RetireSupersededPodToast(op.Context(), r.ref, []string{r.old}, r.replacement); err != nil {
-				report = append(report, r.old+": new agent active; old agent retained: "+err.Error())
+			err := op.Attempt("retire superseded PodToast", r.old, "", func() error {
+				return k.client.RetireSupersededPodToast(op.Context(), r.ref, []string{r.old}, r.replacement)
+			})
+			if err != nil {
+				for _, target := range targets {
+					if target.Ref.Namespace == r.ref.Namespace && target.Ref.Pod == r.ref.Pod {
+						delete(succeeded, toastKey(target.Ref))
+					}
+				}
+			}
+			if errors.Is(err, fsops.ErrCancelled) {
+				op.Cancel()
+				break
 			}
 		}
 		return func() {
@@ -287,7 +317,19 @@ func (a *App) runEphemeralBatch(p *Panel, k *kubePanel, preset EphemeralPreset, 
 			if completed > 0 {
 				a.rememberEphemeral(preset)
 			}
-			a.showText(fmt.Sprintf("Ephemeral containers · %d/%d completed", completed, len(targets)), strings.Join(report, "\n"))
+			for name := range receipt.marks {
+				keys := markedTargets[name]
+				all := len(keys) > 0
+				for _, key := range keys {
+					if !succeeded[key] {
+						all = false
+					}
+				}
+				if !all {
+					delete(receipt.marks, name)
+				}
+			}
+			receipt.complete()
 		}, nil, nil
 	})
 	if a.task != nil {

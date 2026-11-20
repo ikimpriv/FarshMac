@@ -17,6 +17,7 @@ func TestRecentConnectionsKeepAllLocationsButShowFifteen(t *testing.T) {
 		if !ok {
 			t.Fatal("missing connection")
 		}
+		r.Kind = []string{"docker", "kubernetes", "remote"}[i%3]
 		if err := saveRecentConnection(r, true); err != nil {
 			t.Fatal(err)
 		}
@@ -37,6 +38,9 @@ func TestRecentConnectionsKeepAllLocationsButShowFifteen(t *testing.T) {
 	found := 0
 	for _, item := range items {
 		if strings.Contains(item.Label, ".invalid") {
+			if !strings.Contains(item.Label, fmt.Sprintf("server-%d.invalid", 17-found)) {
+				t.Fatalf("recent connection %d out of order: %s", found, item.Label)
+			}
 			found++
 		}
 	}

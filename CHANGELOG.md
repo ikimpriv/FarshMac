@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.27.0 — Workload restarts and predictable batch operations
+
+- Order the 15 recent connections strictly by last use, newest first regardless of connection type.
+
+- Replace batch mutation completion reports with determinate progress and Retry / Skip / Skip all / Cancel error handling. Clear successful selection marks, retaining failed, skipped and unprocessed objects, including ephemeral attachment/update targets.
+- Explicitly preserve the current replica count during workload restart and detect unexpected replica changes in the API response.
+
+- Add selection-aware rollout restart for Deployments, StatefulSets and DaemonSets in F11 / Alt+Enter. Preserve update strategies, report per-object failures, reject paused/OnDelete workloads and cancel remaining requests with Esc.
+
 ## 0.26.0 — Remote connections and batch actions
 
 - Show up to 15 recent connections and rename the saved configuration library to Custom kubeconfig files.
