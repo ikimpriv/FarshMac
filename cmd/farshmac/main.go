@@ -1,6 +1,7 @@
 package main
 
 import (
+	"farshmac/internal/aispaces"
 	"flag"
 	"fmt"
 	"os"
@@ -15,6 +16,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == aispaces.GatewayFlag {
+		os.Exit(aispaces.GatewayMain())
+	}
+	if len(os.Args) == 2 && os.Args[1] == aispaces.OperatorFlag {
+		os.Exit(aispaces.OperatorMain())
+	}
 	if len(os.Args) == 3 && os.Args[1] == cloudfiles.HelperFlag {
 		os.Exit(cloudfiles.HelperMain(os.Args[2]))
 	}
@@ -46,6 +53,7 @@ func main() {
 		os.Exit(1)
 	}
 	a.LoadSetup()
+	go aispaces.Shared() // serves the AI Spaces MCP for the user's own agents from the start
 	defer a.Close()
 	restore := true
 	flag.Visit(func(f *flag.Flag) {

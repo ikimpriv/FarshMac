@@ -462,7 +462,7 @@ func (a *App) openVolume(index int, path string) {
 	p.cancelTree()
 	previous := *p
 	p.rememberFileView()
-	p.Docker = nil
+	p.Docker, p.AI = nil, nil
 	p.Remote, p.RemoteLocalPath, p.Archive, p.Kube = nil, "", nil, nil
 	p.View = p.lastFileView
 	if p.View == "" {

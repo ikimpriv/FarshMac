@@ -1,0 +1,100 @@
+package aispaces
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// Agents run inside a macOS sandbox. An agent can write only to its scratch
+// folder and cannot read the user's home folder or other volumes: project
+// files reach it only through the Env's MCP server, which is what keeps each
+// Env's context separate. Exceptions are what the CLI itself needs: its own
+// configuration and session store (but no other project's sessions and not
+// the shared prompt history), its installation, the login keychain, and its
+// own temporary folder.
+//
+// Not restricted: the network (the CLI must reach its provider) and reading
+// outside the home folder (system files, tools, /private/var/folders).
+
+const sandboxExec = "/usr/bin/sandbox-exec"
+
+func sbQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+func realPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
+}
+
+// claudeProject is the folder name Claude Code derives from a working folder.
+func claudeProject(dir string) string {
+	return regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(dir, "-")
+}
+
+// sandboxProfile confines an agent whose working folder is scratch. readable
+// lists extra files or folders it must be able to read (its own executable,
+// the MCP gateway).
+func sandboxProfile(scratch string, readable ...string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	home, scratch = realPath(home), realPath(scratch)
+	uid := strconv.Itoa(os.Getuid())
+	project := claudeProject(scratch)
+	var ancestors []string
+	for p := filepath.Dir(scratch); ; p = filepath.Dir(p) {
+		ancestors = append(ancestors, "(literal "+sbQuote(p)+")")
+		if p == "/" || p == "." {
+			break
+		}
+	}
+	var extra []string
+	for _, p := range readable {
+		if p = realPath(p); p != "" {
+			extra = append(extra, "(subpath "+sbQuote(p)+")")
+		}
+	}
+	config := filepath.Join(home, ".claude")
+	// The CLI's own state, minus other projects' sessions and the shared prompt history.
+	own := fmt.Sprintf(`(require-all (subpath %s)
+      (require-not (literal %s))
+      (require-not (require-all (subpath %s) (require-not (subpath %s)))))
+    (regex #"^%s/\.claude\.json")
+    (subpath %s) (subpath %s)`,
+		sbQuote(config), sbQuote(filepath.Join(config, "history.jsonl")),
+		sbQuote(filepath.Join(config, "projects")), sbQuote(filepath.Join(config, "projects", project)),
+		regexp.QuoteMeta(home),
+		sbQuote(filepath.Join(home, ".codex")),
+		sbQuote(filepath.Join("/private/tmp", "claude-"+uid, project)))
+	return fmt.Sprintf(`(version 1)
+(allow default)
+(deny file-read-data
+  (require-all
+    (require-any (subpath %s) (subpath "/Volumes") (subpath %s))
+    (require-not (require-any
+      (subpath %s) %s
+      %s
+      (literal %s) (subpath %s) (subpath %s) (subpath %s)
+      %s))))
+(deny file-write*
+  (require-not (require-any
+    (subpath "/dev") (subpath "/private/var/folders") (subpath %s)
+    (regex #"^/private/tmp/claude-[0-9a-f]+-cwd$")
+    %s)))
+`,
+		sbQuote(home), sbQuote("/private/tmp/claude-"+uid),
+		sbQuote(scratch), strings.Join(ancestors, " "),
+		own,
+		sbQuote("/private/tmp/claude-"+uid), sbQuote(filepath.Join(home, ".local")), sbQuote(filepath.Join(home, "Library", "Keychains")), sbQuote(filepath.Join(home, ".nvm")),
+		strings.Join(extra, " "),
+		sbQuote(scratch),
+		own), nil
+}

@@ -357,7 +357,7 @@ func (a *App) connectDocker(index int, name string) {
 			local := p.filesystemPath()
 			p.cancelPanelLoad()
 			p.cancelTree()
-			p.Kube, p.Remote, p.Archive = nil, nil, nil
+			p.Kube, p.Remote, p.Archive, p.AI = nil, nil, nil, nil
 			p.Docker = d
 			p.RemoteLocalPath = local
 			p.Async = true

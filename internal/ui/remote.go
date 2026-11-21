@@ -318,7 +318,7 @@ func (a *App) connectRemoteChecked(index int, c remotefs.Config) {
 				p.Kube.close()
 			}
 			p.Kube = nil
-			p.Docker = nil
+			p.Docker, p.AI = nil, nil
 			p.Remote = &c
 			p.RemoteLocalPath = local
 			p.Archive = nil
@@ -425,7 +425,7 @@ func hostKeyWarning(e *remotefs.HostKeyChanged) string {
 func (a *App) disconnectRemote(index int) {
 	a.rememberConnection(index, false)
 	p := &a.Panels[index]
-	if p.Remote == nil && p.Kube == nil && p.Docker == nil {
+	if p.Remote == nil && p.Kube == nil && p.Docker == nil && p.AI == nil {
 		return
 	}
 	p.cancelPanelLoad()
@@ -440,7 +440,7 @@ func (a *App) disconnectRemote(index int) {
 	if p.Kube != nil && p.Kube != a.Panels[1-index].Kube {
 		p.Kube.close()
 	}
-	p.Docker = nil
+	p.Docker, p.AI = nil, nil
 	p.Remote, p.Kube = nil, nil
 	p.RemoteLocalPath = ""
 	p.states = nil

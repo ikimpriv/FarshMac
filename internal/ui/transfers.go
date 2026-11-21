@@ -22,6 +22,9 @@ func (a *App) transferDialogTo(move, local bool) {
 	if local {
 		other = p
 	}
+	if a.aiTransfer(p, other, move, local) {
+		return
+	}
 	if p.Kube != nil && p.kubeLevel().Level != kubeContainerFS && other.Kube != nil && other.kubeLevel().Level != kubeContainerFS {
 		a.kubeResourceTransferDialog(p, other, move, local)
 		return

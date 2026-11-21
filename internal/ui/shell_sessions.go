@@ -70,6 +70,9 @@ func (a *App) queueContextCommand(p *Panel, cwd, command string) {
 }
 func (a *App) panelShellContext() shellsession.Context {
 	p := &a.Panels[a.Active]
+	if p.AI != nil {
+		return a.aiShellContext(p)
+	}
 	if p.Docker != nil {
 		c, _, cwd, ok := p.Docker.location(p.Path)
 		if ok {

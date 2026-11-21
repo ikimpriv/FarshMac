@@ -104,7 +104,7 @@ func (a *App) goFolderHistory(entry string) {
 	p.cancelPanelLoad()
 	p.cancelTree()
 	previous := *p
-	p.Docker, p.Kube = nil, nil
+	p.Docker, p.Kube, p.AI = nil, nil, nil
 	p.Remote, p.RemoteLocalPath, p.Archive = nil, "", nil
 	a.error(p.loadSource(entry, previous, ""))
 }

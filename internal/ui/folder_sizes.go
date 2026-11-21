@@ -79,7 +79,7 @@ func (a *App) calculateFolderSizes(all bool) {
 	remote, archive := p.Remote, p.Archive
 	endpoint := p.endpoint()
 	sourceKey := p.sizeKey(base)
-	if (p.Kube != nil || p.Docker != nil) && endpoint.Opener == nil {
+	if (p.Kube != nil || p.Docker != nil || p.AI != nil) && endpoint.Opener == nil {
 		a.Status = "Choose a filesystem folder"
 		return
 	}

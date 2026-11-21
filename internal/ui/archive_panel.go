@@ -194,8 +194,9 @@ func (a *App) matchOtherPanel() {
 	dst.rememberFileView()
 	dst.Kube = src.Kube
 	dst.Docker = src.Docker
+	dst.AI = src.AI
 	dst.kubeWatchRevision = 0
-	if dst.Kube != nil || dst.Remote != nil || dst.Docker != nil {
+	if dst.Kube != nil || dst.Remote != nil || dst.Docker != nil || dst.AI != nil {
 		dst.Async = true
 	}
 	if dst.View == "Tree panel" || dst.View == "Info panel" || dst.View == "Quick view" {
