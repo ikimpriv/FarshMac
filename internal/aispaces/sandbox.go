@@ -15,7 +15,8 @@ import (
 // Env's context separate. Exceptions are what the CLI itself needs: its own
 // configuration and session store (but no other project's sessions and not
 // the shared prompt history), its installation, the login keychain, and its
-// own temporary folder.
+// own temporary folder. The keychain is writable too: the CLI stores its
+// refreshed login there, and without that it is logged out within hours.
 //
 // Not restricted: the network (the CLI must reach its provider) and reading
 // outside the home folder (system files, tools, /private/var/folders).
@@ -86,7 +87,7 @@ func sandboxProfile(scratch string, readable ...string) (string, error) {
       %s))))
 (deny file-write*
   (require-not (require-any
-    (subpath "/dev") (subpath "/private/var/folders") (subpath %s)
+    (subpath "/dev") (subpath "/private/var/folders") (subpath %s) (subpath %s)
     (regex #"^/private/tmp/claude-[0-9a-f]+-cwd$")
     %s)))
 `,
@@ -95,6 +96,6 @@ func sandboxProfile(scratch string, readable ...string) (string, error) {
 		own,
 		sbQuote("/private/tmp/claude-"+uid), sbQuote(filepath.Join(home, ".local")), sbQuote(filepath.Join(home, "Library", "Keychains")), sbQuote(filepath.Join(home, ".nvm")),
 		strings.Join(extra, " "),
-		sbQuote(scratch),
+		sbQuote(scratch), sbQuote(filepath.Join(home, "Library", "Keychains")),
 		own), nil
 }
