@@ -943,7 +943,7 @@ The description is based on the current code (`internal/ui`, `internal/fsops`, `
 <a id="part-3"></a>
 # Part 3. Internal Viewer and Editor
 
-The source of truth is the code in `internal/ui/document*.go`, `internal/ui/remote_document.go`, `internal/ui/launch.go`, `internal/textfile/*.go`, `internal/highlight/*.go` as of commit `b91313a`. Interface strings are given verbatim (English). All paths are relative to the repository root `/Users/ikim/src/remote-codex/farshmac`.
+The source of truth is the code in `internal/ui/document*.go`, `internal/ui/remote_document.go`, `internal/ui/launch.go`, `internal/textfile/*.go`, `internal/highlight/*.go` as of commit `b91313a`. Interface strings are given verbatim (English). All paths are relative to the repository root.
 
 ## 0. Data model and general rules
 
@@ -1494,7 +1494,7 @@ Legacy encoding guesses are heuristic: choose an explicit codepage if needed.
 <a id="part-4"></a>
 # Part 4. Terminal, command line, windows, native shell, renderer
 
-The source of truth is the repository code `/Users/ikim/src/remote-codex/farshmac` (branch `main`, commit `b91313a`). Interface strings are quoted verbatim (English), as in the code. At the end is a list of discrepancies between the documentation/help and the code.
+The source of truth is the repository code (branch `main`, commit `b91313a`). Interface strings are quoted verbatim (English), as in the code. At the end is a list of discrepancies between the documentation/help and the code.
 
 Conventions: "panel mode" — `App.TermVisible == false`, `Update.Mode == "panels"`; "terminal mode" — `TermVisible == true`, `Mode == "terminal"`. `PanelKeys` (a field of `Update`) is true only when there is no document, form, dialog or menu and no background operation is running; the native layer additionally clears it in terminal mode (`panelKeys = state.panelKeys && mode != "terminal"`).
 
