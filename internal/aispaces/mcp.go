@@ -81,12 +81,17 @@ func (s *Store) startMCP() (*mcpServer, error) {
 type mcpSession struct {
 	env            *Env
 	agent, session string // agent entry and its native session reference
+	conversation          // what the agent's conversation already holds
 }
+
+// forgetMethod is sent by the agent CLI's hooks when its conversation was
+// compacted or cleared: what it read before is no longer in its context.
+const forgetMethod = "farshmac/forget"
 
 func (m *mcpServer) register(e *Env, agent, session string) string {
 	token := newID() + newID()
 	m.mu.Lock()
-	m.tokens[token] = &mcpSession{e, agent, session}
+	m.tokens[token] = &mcpSession{env: e, agent: agent, session: session}
 	m.mu.Unlock()
 	return token
 }
@@ -212,6 +217,9 @@ func (m *mcpServer) serve(conn net.Conn) {
 				entry := logEntry{Method: req.Method, ArgBytes: len(raw)}
 				started := time.Now()
 				if len(req.ID) == 0 {
+					if req.Method == forgetMethod {
+						session.forget("")
+					}
 					record(entry) // a notification: nothing to answer
 				} else {
 					// Authority is checked on every call: a stopped agent loses access.

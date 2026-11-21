@@ -19,6 +19,9 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == aispaces.GatewayFlag {
 		os.Exit(aispaces.GatewayMain())
 	}
+	if len(os.Args) == 3 && os.Args[1] == aispaces.EventFlag {
+		os.Exit(aispaces.EventMain(os.Args[2]))
+	}
 	if len(os.Args) == 2 && os.Args[1] == aispaces.OperatorFlag {
 		os.Exit(aispaces.OperatorMain())
 	}

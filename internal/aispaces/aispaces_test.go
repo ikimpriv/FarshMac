@@ -168,7 +168,7 @@ func TestMCPTools(t *testing.T) {
 	if got := text(rpc("tools/call", `{"name":"vfs_read","arguments":{"path":"/project/a.txt"}}`)); got != "omega\n" {
 		t.Fatalf("read = %q", got)
 	}
-	if got := text(rpc("tools/call", `{"name":"vfs_search","arguments":{"path":"/","text":"beta"}}`)); got != "/project/sub/b.txt:1: beta" {
+	if got := text(rpc("tools/call", `{"name":"vfs_search","arguments":{"path":"/","text":"beta"}}`)); got != "/project/sub/b.txt\n  1: beta" {
 		t.Fatalf("search = %q", got)
 	}
 	if m := rpc("tools/call", `{"name":"vfs_read","arguments":{"path":"/../../etc/passwd"}}`); m["isError"] != true {
@@ -213,7 +213,7 @@ func TestMCPSocketAuthority(t *testing.T) {
 		time.Sleep(10 * time.Millisecond) // the disconnect records are written after the replies
 		logged, _ = os.ReadFile(filepath.Join(s.envDir(env), LogName))
 	}
-	for _, want := range []string{`"event":"connect"`, `"agent":"claude"`, `"session":"test-session"`, `"tool":"vfs_list"`, `"args":{"path":"/"}`, `"out":"project/  [@`, `"event":"disconnect"`} {
+	for _, want := range []string{`"event":"connect"`, `"agent":"claude"`, `"session":"test-session"`, `"tool":"vfs_list"`, `"args":{"path":"/"}`, `"out":"project/  (2 entries)  [@`, `"event":"disconnect"`} {
 		if !strings.Contains(string(logged), want) {
 			t.Fatalf("log lacks %s:\n%s", want, logged)
 		}
@@ -466,12 +466,12 @@ func TestMCPToolsWorkInFewCalls(t *testing.T) {
 	}
 	// One call shows the whole tree, with reference IDs and read-only marks.
 	tree, _ := run(fs, "vfs_list", `{"path":"/","depth":3}`)
-	for _, want := range []string{"project/  [@", "project/a.txt\t6 bytes", "project/sub/notes.md"} {
+	for _, want := range []string{"project/  [@", "\n  a.txt  6B\n", "\n  sub/\n", "\n    notes.md  32B\n"} {
 		if !strings.Contains(tree, want) {
 			t.Fatalf("tree lacks %q:\n%s", want, tree)
 		}
 	}
-	if tree, _ = run(reader, "vfs_list", `{"path":"/","depth":3}`); !strings.Contains(tree, "deep/er/sub/  [@") || !strings.Contains(tree, "read-only]") {
+	if tree, _ = run(reader, "vfs_list", `{"path":"/","depth":3}`); !strings.Contains(tree, "deep/\n  er/\n    sub/  (2 entries)  [@") || !strings.Contains(tree, "read-only]") {
 		t.Fatalf("read-only reference not marked:\n%s", tree)
 	}
 	// A fragment instead of the whole file.
@@ -479,7 +479,7 @@ func TestMCPToolsWorkInFewCalls(t *testing.T) {
 		t.Fatalf("range = %q", got)
 	}
 	// Regular expressions, a name filter and context lines.
-	if got, _ := run(fs, "vfs_search", `{"path":"/","text":"R1[12]$","regex":true,"glob":"*.md","context":1}`); got != "/project/sub/notes.md-1- one\n/project/sub/notes.md:2: two R11\n/project/sub/notes.md-3- three\n/project/sub/notes.md:4: four R12\n/project/sub/notes.md-5- five" {
+	if got, _ := run(fs, "vfs_search", `{"path":"/","text":"R1[12]$","regex":true,"glob":"*.md","context":1}`); got != "/project/sub/notes.md\n  1- one\n  2: two R11\n  3- three\n  4: four R12\n  5- five" {
 		t.Fatalf("search = %q", got)
 	}
 	if got, _ := run(fs, "vfs_search", `{"path":"/","text":"notes","names_only":true}`); got != "/project/sub/notes.md" {

@@ -196,8 +196,15 @@ func workspacePush(s *Store, session *mcpSession, fs *FS, virtual string) (strin
 				}
 			}
 		}
+		old, _, readErr := fs.ReadFile(c.virtual, 8<<20)
 		if err := fs.WriteFile(c.virtual, c.data); err != nil {
 			return "", fmt.Errorf("%v (already pushed: %s)", err, strings.Join(done, ", "))
+		}
+		// The agent edited its copy with its own tools: the server cannot
+		// tell what it knows of the result, so the next read is a full one.
+		session.forget(c.virtual)
+		if real, shared := source(c.virtual, fs.bindings()); shared {
+			session.touched(real, old, readErr == nil, c.data)
 		}
 		seen[c.virtual] = digest(c.data)
 		done = append(done, c.virtual)

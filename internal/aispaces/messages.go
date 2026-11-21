@@ -1,9 +1,7 @@
 package aispaces
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -135,10 +133,28 @@ func (s *Store) peerList(e *Env, agent string) string {
 	}
 	if len(lines) == 0 {
 		b.WriteString("You may not contact any other agent. The user decides who talks to whom.\n")
-		return b.String()
+	} else {
+		sort.Strings(lines)
+		b.WriteString("You may contact:\n" + strings.Join(lines, "\n") + "\n")
 	}
-	sort.Strings(lines)
-	b.WriteString("You may contact:\n" + strings.Join(lines, "\n") + "\n")
+	// Messages are kept, so an agent whose conversation was cleared can see
+	// what it still owes.
+	var open []string
+	for id, r := range sp.Requests {
+		if r.ToEnv != e.ID || r.ToAgent != agent {
+			continue
+		}
+		subject := ""
+		if msgs := s.thread(sp, id); len(msgs) > 0 {
+			last := msgs[len(msgs)-1]
+			subject = fmt.Sprintf(" from %s: %s", last.From, shorten(strings.SplitN(strings.TrimSpace(last.Text), "\n", 2)[0], 100))
+		}
+		open = append(open, fmt.Sprintf("  #%s%s", id, subject))
+	}
+	if len(open) > 0 {
+		sort.Strings(open)
+		b.WriteString("Waiting for your answer (read with msg_read, answer with agent_reply):\n" + strings.Join(open, "\n") + "\n")
+	}
 	return b.String()
 }
 
@@ -210,22 +226,13 @@ func (s *Store) MessagesPath(space string) string {
 	return ""
 }
 
-// record must be called with s.mu held.
-func (s *Store) record(sp *Space, kind, id, from, to, text string, delivered bool) {
-	dir := filepath.Join(s.root, "spaces", sp.ID)
-	if os.MkdirAll(dir, 0700) != nil {
-		return
-	}
-	line, _ := json.Marshal(map[string]any{"time": time.Now().Format("2006-01-02T15:04:05Z07:00"), "kind": kind, "id": id, "from": from, "to": to, "delivered": delivered, "text": text})
-	if f, err := os.OpenFile(filepath.Join(dir, "messages.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
-		f.Write(append(line, '\n'))
-		f.Close()
-	}
-}
-
 // send passes a message from one agent to another and remembers who asked,
 // so the answer finds its way back.
 func (s *Store) send(from *Env, fromAgent, to, text string) (string, error) {
+	return s.sendWith(from, fromAgent, to, text, outgoing{})
+}
+
+func (s *Store) sendWith(from *Env, fromAgent, to, text string, out outgoing) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("the message is empty")
 	}
@@ -252,8 +259,13 @@ func (s *Store) send(from *Env, fromAgent, to, text string) (string, error) {
 	}
 	sp.Requests[id] = request{from.ID, fromAgent, target.ID, agent}
 	sender, recipient := address(from, fromAgent), address(target, agent)
-	delivered := s.deliver(target, agent, fmt.Sprintf("[FarshMac message #%s from %s]\n%s\n\n[When you have the answer, send it with the agent_reply tool, request_id %s. It is delivered to %s automatically.]", id, sender, text, id, sender))
-	s.record(sp, "message", id, sender, recipient, text, delivered)
+	m := message{Kind: "message", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: target.ID, Text: text, Attachments: out.attachments}
+	changes, changed := changeNotes(sender, out, target)
+	m.Changed = changed
+	s.number(sp, &m)
+	m.Delivered = s.deliver(target, agent, fmt.Sprintf("[FarshMac message #%s from %s]\n%s%s%s\n\n[When you have the answer, send it with the agent_reply tool, request_id %s; attach files instead of pasting them. It is delivered to %s automatically.]", id, sender, text, attachmentNotes(id, m.Attachments, false), changes, id, sender))
+	delivered := m.Delivered
+	s.store(sp, &m)
 	if err = s.save(); err != nil {
 		return "", err
 	}
@@ -261,11 +273,15 @@ func (s *Store) send(from *Env, fromAgent, to, text string) (string, error) {
 	if !delivered {
 		state = "queued: that agent could not be started, it receives the message when the user starts it"
 	}
-	return fmt.Sprintf("Message #%s to %s: %s.%s\nThe reply will arrive in this conversation automatically as a new message. Do not wait, poll or check for it: finish your turn now.", id, recipient, state, s.unreachable(sp, target, text)), nil
+	return fmt.Sprintf("Message #%s to %s: %s%s.%s\nThe reply arrives in this conversation on its own as a new message. Do not wait or poll, and do not repeat the message in your output: end your turn now.", id, recipient, state, attached(m.Attachments), s.unreachable(sp, target, text)), nil
 }
 
 // reply returns the answer to whoever sent the message.
 func (s *Store) reply(from *Env, fromAgent, id, text string) (string, error) {
+	return s.replyWith(from, fromAgent, id, text, outgoing{})
+}
+
+func (s *Store) replyWith(from *Env, fromAgent, id, text string, out outgoing) (string, error) {
 	id = strings.TrimPrefix(strings.TrimSpace(id), "#")
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -283,12 +299,16 @@ func (s *Store) reply(from *Env, fromAgent, id, text string) (string, error) {
 	if r.FromEnv == operatorEnv {
 		// The user's own assistant has no console: it collects its replies.
 		sender := address(from, fromAgent)
-		sp.Operator = append(sp.Operator, operatorNote{id, sender, time.Now().Format("15:04:05"), text})
-		s.record(sp, "reply", id, sender, "user/"+r.FromAgent, text, true)
+		m := message{Kind: "reply", ID: id, From: sender, To: "user/" + r.FromAgent, FromEnv: from.ID, ToEnv: operatorEnv, Delivered: true, Text: text, Attachments: out.attachments}
+		changes, changed := changeNotes(sender, out, nil)
+		m.Changed = changed
+		s.number(sp, &m)
+		s.store(sp, &m)
+		sp.Operator = append(sp.Operator, operatorNote{id, sender, time.Now().Format("15:04:05"), text + attachmentNotes(id, m.Attachments, true) + changes})
 		if err := s.save(); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Reply to #%s delivered to the user's assistant.", id), nil
+		return fmt.Sprintf("Reply to #%s delivered to the user's assistant%s. Do not repeat it in your output: end your turn.", id, attached(m.Attachments)), nil
 	}
 	asker := sp.envByID(r.FromEnv)
 	if asker == nil {
@@ -299,8 +319,13 @@ func (s *Store) reply(from *Env, fromAgent, id, text string) (string, error) {
 	// The thread stays open the other way round, so a reply can be answered.
 	sp.Requests[id] = request{r.ToEnv, r.ToAgent, r.FromEnv, r.FromAgent}
 	sender, recipient := address(from, fromAgent), address(asker, r.FromAgent)
-	delivered := s.deliver(asker, r.FromAgent, fmt.Sprintf("[FarshMac reply to #%s from %s]\n%s\n\n[To continue this thread use agent_reply with request_id %s. Do not reply only to thank or acknowledge.]", id, sender, text, id))
-	s.record(sp, "reply", id, sender, recipient, text, delivered)
+	m := message{Kind: "reply", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: asker.ID, Text: text, Attachments: out.attachments}
+	changes, changed := changeNotes(sender, out, asker)
+	m.Changed = changed
+	s.number(sp, &m)
+	m.Delivered = s.deliver(asker, r.FromAgent, fmt.Sprintf("[FarshMac reply to #%s from %s]\n%s%s%s\n\n[To continue this thread use agent_reply with request_id %s. Do not reply only to thank or acknowledge.]", id, sender, text, attachmentNotes(id, m.Attachments, false), changes, id))
+	delivered := m.Delivered
+	s.store(sp, &m)
 	if err := s.save(); err != nil {
 		return "", err
 	}
@@ -308,7 +333,19 @@ func (s *Store) reply(from *Env, fromAgent, id, text string) (string, error) {
 	if !delivered {
 		state = "queued: " + recipient + " could not be started and receives it when the user starts it"
 	}
-	return fmt.Sprintf("Reply to #%s %s.%s", id, state, s.unreachable(sp, asker, text)), nil
+	return fmt.Sprintf("Reply to #%s %s%s.%s Do not repeat it in your output: end your turn.", id, state, attached(m.Attachments), s.unreachable(sp, asker, text)), nil
+}
+
+// attached confirms to the sender what went with its message.
+func attached(list []attachment) string {
+	if len(list) == 0 {
+		return ""
+	}
+	size := 0
+	for _, a := range list {
+		size += a.Bytes
+	}
+	return fmt.Sprintf(", with %d attachment(s), %s", len(list), short(int64(size)))
 }
 
 var refPattern = regexp.MustCompile(`@([0-9a-f]{6})\b`)

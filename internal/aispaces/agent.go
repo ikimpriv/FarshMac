@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -281,33 +282,99 @@ func agentEnviron(env []string) []string {
 
 const agentNotes = `# FarshMac AI Env: %s
 
-You are an agent of the AI Env "%s" in the AI Space "%s".
+You are an agent of the AI Env "%s" in the AI Space "%s". Your address is %s.
 
 - The project is NOT in this working directory. It lives in a virtual
   filesystem rooted at / and is reachable only through the "farshmac" MCP
-  server (tools vfs_list, vfs_read, vfs_write, vfs_edit, vfs_search, ...).
-- Use those tools for every project read and write. Start with vfs_list on /.
+  server. Use its tools for every project read and write.
+- Read narrowly: everything you read stays in your context and is paid for
+  again on every later step. vfs_list with depth shows a tree, vfs_outline
+  shows the structure of a document, a source file or a whole folder; then
+  read the part you need with vfs_read and section (or offset and limit).
+  Read a whole file only when you need all of it. A file you already read is
+  not sent again unless it changed.
 - Referenced project folders are live: what you write there is saved to the
   real folder immediately, unless the folder is attached read-only. Paths
   outside them are private to this Env.
-- Virtual paths differ between Envs. When you mention a shared file to
-  another agent, use its reference (@id/path, shown by vfs_stat and
-  vfs_list); every vfs tool accepts a reference wherever it takes a path.
-- Your address is %s. Other agents of the Space are reached through the
-  same MCP server: agent_peers shows whom you may contact, agent_send sends a
+- Other agents: agent_peers shows whom you may contact, agent_send sends a
   request, agent_reply answers one. A message from another agent arrives as
-  a prompt that starts with [FarshMac message #N from ...]; answer it with
-  agent_reply. Replies to your own requests arrive the same way, on their
-  own: never wait, sleep or poll for them, just end your turn.
-
-# Your instructions
-
-%s
+  a prompt that starts with [FarshMac message #N from ...]. Replies to your
+  own requests arrive the same way, on their own: never wait, sleep or poll
+  for them, just end your turn.
+- Keep messages short and never paste file contents into them. Put long text
+  into a file and attach it, or attach the section the recipient needs. In
+  the message text name shared files by reference (@id/path, shown by
+  vfs_stat and vfs_list), because virtual paths differ between Envs.
+- After you send a message or a reply, do not repeat or summarize it in your
+  own output: finish the turn with one short line.
 - This working directory is your scratch space, and the only place on disk
   you can write. You cannot read the user's home folder or the real project
   folders: do not try, it fails. To build, run or test project code, call
   workspace_pull, work on the copy here, then workspace_push.
+
+# Your instructions
+
+%s
 `
+
+// DefaultTools are the built-in tools a Claude Code agent of an Env gets
+// unless the user chooses otherwise. Every tool the CLI offers is described
+// to the model on each step; an Env agent works through the MCP server and
+// its scratch folder, and has no use for the rest.
+const DefaultTools = "Bash,Read,Edit,Write,AskUserQuestion,TodoWrite"
+
+// EventFlag makes the executable tell the Env server what happened to the
+// agent's conversation. The agent CLI's hooks run it.
+const EventFlag = "--ai-mcp-event"
+
+func EventMain(event string) int {
+	conn, err := net.Dial("unix", os.Getenv(socketEnv))
+	if err != nil {
+		return 0 // FarshMac is gone; nothing to tell
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "%s\n{\"jsonrpc\":\"2.0\",\"method\":\"farshmac/%s\"}\n", os.Getenv(tokenEnv), event)
+	return 0
+}
+
+// claudeArgs binds a Claude Code process to its Env: the MCP server and
+// nothing else, its tools loaded at once rather than searched for, and hooks
+// that report a compacted or cleared conversation.
+func claudeArgs(agent *Agent, self, dir string, gatewayEnv map[string]string) ([]string, []string, error) {
+	config, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"farshmac": map[string]any{
+		"command": self, "args": []string{GatewayFlag}, "env": gatewayEnv, "alwaysLoad": true}}})
+	mcpFile := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(mcpFile, config, 0600); err != nil {
+		return nil, nil, err
+	}
+	forget := map[string]any{"type": "command", "command": "'" + strings.ReplaceAll(self, "'", `'\''`) + "' " + EventFlag + " forget"}
+	settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{
+			map[string]any{"matcher": "compact", "hooks": []any{forget}},
+			map[string]any{"matcher": "clear", "hooks": []any{forget}},
+		},
+		"PostCompact": []any{map[string]any{"hooks": []any{forget}}},
+	}})
+	settingsFile := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settingsFile, settings, 0600); err != nil {
+		return nil, nil, err
+	}
+	args := []string{"--mcp-config", mcpFile, "--strict-mcp-config", "--allowedTools", "mcp__farshmac", "--settings", settingsFile}
+	switch agent.Tools {
+	case "":
+		args = append(args, "--tools", DefaultTools)
+	case "default":
+	default:
+		args = append(args, "--tools", agent.Tools)
+	}
+	if agent.Model != "" {
+		args = append(args, "--model", agent.Model)
+	}
+	if agent.Effort != "" {
+		args = append(args, "--effort", agent.Effort)
+	}
+	return args, []string{mcpFile, settingsFile}, nil
+}
 
 // Launch starts an agent in its scratch folder with the Env's MCP server
 // configured. A known native session is resumed instead of starting anew.
@@ -371,15 +438,13 @@ func (s *Store) launch(sp *Space, e *Env, name string, cols, rows int) (*Process
 	}
 	token := server.register(e, name, agent.SessionID)
 	gatewayEnv := map[string]string{socketEnv: server.socket, tokenEnv: token}
-	var args []string
+	var args, files []string
 	switch name {
 	case "claude":
-		config, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"farshmac": map[string]any{"command": self, "args": []string{GatewayFlag}, "env": gatewayEnv}}})
-		file := filepath.Join(dir, "mcp.json")
-		if err = os.WriteFile(file, config, 0600); err != nil {
+		if args, files, err = claudeArgs(agent, self, dir, gatewayEnv); err != nil {
+			server.revoke(token)
 			return nil, err
 		}
-		args = []string{"--mcp-config", file, "--strict-mcp-config", "--allowedTools", "mcp__farshmac"}
 		if resume {
 			args = append(args, "--resume", agent.SessionID)
 		} else {
@@ -402,8 +467,8 @@ func (s *Store) launch(sp *Space, e *Env, name string, cols, rows int) (*Process
 		server.revoke(token)
 		return nil, fmt.Errorf("agent isolation is unavailable (%s is missing); the agent was not started", sandboxExec)
 	}
-	// The MCP configuration sits beside the scratch folder, not inside it.
-	profile, err := sandboxProfile(scratch, self, filepath.Dir(realPath(agent.Path)), filepath.Join(dir, "mcp.json"))
+	// The MCP configuration and the hooks sit beside the scratch folder, not inside it.
+	profile, err := sandboxProfile(scratch, append([]string{self, filepath.Dir(realPath(agent.Path))}, files...)...)
 	if err != nil {
 		server.revoke(token)
 		return nil, err
@@ -412,7 +477,8 @@ func (s *Store) launch(sp *Space, e *Env, name string, cols, rows int) (*Process
 	os.MkdirAll(temp, 0700)
 	cmd := exec.Command(sandboxExec, append([]string{"-p", profile, agent.Path}, args...)...)
 	cmd.Dir = scratch
-	cmd.Env = append(agentEnviron(os.Environ()), "TERM=xterm-256color", "COLORTERM=truecolor", "TMPDIR="+temp)
+	// The hooks of the CLI reach the Env server with the same token as its MCP gateway.
+	cmd.Env = append(agentEnviron(os.Environ()), "TERM=xterm-256color", "COLORTERM=truecolor", "TMPDIR="+temp, socketEnv+"="+server.socket, tokenEnv+"="+token)
 	file, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(max(cols, 20)), Rows: uint16(max(rows, 5))})
 	if err != nil {
 		server.revoke(token)

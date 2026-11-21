@@ -25,6 +25,38 @@ type Agent struct {
 	SessionID string   // adapter-native session reference used to resume
 	Started   bool     // launched at least once
 	Inbox     []string `json:",omitempty"` // messages waiting for the next start
+	// Optional launch settings; empty means the CLI's own default.
+	Model  string `json:",omitempty"`
+	Effort string `json:",omitempty"`
+	Tools  string `json:",omitempty"` // built-in tools the CLI offers: a list, "default" for all, "" for FarshMac's choice
+}
+
+// Settings returns the launch settings of an agent.
+func (s *Store) Settings(space, env, agent string) (model, effort, tools string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, e, err := s.find(space, env); err == nil && e != nil {
+		if a := e.agent(agent); a != nil {
+			return a.Model, a.Effort, a.Tools
+		}
+	}
+	return "", "", ""
+}
+
+// SetSettings changes the launch settings; they apply at the next start.
+func (s *Store) SetSettings(space, env, agent, model, effort, tools string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, e, err := s.find(space, env)
+	if err != nil {
+		return err
+	}
+	a := e.agent(agent)
+	if a == nil {
+		return fmt.Errorf("agent %s is not configured in this Env", agent)
+	}
+	a.Model, a.Effort, a.Tools = strings.TrimSpace(model), strings.TrimSpace(effort), strings.TrimSpace(tools)
+	return s.save()
 }
 
 // Binding makes a host file or folder visible at a virtual path. Nothing is

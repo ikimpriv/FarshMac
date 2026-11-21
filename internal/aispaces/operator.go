@@ -70,6 +70,7 @@ const operatorInstructions = "This server lets you work, on the user's behalf, w
 	"spaces_list shows them and their state. agent_status shows what an agent is doing and what it said last. " +
 	"agent_send writes to an agent (a stopped agent is started); agent_wait blocks until it answers or stops working, so do not poll agent_status in a loop. " +
 	"Agents answer you with their own reply tool; anything else they print is visible only through agent_status. " +
+	"A reply may list attachments and changed files instead of quoting them: read an attachment with message_read, or open the named file yourself if you have disk access. Do not ask an agent to paste a file. " +
 	"Respect the roles: ask the agent whose job it is instead of doing its work yourself."
 
 const agentHelp = "Env/agent, or just the Env (role) name when it has one agent, or an agent name that is unique in the Space"
@@ -88,6 +89,13 @@ var operatorTools = []tool{
 		prop{"agent", "string", agentHelp},
 		prop{"message", "string", "Self-contained: the agent does not see your conversation"},
 		prop{"wait", "integer", "Seconds to wait for the answer in this same call, 0 to 600. Default 0: return at once"})},
+	{"message_read", "Read an attachment of an agent's reply, or a whole message thread of the Space. Agents attach files instead of pasting them: read the part you need here.", object([]string{"id"},
+		prop{"space", "string", spaceHelp},
+		prop{"id", "string", "Message number N from a reply header"},
+		prop{"attachment", "integer", "Attachment number from the reply. Omit to read the thread itself"},
+		prop{"section", "string", "Return only this section (a heading) of the attachment"},
+		prop{"offset", "integer", "First line to return. Default 1"},
+		prop{"limit", "integer", "Number of lines to return. Default: all"})},
 	{"agent_wait", "Block until the agent replies to you or stops working, then return its replies and what it said last. Returns 'still working' after the timeout: call it again.", object([]string{"agent"},
 		prop{"space", "string", spaceHelp},
 		prop{"agent", "string", agentHelp},
@@ -240,6 +248,15 @@ func (s *Store) operatorCall(client, name string, a map[string]string) (string, 
 	if name == "spaces_list" {
 		return s.overview(a["space"])
 	}
+	if name == "message_read" {
+		s.mu.Lock()
+		sp, err := s.operatorSpace(a["space"])
+		s.mu.Unlock()
+		if err != nil {
+			return "", err
+		}
+		return s.readThread(sp, nil, a)
+	}
 	s.mu.Lock()
 	sp, err := s.operatorSpace(a["space"])
 	var e *Env
@@ -383,8 +400,8 @@ func (s *Store) operatorSend(sp *Space, e *Env, agent, client, text string) (str
 	}
 	sp.Requests[id] = request{operatorEnv, client, e.ID, agent}
 	recipient := address(e, agent)
-	delivered := s.deliver(e, agent, fmt.Sprintf("[FarshMac message #%s from the user, sent through %s]\n%s\n\n[When you have finished what it asks, report with the agent_reply tool, request_id %s: only that reaches the user. You may reply more than once, for example with a question.]", id, client, text, id))
-	s.record(sp, "message", id, "user/"+client, recipient, text, delivered)
+	delivered := s.deliver(e, agent, fmt.Sprintf("[FarshMac message #%s from the user, sent through %s]\n%s\n\n[When you have finished what it asks, report with the agent_reply tool, request_id %s: only that reaches the user. Attach files instead of pasting their text. You may reply more than once, for example with a question.]", id, client, text, id))
+	s.store(sp, &message{Kind: "message", ID: id, From: "user/" + client, To: recipient, FromEnv: operatorEnv, ToEnv: e.ID, Delivered: delivered, Text: text})
 	if err := s.save(); err != nil {
 		return "", err
 	}

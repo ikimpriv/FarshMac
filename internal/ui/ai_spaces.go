@@ -628,12 +628,25 @@ func (a *App) aiContextItems(p *Panel) []menuItem {
 		}
 		a.showText("MCP debug log of "+env+" · "+file, string(data))
 	}}
+	// Where the agents of the Space spent their tokens, from their own transcripts.
+	usage := menuItem{"Efficiency report", "", func() {
+		a.showText("Efficiency of "+space, store.UsageReport(space))
+	}}
 	if level == 1 {
-		return []menuItem{addAgents, communication, messages, mcpLog, host}
+		return []menuItem{addAgents, communication, messages, mcpLog, usage, host}
 	}
-	items := []menuItem{addAgents, communication, messages, mcpLog, host}
+	items := []menuItem{addAgents, communication, messages, mcpLog, usage, host}
 	if len(p.Entries) > 0 && p.aiAgent(p.Entries[p.Cursor].Name) {
 		name := p.Entries[p.Cursor].Name
+		items = append(items, menuItem{"Agent settings…", "", func() {
+			model, effort, tools := store.Settings(space, env, name)
+			a.form("Settings of "+env+"/"+name, []Field{{Label: "Model", Value: model}, {Label: "Effort", Value: effort}, {Label: "Built-in tools", Value: tools}}, func(f []Field) {
+				a.error(store.SetSettings(space, env, name, f[0].Value, f[1].Value, f[2].Value))
+				a.Status = "Settings of " + name + " apply the next time it is started"
+			})
+			a.Form.Message = "Leave a field empty for the default. Model and effort are passed to the agent CLI as they are (for example sonnet, low). " +
+				"Built-in tools are the CLI's own tools the agent is offered besides the Env tools: empty means " + aispaces.DefaultTools + "; write default for all of them, or your own list. Every tool offered is paid for on each step."
+		}})
 		if process := store.Running(space, env, name); process != nil {
 			items = append(items, menuItem{"Stop agent " + name, "", func() { process.Close(); a.Status = name + " stopped; Enter resumes its session" }})
 		}
