@@ -292,14 +292,14 @@ func TestEfficiencyScenarios(t *testing.T) {
 
 // What every agent pays on every step, whether it uses it or not.
 func TestToolSurfaceBudget(t *testing.T) {
-	schema, _ := json.Marshal(tools)
+	schema, _ := json.Marshal(compactTools)
 	operator, _ := json.Marshal(operatorTools)
 	for _, item := range []struct {
 		name   string
 		size   int
 		budget int
 	}{
-		{"Env tool definitions", len(schema), 11000},
+		{"Env tool definitions", len(schema), 2000},
 		{"Env server instructions", len(serverInstructions), 1700},
 		{"agent notes", len(agentNotes), 2300},
 		{"operator tool definitions", len(operator), 4200},
@@ -360,7 +360,7 @@ func TestUsageIsReadFromATranscript(t *testing.T) {
 	s.CreateEnv("Space", "Architect", []Agent{{Name: "claude", Path: "/bin/true", SessionID: "session-1"}})
 	s.CreateEnv("Space", "Coder", []Agent{{Name: "claude", Path: "/bin/true"}})
 	report := s.UsageReport("Space")
-	for _, want := range []string{"Architect/claude", "4 steps", "compacted 1 time(s)", "file text read again in the same context", "tool errors 1", "Coder/claude\n  no transcript", "Space total:"} {
+	for _, want := range []string{"Architect/claude", "4 steps", "compacted 1 time(s)", "file text read again in the same context", "tool errors 1", "Coder/claude\n  no transcript", "Claude total:"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report lacks %q:\n%s", want, report)
 		}
@@ -496,7 +496,7 @@ func TestClaudeReportsCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	defer stop(p)
 	defer os.Remove(s.mcp.socket)
 	var screen strings.Builder
 	var mu sync.Mutex

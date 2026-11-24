@@ -56,10 +56,22 @@ var tools = func() []tool {
 		prop{"to", "string", "Address from agent_peers: Env/agent, or just Env when it has one agent"},
 		prop{"message", "string", "Self-contained but short: the recipient does not see your conversation. Never paste file contents: attach them"})
 	send["properties"].(map[string]any)["attach"] = stringList(attachHelp)
+	send["properties"].(map[string]any)["artifacts"] = stringList("Immutable artifact IDs to share; recipient gets only these versions")
+	send["properties"].(map[string]any)["complexity"] = map[string]any{"type": "string", "enum": Levels,
+		"description": "Requires directing rights. Configured task profile: simple (mechanical), moderate, complex (design/deep analysis). Omit to keep settings. agent_peers shows choices"}
+	send["properties"].(map[string]any)["model"] = map[string]any{"type": "string",
+		"description": "Only for an agent you direct: the model it uses from this message on. agent_peers lists the names its CLI takes. Overrides complexity. Omit to leave it"}
+	send["properties"].(map[string]any)["effort"] = map[string]any{"type": "string",
+		"description": "Only for an agent you direct: its reasoning effort from this message on, for example low, medium, high (agent_peers lists what its CLI takes). Overrides complexity. Omit to leave it"}
+	send["properties"].(map[string]any)["method"] = map[string]any{"type": "string", "enum": Methods,
+		"description": "Requires directing rights. direct is cheapest; workflow delegates and verifies; research uses a web research workflow. Check agent_peers for support"}
+	send["properties"].(map[string]any)["new_task"] = map[string]any{"type": "boolean",
+		"description": "Only for an agent you direct. true when the task does not need the recipient's earlier conversation: its context is cleared first, which makes every step of the task cheaper. The message must then be self-contained. Default false"}
 	reply := object([]string{"request_id", "message"},
 		prop{"request_id", "string", "Number N from the header [FarshMac message #N ...] or [FarshMac reply to #N ...]"},
 		prop{"message", "string", "Your answer, short. Never paste file contents: attach them"})
 	reply["properties"].(map[string]any)["attach"] = stringList(attachHelp)
+	reply["properties"].(map[string]any)["artifacts"] = stringList("Immutable artifact IDs to share with this reply")
 	return []tool{
 		{"vfs_list", "List a folder as a tree. Set depth to see a subtree in one call; large folders are shown as a count, list them separately. A reference root shows its @id and whether it is read-only.", object([]string{"path"},
 			prop{"path", "string", "Folder, for example /. " + pathHelp},
@@ -86,6 +98,7 @@ var tools = func() []tool {
 			prop{"names_only", "boolean", "Match file and folder names only, not contents. Default false"})},
 		{"vfs_copy", "Copy a file or a folder inside this Env. The server copies the bytes: use it instead of reading a file and writing it again.", object([]string{"from", "to"}, prop{"from", "string", "Existing file or folder. " + pathHelp}, prop{"to", "string", "New path. " + pathHelp})},
 		{"workspace_pull", "Copy a project folder into your scratch folder so that your own tools can edit, build and test it. Returns the local path. You have no other access to project files on disk.", object([]string{"path"}, prop{"path", "string", "Project folder or file. " + pathHelp})},
+		{"workspace_run", "Run build/tests in a pulled folder, inside FarshMac isolation. Bounded output; full log in scratch (16 MiB cap, last 10 retained). Stops on timeout or agent stop.", object([]string{"path", "command"}, prop{"path", "string", pathHelp}, prop{"command", "string", "Shell command"}, prop{"seconds", "integer", "Timeout: 1–300; default 60"})},
 		{"workspace_push", "Copy your scratch copy of a project folder back into the project. The server copies the files, so never retype them with vfs_write. Refuses files that changed in the project since you pulled them.", object([]string{"path"}, prop{"path", "string", "The same path you gave to workspace_pull"})},
 		{"vfs_mkdir", "Create a folder.", object([]string{"path"}, prop{"path", "string", pathHelp})},
 		{"vfs_remove", "Remove a file or folder from this Env. In a referenced project folder the entry is only hidden from this Env; the real file is not deleted.", object([]string{"path"}, prop{"path", "string", pathHelp})},
@@ -102,11 +115,11 @@ var tools = func() []tool {
 	}
 }()
 
-const serverInstructions = "This server is the project filesystem of a FarshMac AI Env. " +
+const serverInstructions = "This server is the project filesystem of a FarshMac AI Env. Start with env_info; request only needed schemas. Use env_read for batched reads and env_call for operations. " +
 	"All project files live in a virtual filesystem rooted at /; use the vfs_* tools for every project read and write. " +
 	"Your working directory is private scratch space and does not contain the project. " +
 	"Every byte you read or type is paid for again on each later step, so read narrowly: vfs_list with depth for a tree, vfs_outline for the structure of documents and code, then vfs_read with section (or offset and limit) for the part you need; vfs_search to locate text. " +
-	"Change files with vfs_edit, passing all replacements at once. To build, run or test code, call workspace_pull, work on the copy in your scratch folder with your own tools, then workspace_push; never type the same text twice. " +
+	"Change files with vfs_edit, passing all replacements at once. To build, run or test code, call workspace_pull, edit the scratch copy, use workspace_run for builds/tests, then workspace_push; never type the same text twice. " +
 	"Other agents of the Space are reached with agent_send and answered with agent_reply; their replies arrive on their own, so never wait or poll. " +
 	"Keep messages short and never paste file contents into them: attach files or sections. After sending a message or a reply, do not repeat or summarize it in your own output; end the turn with one short line. " +
 	"Virtual paths differ between Envs: quote shared files to other agents by reference (@id/path from vfs_stat or vfs_list). " +
@@ -121,6 +134,21 @@ func number(a map[string]string, key string, fallback, low, high int) int {
 }
 
 func call(s *Store, session *mcpSession, fs *FS, name string, a map[string]string, raw map[string]any) (string, error) {
+	if strings.HasPrefix(name, "env_") {
+		return workflowCall(s, session, fs, name, raw)
+	}
+	if name == "workflow_status" {
+		return workflowStatus(s, session)
+	}
+	if strings.HasPrefix(name, "artifact_") {
+		return artifactCall(s, session, fs, name, raw)
+	}
+	if name == "runtime_check" {
+		return runtimeCheck(sessionContext(session), a["browser"] == "true")
+	}
+	if name == "browser_check" {
+		return browserCheck(s, session, fs, raw)
+	}
 	// A reference names the same real file in every Env; map it to this Env's path.
 	local := func(p string) (string, error) {
 		if strings.HasPrefix(p, "@") {
@@ -146,7 +174,11 @@ func call(s *Store, session *mcpSession, fs *FS, name string, a map[string]strin
 			return "", err
 		}
 		out := outgoing{attachments: attached, talk: &session.conversation}
+		if err := decodeArgs(raw["artifacts"], &out.artifacts); err != nil {
+			return "", err
+		}
 		if name == "agent_send" {
+			out.direct = directive{level: strings.TrimSpace(a["complexity"]), model: strings.TrimSpace(a["model"]), effort: strings.TrimSpace(a["effort"]), fresh: a["new_task"] == "true", method: strings.TrimSpace(a["method"])}
 			return s.sendWith(session.env, session.agent, a["to"], a["message"], out)
 		}
 		return s.replyWith(session.env, session.agent, a["request_id"], a["message"], out)
@@ -201,6 +233,8 @@ func call(s *Store, session *mcpSession, fs *FS, name string, a map[string]strin
 		return "copied to " + saved(fs, a["to"], int(info.Size())), nil
 	case "workspace_pull":
 		return workspacePull(s, session, fs, a["path"])
+	case "workspace_run":
+		return workspaceRun(s, session, a["path"], a["command"], number(a, "seconds", 60, 1, 300))
 	case "workspace_push":
 		return workspacePush(s, session, fs, a["path"])
 	case "vfs_edit":

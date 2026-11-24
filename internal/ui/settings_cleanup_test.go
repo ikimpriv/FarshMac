@@ -46,7 +46,7 @@ func TestCleanMenuOrderAndSeparators(t *testing.T) {
 			got = append(got, item.Label)
 		}
 	}
-	want := []string{"General settings…", "Panel settings…", "Terminal settings…", "Viewer settings…", "Editor settings…", "Advanced…", "Full Disk Access…", "Save setup", "Keyboard reference"}
+	want := []string{"General settings…", "Panel settings…", "Terminal settings…", "AI Spaces…", "Viewer settings…", "Editor settings…", "Advanced…", "Full Disk Access…", "Save setup", "Keyboard reference"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal(got)
 	}

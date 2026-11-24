@@ -1,10 +1,8 @@
 // Package aispaces is the proof of concept for docs/AI_SPACES_ARCHITECTURE_DRAFT.md:
-// a catalog of Spaces and Envs, a copy-on-write overlay over referenced host
-// folders, an Env-scoped MCP server and console agent launching.
-//
-// PoC limits: agents run as ordinary host processes (the draft's
-// "integration-only" profile, not isolated), the catalog is a JSON file, and
-// symbolic links inside sources are not contained.
+// a catalog of Spaces and Envs, live references with per-Env hidden entries,
+// an Env-scoped MCP server and sandboxed console-agent launching on macOS.
+// Immutable artifacts and server-recorded checks support bounded peer review.
+// The catalog remains a local JSON file; this is not a multi-host scheduler.
 package aispaces
 
 import (
@@ -29,38 +27,18 @@ type Agent struct {
 	Model  string `json:",omitempty"`
 	Effort string `json:",omitempty"`
 	Tools  string `json:",omitempty"` // built-in tools the CLI offers: a list, "default" for all, "" for FarshMac's choice
+	// Task levels: the user's own meaning of each, the one chosen last by a
+	// directing agent, and whether the next start begins a new conversation.
+	Levels map[string]Profile `json:",omitempty"`
+	Level  string             `json:",omitempty"`
+	Fresh  bool               `json:",omitempty"`
+	// Chosen is a model or effort a directing agent named itself; it stands
+	// until that agent names a level or another value.
+	Chosen Profile `json:",omitzero"`
+	// Disabled: kept in the Env but out of use: not addressed, not started.
+	Disabled bool `json:",omitempty"`
 }
 
-// Settings returns the launch settings of an agent.
-func (s *Store) Settings(space, env, agent string) (model, effort, tools string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, e, err := s.find(space, env); err == nil && e != nil {
-		if a := e.agent(agent); a != nil {
-			return a.Model, a.Effort, a.Tools
-		}
-	}
-	return "", "", ""
-}
-
-// SetSettings changes the launch settings; they apply at the next start.
-func (s *Store) SetSettings(space, env, agent, model, effort, tools string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, e, err := s.find(space, env)
-	if err != nil {
-		return err
-	}
-	a := e.agent(agent)
-	if a == nil {
-		return fmt.Errorf("agent %s is not configured in this Env", agent)
-	}
-	a.Model, a.Effort, a.Tools = strings.TrimSpace(model), strings.TrimSpace(effort), strings.TrimSpace(tools)
-	return s.save()
-}
-
-// Binding makes a host file or folder visible at a virtual path. Nothing is
-// copied: the Env reads and writes the real path.
 type Binding struct {
 	ID              string // same for one real path in every Env of the Space
 	Virtual, Source string
@@ -69,10 +47,12 @@ type Binding struct {
 
 type Env struct {
 	ID, Name string
+	Role     string `json:",omitempty"`
 	Agents   []Agent
 	Bindings []Binding
 	Hidden   []string `json:",omitempty"` // paths inside references removed from this Env only
 	Peers    []string `json:",omitempty"` // IDs of the Envs this Env's agents may contact
+	Directs  []string `json:",omitempty"` // Envs whose agents these may direct: task level and context
 }
 
 type Space struct {
@@ -415,7 +395,24 @@ func (s *Store) AddAgents(space, env string, agents []Agent) error {
 	if err != nil {
 		return err
 	}
+	prefs, err := s.preferences()
+	if err != nil {
+		return err
+	}
 	for _, a := range agents {
+		defaults := prefs.Agents[a.Name]
+		if a.Model == "" {
+			a.Model = defaults.Model
+		}
+		if a.Effort == "" {
+			a.Effort = defaults.Effort
+		}
+		if a.Tools == "" {
+			a.Tools = defaults.Tools
+		}
+		if a.Levels == nil {
+			a.Levels = defaults.Levels
+		}
 		known := false
 		for _, old := range e.Agents {
 			known = known || old.Name == a.Name

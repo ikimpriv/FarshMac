@@ -73,13 +73,14 @@ const operatorInstructions = "This server lets you work, on the user's behalf, w
 	"A reply may list attachments and changed files instead of quoting them: read an attachment with message_read, or open the named file yourself if you have disk access. Do not ask an agent to paste a file. " +
 	"Respect the roles: ask the agent whose job it is instead of doing its work yourself."
 
-const agentHelp = "Env/agent, or just the Env (role) name when it has one agent, or an agent name that is unique in the Space"
-const spaceHelp = "AI Space name. May be omitted when there is only one Space"
+const agentHelp = "Env/agent, single-agent Env, or unique agent name"
+const spaceHelp = "Space name; optional if only one exists"
 
 var operatorTools = []tool{
+	{"artifact_read", "Read a delivered artifact: summary, file or run.", object([]string{"id"}, prop{"space", "string", spaceHelp}, prop{"id", "string", "Artifact ID"}, prop{"file", "string", "Relative file path"}, prop{"run", "string", "Recorded run ID for details"}, prop{"part", "string", "With run: command or output for paged detail; omit for compact result"}, prop{"offset", "integer", "First file line or run-part byte, default 1"}, prop{"limit", "integer", "Up to 300 file lines or 8192 run-part bytes"})},
 	{"spaces_list", "List AI Spaces with their Envs, agents, agent states, attached folders and who may contact whom.", object(nil,
 		prop{"space", "string", "Only this AI Space. Default: all"})},
-	{"agent_status", "Look at one agent: whether it is working, idle or not running, its unread replies to you, and the recent part of its conversation (prompts, answers, tool calls).", object([]string{"agent"},
+	{"agent_status", "Agent state, unread replies and bounded recent conversation.", object([]string{"agent"},
 		prop{"space", "string", spaceHelp},
 		prop{"agent", "string", agentHelp},
 		prop{"chars", "integer", "How much of the recent conversation to return, 500 to 20000 characters. Default 3000"},
@@ -88,15 +89,20 @@ var operatorTools = []tool{
 		prop{"space", "string", spaceHelp},
 		prop{"agent", "string", agentHelp},
 		prop{"message", "string", "Self-contained: the agent does not see your conversation"},
-		prop{"wait", "integer", "Seconds to wait for the answer in this same call, 0 to 600. Default 0: return at once"})},
-	{"message_read", "Read an attachment of an agent's reply, or a whole message thread of the Space. Agents attach files instead of pasting them: read the part you need here.", object([]string{"id"},
+		prop{"wait", "integer", "Seconds to wait for the answer in this same call, 0 to 600. Default 0: return at once"},
+		prop{"complexity", "string", "How hard the task is: simple, moderate or complex. The agent's model and effort are set to match. Omit to leave them as they are"},
+		prop{"model", "string", "Model from the CLI catalog or user profiles (agent_status lists choices). Overrides complexity"},
+		prop{"effort", "string", "Its effort from this message on: low, medium, high (Claude also xhigh, max). Overrides complexity"},
+		prop{"method", "string", "direct (default), workflow (delegation and review; much higher cost), research (cited web research)"},
+		prop{"new_task", "boolean", "Clear context for an independent task only; default false."})},
+	{"message_read", "Read a message thread or a bounded section of an attachment.", object([]string{"id"},
 		prop{"space", "string", spaceHelp},
 		prop{"id", "string", "Message number N from a reply header"},
 		prop{"attachment", "integer", "Attachment number from the reply. Omit to read the thread itself"},
 		prop{"section", "string", "Return only this section (a heading) of the attachment"},
 		prop{"offset", "integer", "First line to return. Default 1"},
 		prop{"limit", "integer", "Number of lines to return. Default: all"})},
-	{"agent_wait", "Block until the agent replies to you or stops working, then return its replies and what it said last. Returns 'still working' after the timeout: call it again.", object([]string{"agent"},
+	{"agent_wait", "Wait for a reply or idle state; returns replies and recent output.", object([]string{"agent"},
 		prop{"space", "string", spaceHelp},
 		prop{"agent", "string", agentHelp},
 		prop{"seconds", "integer", "Longest time to wait, 1 to 600. Default 45. Keep it below your own tool timeout"})},
@@ -248,6 +254,16 @@ func (s *Store) operatorCall(client, name string, a map[string]string) (string, 
 	if name == "spaces_list" {
 		return s.overview(a["space"])
 	}
+	if name == "artifact_read" {
+		s.mu.Lock()
+		sp, err := s.operatorSpace(a["space"])
+		s.mu.Unlock()
+		if err != nil {
+			return "", err
+		}
+		raw := map[string]any{"id": a["id"], "file": a["file"], "run": a["run"], "offset": number(a, "offset", 1, 1, 100000), "limit": number(a, "limit", 160, 1, 300)}
+		return readOperatorArtifact(s, sp, raw)
+	}
 	if name == "message_read" {
 		s.mu.Lock()
 		sp, err := s.operatorSpace(a["space"])
@@ -272,7 +288,7 @@ func (s *Store) operatorCall(client, name string, a map[string]string) (string, 
 	case "agent_status":
 		return s.status(sp, e, agent, number(a, "chars", 3000, 500, 20000), a["screen"] == "true"), nil
 	case "agent_send":
-		sent, err := s.operatorSend(sp, e, agent, client, a["message"])
+		sent, err := s.operatorSend(sp, e, agent, client, a["message"], directive{level: strings.TrimSpace(a["complexity"]), model: strings.TrimSpace(a["model"]), effort: strings.TrimSpace(a["effort"]), fresh: a["new_task"] == "true", method: strings.TrimSpace(a["method"])})
 		if err != nil {
 			return "", err
 		}
@@ -317,7 +333,7 @@ func operatorAgent(sp *Space, ref string) (*Env, string, error) {
 	}
 	var matches []string
 	for _, x := range sp.Envs {
-		if a := x.agent(strings.TrimSpace(ref)); a != nil {
+		if a := x.agent(strings.TrimSpace(ref)); a != nil && !a.Disabled {
 			e, agent = x, a.Name
 			matches = append(matches, address(x, a.Name))
 		}
@@ -373,6 +389,10 @@ func (s *Store) overview(space string) (string, error) {
 			}
 			fmt.Fprintf(&b, "  Env %s (its agents may contact: %s)\n", e.Name, strings.Join(peers, ", "))
 			for _, a := range e.Agents {
+				if a.Disabled {
+					fmt.Fprintf(&b, "    agent %s: disabled by the user\n", address(e, a.Name))
+					continue
+				}
 				fmt.Fprintf(&b, "    agent %s: %s\n", address(e, a.Name), s.state(e, a.Name))
 			}
 			for _, bind := range e.Bindings {
@@ -387,9 +407,12 @@ func (s *Store) overview(space string) (string, error) {
 	return b.String(), nil
 }
 
-func (s *Store) operatorSend(sp *Space, e *Env, agent, client, text string) (string, error) {
+func (s *Store) operatorSend(sp *Space, e *Env, agent, client, text string, d directive) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("the message is empty")
+	}
+	if err := d.check(); err != nil {
+		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -400,7 +423,14 @@ func (s *Store) operatorSend(sp *Space, e *Env, agent, client, text string) (str
 	}
 	sp.Requests[id] = request{operatorEnv, client, e.ID, agent}
 	recipient := address(e, agent)
-	delivered := s.deliver(e, agent, fmt.Sprintf("[FarshMac message #%s from the user, sent through %s]\n%s\n\n[When you have finished what it asks, report with the agent_reply tool, request_id %s: only that reaches the user. Attach files instead of pasting their text. You may reply more than once, for example with a question.]", id, client, text, id))
+	// The user's own agent speaks for the user: it may direct anyone.
+	allowed, prefix, note, wrap, err := s.directed(sp, nil, e, agent, id, d)
+	if err != nil {
+		delete(sp.Requests, id)
+		sp.NextMessage--
+		return "", err
+	}
+	delivered := s.direct(e, agent, wrap(fmt.Sprintf(prefix+"[FarshMac message #%s from the user, sent through %s]\n%s\n\n[When you have finished what it asks, report with the agent_reply tool, request_id %s: only that reaches the user. Attach files instead of pasting their text. You may reply more than once, for example with a question.]", id, client, text, id)), d, allowed)
 	s.store(sp, &message{Kind: "message", ID: id, From: "user/" + client, To: recipient, FromEnv: operatorEnv, ToEnv: e.ID, Delivered: delivered, Text: text})
 	if err := s.save(); err != nil {
 		return "", err
@@ -408,7 +438,7 @@ func (s *Store) operatorSend(sp *Space, e *Env, agent, client, text string) (str
 	if !delivered {
 		return fmt.Sprintf("Message #%s to %s is queued: the agent could not be started, it gets the message when the user starts it in FarshMac.", id, recipient), nil
 	}
-	return fmt.Sprintf("Message #%s delivered to %s.", id, recipient), nil
+	return fmt.Sprintf("Message #%s delivered to %s.%s", id, recipient, note), nil
 }
 
 // takeNotes returns and removes the replies of one agent to the operator. It
@@ -463,6 +493,13 @@ func (s *Store) stateOf(e *Env, agent string) string {
 }
 
 func (s *Store) recent(e *Env, agent string, chars int) string {
+	if agent == "codex" {
+		if file := latestCodexTranscript(filepath.Join(s.agentDir(e, agent), "scratch")); file != "" {
+			if text := codexConversation(file, chars); text != "" {
+				return text
+			}
+		}
+	}
 	s.mu.Lock()
 	session := ""
 	if a := e.agent(agent); a != nil {
@@ -479,6 +516,10 @@ func (s *Store) status(sp *Space, e *Env, agent string, chars int, screen bool) 
 	who := address(e, agent)
 	s.mu.Lock()
 	state := s.state(e, agent)
+	choices := ""
+	if agentConfig := e.agent(agent); agentConfig != nil {
+		choices = agentConfig.choices()
+	}
 	notes := s.takeNotes(sp, who)
 	p := s.running[e.ID+":"+agent]
 	var open []string
@@ -492,6 +533,16 @@ func (s *Store) status(sp *Space, e *Env, agent string, chars int, screen bool) 
 	s.mu.Unlock()
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s in AI Space %q: %s\n", who, sp.Name, state)
+	fmt.Fprintf(&b, "Settings: %s\n", choices)
+	if agent == "codex" {
+		file := latestCodexTranscript(filepath.Join(s.agentDir(e, agent), "scratch"))
+		model, effort := codexObserved(file)
+		if model != "" {
+			fmt.Fprintf(&b, "Last observed CLI turn: %s / %s (may precede a pending request)\n", model, effort)
+		} else {
+			b.WriteString("Observed model/effort: unavailable until the CLI records a turn\n")
+		}
+	}
 	if len(open) > 0 {
 		sort.Strings(open)
 		fmt.Fprintf(&b, "Threads with other agents where it is expected to answer: %s\n", strings.Join(open, ", "))

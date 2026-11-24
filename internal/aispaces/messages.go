@@ -84,10 +84,31 @@ func (s *Store) SetPeers(space, env string, names []string) error {
 	if err != nil {
 		return err
 	}
-	e.Peers = nil
+	// A link is two-way: both Envs may start a conversation with the other.
+	linked := map[string]bool{}
 	for _, name := range names {
 		if other := sp.env(name); other != nil && other != e {
+			linked[other.ID] = true
+		}
+	}
+	without := func(list []string, id string) []string {
+		kept := list[:0:0]
+		for _, x := range list {
+			if x != id {
+				kept = append(kept, x)
+			}
+		}
+		return kept
+	}
+	e.Peers = nil
+	for _, other := range sp.Envs {
+		if other == e {
+			continue
+		}
+		other.Peers = without(other.Peers, e.ID)
+		if linked[other.ID] {
 			e.Peers = append(e.Peers, other.ID)
+			other.Peers = append(other.Peers, e.ID)
 		}
 	}
 	return s.save()
@@ -99,6 +120,9 @@ func mayContact(sp *Space, from, to *Env) bool {
 		if id == to.ID {
 			return true
 		}
+	}
+	if mayDirect(from, to) {
+		return true
 	}
 	for _, r := range sp.Requests {
 		if r.FromEnv == to.ID && r.ToEnv == from.ID {
@@ -124,9 +148,15 @@ func (s *Store) peerList(e *Env, agent string) string {
 			continue
 		}
 		for _, a := range other.Agents {
+			if a.Disabled {
+				continue
+			}
 			state := "not running: it is started automatically when you message it"
 			if s.running[other.ID+":"+a.Name] != nil {
 				state = "running"
+			}
+			if mayDirect(e, other) {
+				state += "; you direct it: " + a.choices()
 			}
 			lines = append(lines, fmt.Sprintf("  %s  (%s)", address(other, a.Name), state))
 		}
@@ -136,6 +166,17 @@ func (s *Store) peerList(e *Env, agent string) string {
 	} else {
 		sort.Strings(lines)
 		b.WriteString("You may contact:\n" + strings.Join(lines, "\n") + "\n")
+	}
+	// An agent asked to choose a colleague's model or effort must learn here
+	// whether it can, and what to tell the user if it cannot.
+	directs := false
+	for _, other := range sp.Envs {
+		directs = directs || (other != e && mayDirect(e, other))
+	}
+	if directs {
+		b.WriteString("For an agent you direct, agent_send takes model and effort (or complexity, which sets both as the user defined), new_task to clear its context, and method for its way of working.\n")
+	} else if len(lines) > 0 {
+		b.WriteString("You direct nobody: you cannot set another agent's model, effort or context, and agent_send ignores model, effort, complexity, new_task and method from you. Only the user can allow it: in FarshMac, F11 on this Env → Communication… → direct.\n")
 	}
 	// Messages are kept, so an agent whose conversation was cleared can see
 	// what it still owes.
@@ -171,19 +212,29 @@ func resolve(sp *Space, to string) (*Env, string, error) {
 		return nil, "", fmt.Errorf("not_found: no Env %q in this Space; call agent_peers for valid addresses", parts[0])
 	}
 	if len(parts) == 2 {
-		if a := target.agent(strings.TrimSpace(parts[1])); a != nil {
+		if a := target.agent(strings.TrimSpace(parts[1])); a != nil && !a.Disabled {
 			return target, a.Name, nil
+		} else if a != nil {
+			return nil, "", fmt.Errorf("not_found: %s is disabled by the user; call agent_peers for the agents in use", address(target, a.Name))
 		}
 		return nil, "", fmt.Errorf("not_found: Env %s has no agent %q", target.Name, parts[1])
 	}
-	if len(target.Agents) != 1 {
-		var names []string
-		for _, a := range target.Agents {
-			names = append(names, address(target, a.Name))
+	var names []string
+	for _, a := range target.Agents {
+		if !a.Disabled {
+			names = append(names, a.Name)
 		}
-		return nil, "", fmt.Errorf("ambiguous: address one agent of %s: %s", target.Name, strings.Join(names, ", "))
 	}
-	return target, target.Agents[0].Name, nil
+	switch len(names) {
+	case 0:
+		return nil, "", fmt.Errorf("not_found: Env %s has no agent in use", target.Name)
+	case 1:
+		return target, names[0], nil
+	}
+	for i := range names {
+		names[i] = address(target, names[i])
+	}
+	return nil, "", fmt.Errorf("ambiguous: address one agent of %s: %s", target.Name, strings.Join(names, ", "))
 }
 
 // deliver types text into the agent's console. An agent that is not running
@@ -191,16 +242,32 @@ func resolve(sp *Space, to string) (*Env, string, error) {
 // shows everything it did. If it cannot be started the text waits for its
 // next start. It must be called with s.mu held.
 func (s *Store) deliver(e *Env, agent, text string) bool {
-	if p := s.running[e.ID+":"+agent]; p != nil {
-		p.expect(1)
-		go p.Deliver(text)
-		return true
-	}
+	return s.direct(e, agent, text, directive{}, false)
+}
+
+// direct delivers a message together with what its sender, allowed to direct
+// the recipient, asked for: a task level and a clean context. A running
+// agent gets them when it is free; a stopped one is started with them.
+func (s *Store) direct(e *Env, agent, text string, d directive, directed bool) bool {
 	a := e.agent(agent)
 	if a == nil {
 		return false
 	}
+	if directed && d.level != "" {
+		a.Level, a.Chosen = d.level, Profile{}
+	}
+	if directed && d.model != "" {
+		a.Chosen.Model = d.model
+	}
+	if directed && d.effort != "" {
+		a.Chosen.Effort = d.effort
+	}
+	if p := s.running[e.ID+":"+agent]; p != nil {
+		p.post(delivery{text: text, directed: directed, fresh: directed && d.fresh, profile: a.profile()})
+		return true
+	}
 	a.Inbox = append(a.Inbox, text)
+	a.Fresh = a.Fresh || (directed && d.fresh)
 	sp := s.spaceOf(e)
 	if sp == nil || !AutoStart {
 		return false
@@ -211,6 +278,67 @@ func (s *Store) deliver(e *Env, agent, text string) bool {
 	}
 	s.notices = append(s.notices, fmt.Sprintf("Started %s to receive a message; press Enter on it to open its console", address(e, agent)))
 	return true
+}
+
+// directed checks a sender's directive and says how the recipient is told
+// and what the sender hears back. from is nil for the user's own agent, which
+// may direct anyone. It must be called with s.mu held.
+func (s *Store) directed(sp *Space, from, to *Env, agent, id string, d directive) (allowed bool, prefix, note string, wrap func(string) string, err error) {
+	wrap = func(text string) string { return text }
+	if d.empty() {
+		return false, "", "", wrap, nil
+	}
+	if err = d.check(); err != nil {
+		return false, "", "", wrap, err
+	}
+	if from != nil && !mayDirect(from, to) {
+		return false, "", "", wrap, fmt.Errorf("permission_denied: %s may contact but cannot direct %s; message not sent. Remove directing parameters or ask the user to enable directing in Communication", from.Name, to.Name)
+	}
+	var said []string
+	refused := ""
+	if a := to.agent(agent); a != nil {
+		if err = a.accepts(d); err != nil {
+			return false, "", "", wrap, err
+		}
+	}
+	if a := to.agent(agent); a != nil && !d.plain() {
+		if how, why := a.way(d.method); how != nil {
+			wrap = how
+			said = append(said, "works on it by "+d.method)
+		} else {
+			refused = fmt.Sprintf(" method %s is not available for %s: %s; it works on it directly.", d.method, address(to, agent), why)
+		}
+	}
+	if d.fresh {
+		prefix = "[New task: your earlier conversation was cleared."
+		var open []string
+		for other, r := range sp.Requests {
+			if other != id && r.ToEnv == to.ID && r.ToAgent == agent {
+				open = append(open, "#"+other)
+			}
+		}
+		if len(open) > 0 {
+			sort.Strings(open)
+			prefix += " You still owe answers to " + strings.Join(open, ", ") + ": msg_read shows them."
+		}
+		prefix += "]\n"
+		said = append(said, "starts with a clean context")
+	}
+	if d.level != "" {
+		said = append(said, "is set up for a "+d.level+" task")
+	}
+	if d.model != "" {
+		said = append(said, "gets model "+d.model)
+	}
+	if d.effort != "" {
+		said = append(said, "gets "+d.effort+" effort")
+	}
+	who := address(to, agent)
+	if len(said) == 0 {
+		return true, prefix, refused, wrap, nil
+	}
+	s.notices = append(s.notices, fmt.Sprintf("%s %s for message #%s", who, strings.Join(said, " and "), id))
+	return true, prefix, fmt.Sprintf(" Requested: %s %s, as soon as it is free. Not yet confirmed by the CLI.%s", who, strings.Join(said, " and "), refused), wrap, nil
 }
 
 // AutoStart starts a stopped agent when a message arrives for it.
@@ -252,6 +380,11 @@ func (s *Store) sendWith(from *Env, fromAgent, to, text string, out outgoing) (s
 	if target != from && !mayContact(sp, from, target) {
 		return "", fmt.Errorf("permission_denied: %s may not contact %s. The user decides who talks to whom; call agent_peers to see whom you may contact", from.Name, target.Name)
 	}
+	artifactNotes, err := s.shareArtifacts(sp, from, target.ID, out.artifacts)
+	if err != nil {
+		return "", err
+	}
+	text += artifactNotes
 	sp.NextMessage++
 	id := strconv.Itoa(sp.NextMessage)
 	if sp.Requests == nil {
@@ -259,21 +392,30 @@ func (s *Store) sendWith(from *Env, fromAgent, to, text string, out outgoing) (s
 	}
 	sp.Requests[id] = request{from.ID, fromAgent, target.ID, agent}
 	sender, recipient := address(from, fromAgent), address(target, agent)
-	m := message{Kind: "message", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: target.ID, Text: text, Attachments: out.attachments}
+	allowed, prefix, directNote, wrap, err := s.directed(sp, from, target, agent, id, out.direct)
+	if err != nil {
+		delete(sp.Requests, id)
+		sp.NextMessage--
+		return "", err
+	}
+	m := message{Kind: "message", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: target.ID, Text: text, Attachments: out.attachments, Artifacts: out.artifacts}
+	if allowed {
+		m.Complexity, m.NewTask = out.direct.level, out.direct.fresh
+	}
 	changes, changed := changeNotes(sender, out, target)
 	m.Changed = changed
 	s.number(sp, &m)
-	m.Delivered = s.deliver(target, agent, fmt.Sprintf("[FarshMac message #%s from %s]\n%s%s%s\n\n[When you have the answer, send it with the agent_reply tool, request_id %s; attach files instead of pasting them. It is delivered to %s automatically.]", id, sender, text, attachmentNotes(id, m.Attachments, false), changes, id, sender))
+	m.Delivered = s.direct(target, agent, wrap(fmt.Sprintf("%s[FarshMac message #%s from %s]\n%s%s%s\n\n[When you have the answer, send it with the agent_reply tool, request_id %s; attach files instead of pasting them. It is delivered to %s automatically.]", prefix, id, sender, text, attachmentNotes(id, m.Attachments, false), changes, id, sender)), out.direct, allowed)
 	delivered := m.Delivered
 	s.store(sp, &m)
 	if err = s.save(); err != nil {
 		return "", err
 	}
-	state := "delivered"
+	state := "delivered to console queue"
 	if !delivered {
 		state = "queued: that agent could not be started, it receives the message when the user starts it"
 	}
-	return fmt.Sprintf("Message #%s to %s: %s%s.%s\nThe reply arrives in this conversation on its own as a new message. Do not wait or poll, and do not repeat the message in your output: end your turn now.", id, recipient, state, attached(m.Attachments), s.unreachable(sp, target, text)), nil
+	return fmt.Sprintf("Message #%s to %s: %s%s.%s\nThe reply arrives in this conversation on its own as a new message. Do not wait or poll, and do not repeat the message in your output: end your turn now.", id, recipient, state, attached(m.Attachments), directNote+s.unreachable(sp, target, text)), nil
 }
 
 // reply returns the answer to whoever sent the message.
@@ -296,10 +438,15 @@ func (s *Store) replyWith(from *Env, fromAgent, id, text string, out outgoing) (
 	if !ok || r.ToEnv != from.ID || r.ToAgent != fromAgent {
 		return "", fmt.Errorf("not_found: no message #%s addressed to you; start a new one with agent_send", id)
 	}
+	artifactNotes, err := s.shareArtifacts(sp, from, r.FromEnv, out.artifacts)
+	if err != nil {
+		return "", err
+	}
+	text += artifactNotes
 	if r.FromEnv == operatorEnv {
 		// The user's own assistant has no console: it collects its replies.
 		sender := address(from, fromAgent)
-		m := message{Kind: "reply", ID: id, From: sender, To: "user/" + r.FromAgent, FromEnv: from.ID, ToEnv: operatorEnv, Delivered: true, Text: text, Attachments: out.attachments}
+		m := message{Kind: "reply", ID: id, From: sender, To: "user/" + r.FromAgent, FromEnv: from.ID, ToEnv: operatorEnv, Delivered: true, Text: text, Attachments: out.attachments, Artifacts: out.artifacts}
 		changes, changed := changeNotes(sender, out, nil)
 		m.Changed = changed
 		s.number(sp, &m)
@@ -319,7 +466,7 @@ func (s *Store) replyWith(from *Env, fromAgent, id, text string, out outgoing) (
 	// The thread stays open the other way round, so a reply can be answered.
 	sp.Requests[id] = request{r.ToEnv, r.ToAgent, r.FromEnv, r.FromAgent}
 	sender, recipient := address(from, fromAgent), address(asker, r.FromAgent)
-	m := message{Kind: "reply", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: asker.ID, Text: text, Attachments: out.attachments}
+	m := message{Kind: "reply", ID: id, From: sender, To: recipient, FromEnv: from.ID, ToEnv: asker.ID, Text: text, Attachments: out.attachments, Artifacts: out.artifacts}
 	changes, changed := changeNotes(sender, out, asker)
 	m.Changed = changed
 	s.number(sp, &m)
@@ -350,9 +497,9 @@ func attached(list []attachment) string {
 
 var refPattern = regexp.MustCompile(`@([0-9a-f]{6})\b`)
 
-// unreachable warns the sender when its text names a reference the recipient
-// cannot open, and tells the user which folder to attach. It must be called
-// with s.mu held.
+// unreachable informs the sender when its text names a reference the recipient
+// cannot open. Prefer bounded delivery over broader source grants.
+// Must be called with s.mu held.
 func (s *Store) unreachable(sp *Space, recipient *Env, text string) string {
 	var missing []string
 	seen := map[string]bool{}
@@ -368,13 +515,12 @@ func (s *Store) unreachable(sp *Space, recipient *Env, text string) string {
 		}
 		if !attached {
 			missing = append(missing, "@"+m[1])
-			s.notices = append(s.notices, fmt.Sprintf("AI Env %s cannot open %s (%s): attach that folder to it if its agent should read it", recipient.Name, "@"+m[1], filepath.Base(source)))
 		}
 	}
 	if len(missing) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\nWarning: %s cannot open %s: that folder is not attached to its Env. The user has been told. Do not expect it to read those files until the user attaches the folder.", recipient.Name, strings.Join(missing, ", "))
+	return fmt.Sprintf("\nSource references %s are informational for %s (not attached). Share artifact IDs or message attachments for review; do not copy source trees or request broader access merely to deliver evidence.", strings.Join(missing, ", "), recipient.Name)
 }
 
 // Notices returns and clears what the user should be told.

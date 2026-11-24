@@ -76,6 +76,7 @@ func (a *App) menuSections() []menuSection {
 			{"General settings…", "", settings("General settings")},
 			{"Panel settings…", "", settings("Panel settings")},
 			{"Terminal settings…", "", settings("Terminal settings")},
+			{"AI Spaces…", "", a.aiSettings},
 			{},
 			{"Viewer settings…", "", settings("Viewer settings")},
 			{"Editor settings…", "", settings("Editor settings")},

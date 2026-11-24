@@ -54,6 +54,35 @@ func names(t *testing.T, fs *FS, dir string) string {
 	return strings.Join(out, ",")
 }
 
+func TestHostPathUsesVisibleBackingEntry(t *testing.T) {
+	s, fs, source := testEnv(t)
+	for virtual, want := range map[string]string{"/project": source, "/project/sub/b.txt": filepath.Join(source, "sub", "b.txt")} {
+		if got, err := fs.HostPath(virtual); err != nil || got != want {
+			t.Fatalf("%s: %q, %v", virtual, got, err)
+		}
+	}
+	if err := fs.WriteFile("/private.txt", []byte("private")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fs.HostPath("/private.txt"); err != nil || got != fs.private("/private.txt") {
+		t.Fatalf("overlay path %q, %v", got, err)
+	}
+	if err := s.Attach("Space", "Dev", "/synthetic/nested", []string{source}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fs.HostPath("/synthetic/nested/project/a.txt"); err != nil || got != filepath.Join(source, "a.txt") {
+		t.Fatalf("read-only nested reference %q, %v", got, err)
+	}
+	if err := fs.Remove("/project/sub", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, virtual := range []string{"/synthetic", "/missing", "/project/sub", "/project/sub/b.txt"} {
+		if got, err := fs.HostPath(virtual); err == nil || got != "" {
+			t.Fatalf("non-visible or synthetic path exposed: %s = %s, %v", virtual, got, err)
+		}
+	}
+}
+
 func TestReferencesAreLiveAndShared(t *testing.T) {
 	s, fs, source := testEnv(t)
 	if got := names(t, fs, "/"); got != "project" {
@@ -158,7 +187,7 @@ func TestMCPTools(t *testing.T) {
 	if rpc("initialize", `{"protocolVersion":"2025-03-26"}`)["protocolVersion"] != "2025-03-26" {
 		t.Fatal("protocol version not negotiated")
 	}
-	if n := len(rpc("tools/list", `{}`)["tools"].([]any)); n != len(tools) {
+	if n := len(rpc("tools/list", `{}`)["tools"].([]any)); n != len(compactTools) {
 		t.Fatalf("tools = %d", n)
 	}
 	if got := text(rpc("tools/call", `{"name":"vfs_list","arguments":{"path":"/project"}}`)); !strings.Contains(got, "a.txt") || !strings.Contains(got, "sub/") {
@@ -305,8 +334,9 @@ func TestAgentMessagingFollowsCommunicationRules(t *testing.T) {
 	if _, err = s.send(env("Product"), "claude", "Coder", "do it"); err == nil || !strings.Contains(err.Error(), "permission_denied") {
 		t.Fatalf("Product reached Coder: %v", err)
 	}
-	if _, err = s.send(env("Architect"), "claude", "Product/claude", "hello"); err == nil {
-		t.Fatal("Architect started a conversation it was not allowed to start")
+	// A link is two-way; an Env outside it starts nothing.
+	if _, err = s.send(env("Coder"), "claude", "Product/claude", "hello"); err == nil {
+		t.Fatal("Coder started a conversation it was not allowed to start")
 	}
 	sent, err := s.send(env("Product"), "claude", "architect", "Feature request: dark theme")
 	if err != nil || !strings.Contains(sent, "Message #1 to Architect/claude") || !strings.Contains(sent, "Do not wait") {
@@ -396,7 +426,7 @@ func TestClaudeAgentsTalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer product.Close()
+	defer stop(product)
 	watch := func(env string, p *Process) {
 		screen := &strings.Builder{}
 		screenMu.Lock()
@@ -590,13 +620,13 @@ func TestWorkspaceCopyThreadsAndReferenceWarnings(t *testing.T) {
 	if readme, _ := os.ReadFile(filepath.Join(source, "README.md")); isErr || string(readme) != "readme\n" || !strings.Contains(copied, "reference @") {
 		t.Fatalf("copy = %q, %q", copied, readme)
 	}
-	// The sender learns at once that the recipient cannot open a reference, and so does the user.
+	// Inaccessible source references recommend a bounded delivery without asking for broader access.
 	ref := fs.Ref("/project")
 	sent, _ := run("agent_send", `{"to":"Reviewer","message":"Please review `+ref+`/a.txt"}`)
-	if !strings.Contains(sent, "Warning: Reviewer cannot open "+ref) {
+	if !strings.Contains(sent, "Source references "+ref) || !strings.Contains(sent, "Share artifact IDs") {
 		t.Fatalf("no warning about an unreachable reference: %q", sent)
 	}
-	if notices := s.Notices(); len(notices) != 1 || !strings.Contains(notices[0], "Reviewer cannot open "+ref) {
+	if notices := s.Notices(); len(notices) != 0 {
 		t.Fatalf("user notices = %q", notices)
 	}
 	// A reply can be answered in the same thread, by the right side only.
@@ -634,7 +664,7 @@ func TestMessageStartsAStoppedAgent(t *testing.T) {
 	if p == nil {
 		t.Fatal("the stopped agent was not started")
 	}
-	defer p.Close()
+	defer stop(p)
 	defer os.Remove(s.mcp.socket)
 	if notices := s.Notices(); len(notices) != 1 || !strings.Contains(notices[0], "Started Architect/claude") {
 		t.Fatalf("notices = %q", notices)
@@ -766,7 +796,7 @@ func TestOperatorTalksToEnvAgents(t *testing.T) {
 	if p == nil {
 		t.Fatal("the stopped agent was not started")
 	}
-	defer p.Close()
+	defer stop(p)
 	if got := call("agent_wait", `{"agent":"Architect","seconds":1}`); !strings.Contains(got, "still working") {
 		t.Fatalf("an agent that just got a message is working: %q", got)
 	}

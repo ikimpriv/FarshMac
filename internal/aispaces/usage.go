@@ -2,6 +2,7 @@ package aispaces
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,6 +112,10 @@ func blockText(raw json.RawMessage) string {
 
 // AnalyzeTranscript reads a Claude Code session transcript.
 func AnalyzeTranscript(file string) (*Usage, error) {
+	return analyzeClaudeTranscript(context.Background(), file)
+}
+
+func analyzeClaudeTranscript(ctx context.Context, file string) (*Usage, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -137,6 +142,9 @@ func AnalyzeTranscript(file string) (*Usage, error) {
 	afterMessage := false
 	r := bufio.NewReaderSize(f, 1<<20)
 	for {
+		if err := ctx.Err(); err != nil {
+			return u, err
+		}
 		line, readErr := r.ReadBytes('\n')
 		var rec transcriptRecord
 		if len(line) > 0 && json.Unmarshal(line, &rec) == nil && !rec.Sidechain {
@@ -340,14 +348,18 @@ func transcriptFile(session string) string {
 
 // UsageReport describes what every agent of a Space spent so far.
 func (s *Store) UsageReport(space string) string {
-	type entry struct{ who, session string }
+	return s.UsageReportContext(context.Background(), space)
+}
+
+func (s *Store) UsageReportContext(ctx context.Context, space string) string {
+	type entry struct{ who, session, agent, scratch string }
 	s.mu.Lock()
 	sp := s.space(space)
 	var agents []entry
 	if sp != nil {
 		for _, e := range sp.Envs {
 			for _, a := range e.Agents {
-				agents = append(agents, entry{address(e, a.Name), a.SessionID})
+				agents = append(agents, entry{address(e, a.Name), a.SessionID, a.Name, filepath.Join(s.agentDir(e, a.Name), "scratch")})
 			}
 		}
 	}
@@ -357,16 +369,41 @@ func (s *Store) UsageReport(space string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Efficiency of the agents of %q, from their own transcripts.\n", space)
-	b.WriteString("Cost is in units of one fresh input token: output ×5, new context ×1.25 or ×2 (cache write, 5 minutes or 1 hour), re-read context ×0.025–0.1 by model.\n\n")
+	b.WriteString("Claude estimates only, in units of one fresh input token: output ×5, new context ×1.25 or ×2 (cache write, 5 minutes or 1 hour), re-read context ×0.025–0.1 by model.\n\n")
 	total := 0.0
+	var codex, approvals CodexTokens
+	b.WriteString("Codex: observed token counters, not a dollar estimate. Cached input is included in input; reasoning is included in output. Turns are CLI turns, not necessarily one FarshMac message.\n\n")
 	for _, agent := range agents {
+		if ctx.Err() != nil {
+			return b.String() + "\nCancelled"
+		}
 		fmt.Fprintf(&b, "%s\n", agent.who)
+		if agent.agent == "codex" {
+			files, err := codexTranscripts(ctx, agent.scratch)
+			if err != nil {
+				fmt.Fprintf(&b, "  Cannot discover transcripts: %v\n", err)
+			}
+			if len(files) == 0 {
+				b.WriteString("  No Codex transcript for this Env's scratch directory\n")
+			}
+			for _, file := range files {
+				u, err := AnalyzeCodexTranscript(ctx, file)
+				if err != nil {
+					fmt.Fprintf(&b, "  Partial transcript: %v\n", err)
+				}
+				codex.add(u.Tokens)
+				approvals.add(u.Approvals)
+				b.WriteString(u.String())
+			}
+			b.WriteString("\n")
+			continue
+		}
 		file := transcriptFile(agent.session)
 		if file == "" {
 			b.WriteString("  no transcript (not started yet, or not a Claude Code agent)\n\n")
 			continue
 		}
-		u, err := AnalyzeTranscript(file)
+		u, err := analyzeClaudeTranscript(ctx, file)
 		if err != nil || u.Steps == 0 {
 			b.WriteString("  the transcript has no model calls yet\n\n")
 			continue
@@ -374,6 +411,6 @@ func (s *Store) UsageReport(space string) string {
 		total += u.Cost()
 		b.WriteString(u.String() + "\n")
 	}
-	fmt.Fprintf(&b, "Space total: %s units\n", thousands(int(total)))
+	fmt.Fprintf(&b, "Claude total: %s estimated units\nCodex total: input %d (cached %d), output %d (reasoning %d)\nAdditional Codex approval review: input %d, output %d\n", thousands(int(total)), codex.Input, codex.Cached, codex.Output, codex.Reasoning, approvals.Input, approvals.Output)
 	return b.String()
 }

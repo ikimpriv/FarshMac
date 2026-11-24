@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -173,14 +174,7 @@ func (aiBackend) Mkdir(a *App, p *Panel) bool {
 			a.Panels[index].pendingPosition(name, "")
 		})
 	case 1:
-		a.aiAgentForm("Create AI Env in "+space, true, nil, func(name string, agents []aispaces.Agent) error {
-			if err := store.CreateEnv(space, name, agents); err != nil {
-				return err
-			}
-			a.refresh()
-			a.Panels[index].pendingPosition(name, "")
-			return nil
-		})
+		a.createAIEnv(store, space, index)
 	default:
 		a.remoteMkdir()
 	}
@@ -592,21 +586,30 @@ func (a *App) aiContextItems(p *Panel) []menuItem {
 			a.Status = "This Space has no other Envs to talk to"
 			return
 		}
+		directs := store.Directs(space, env)
 		var fields []Field
 		for _, other := range others {
-			fields = append(fields, Field{Label: other, Toggle: true, Checked: allowed[other]})
+			fields = append(fields, Field{Label: "contact " + other, Toggle: true, Checked: allowed[other]})
 		}
-		a.form("Agents of "+env+" may contact", fields, func(f []Field) {
-			var names []string
+		for _, other := range others {
+			fields = append(fields, Field{Label: "direct " + other, Toggle: true, Checked: directs[other]})
+		}
+		a.form("Agents of "+env+" may", fields, func(f []Field) {
+			var names, directed []string
 			for i, other := range others {
 				if f[i].Checked {
 					names = append(names, other)
 				}
+				if f[len(others)+i].Checked {
+					directed = append(directed, other)
+				}
 			}
 			a.error(store.SetPeers(space, env, names))
-			a.Status = fmt.Sprintf("%s may contact: %s", env, strings.Join(append(names, "nobody")[:max(1, len(names))], ", "))
+			a.error(store.SetDirects(space, env, directed))
+			a.Status = fmt.Sprintf("%s may contact: %s; direct: %s", env, strings.Join(append(names, "nobody")[:max(1, len(names))], ", "), strings.Join(append(directed, "nobody")[:max(1, len(directed))], ", "))
 		})
-		a.Form.Message = "Checked Envs can be sent requests by the agents of " + env + ". An agent can always answer a request it received, and ask its sender back while the request is open. The other direction is set on the other Env."
+		a.Form.Message = "Contact is a two-way link: the agents of " + env + " and of that Env may send requests to each other. " +
+			"Direct: they may also say how hard a task is, which sets the recipient's model and effort, and start it with a cleared context. Directing is one-way and includes contacting; the other direction is set on the other Env."
 	}}
 	messages := menuItem{"Space messages", "", func() {
 		data, err := os.ReadFile(store.MessagesPath(space))
@@ -630,7 +633,10 @@ func (a *App) aiContextItems(p *Panel) []menuItem {
 	}}
 	// Where the agents of the Space spent their tokens, from their own transcripts.
 	usage := menuItem{"Efficiency report", "", func() {
-		a.showText("Efficiency of "+space, store.UsageReport(space))
+		a.backgroundTask("Reading agent usage", func(o *fsops.Operation) (func(), func(), error) {
+			report := store.UsageReportContext(o.Context(), space)
+			return func() { a.showText("Efficiency of "+space, report) }, nil, o.Check()
+		})
 	}}
 	if level == 1 {
 		return []menuItem{addAgents, communication, messages, mcpLog, usage, host}
@@ -639,14 +645,19 @@ func (a *App) aiContextItems(p *Panel) []menuItem {
 	if len(p.Entries) > 0 && p.aiAgent(p.Entries[p.Cursor].Name) {
 		name := p.Entries[p.Cursor].Name
 		items = append(items, menuItem{"Agent settings…", "", func() {
-			model, effort, tools := store.Settings(space, env, name)
-			a.form("Settings of "+env+"/"+name, []Field{{Label: "Model", Value: model}, {Label: "Effort", Value: effort}, {Label: "Built-in tools", Value: tools}}, func(f []Field) {
-				a.error(store.SetSettings(space, env, name, f[0].Value, f[1].Value, f[2].Value))
-				a.Status = "Settings of " + name + " apply the next time it is started"
-			})
-			a.Form.Message = "Leave a field empty for the default. Model and effort are passed to the agent CLI as they are (for example sonnet, low). " +
-				"Built-in tools are the CLI's own tools the agent is offered besides the Env tools: empty means " + aispaces.DefaultTools + "; write default for all of them, or your own list. Every tool offered is paid for on each step."
+			a.aiAgentSettingsForm("Settings of "+env+"/"+name, name, store.Settings(space, env, name), func(next aispaces.AgentSettings) error { return store.SetSettings(space, env, name, next) })
 		}})
+		if store.Disabled(space, env, name) {
+			items = append(items, menuItem{"Enable agent " + name, "", func() {
+				a.error(store.SetDisabled(space, env, name, false))
+				a.Status = name + " is in use again in " + env
+			}})
+		} else {
+			items = append(items, menuItem{"Disable agent " + name, "", func() {
+				a.error(store.SetDisabled(space, env, name, true))
+				a.Status = name + " is disabled in " + env + ": it is not addressed or started until you enable it"
+			}})
+		}
 		if process := store.Running(space, env, name); process != nil {
 			items = append(items, menuItem{"Stop agent " + name, "", func() { process.Close(); a.Status = name + " stopped; Enter resumes its session" }})
 		}
@@ -660,6 +671,37 @@ func (a *App) aiContextItems(p *Panel) []menuItem {
 				return
 			}
 			a.showText(title, f(fs))
+		}
+	}
+	if selected := p.Selected(); len(selected) == 1 && path.Base(selected[0]) != ".." {
+		_, _, _, rel, _ := aiLocation(selected[0])
+		if fs, err := store.FS(space, env); err == nil {
+			if _, err := fs.HostPath(rel); err == nil {
+				index := 0
+				if p == &a.Panels[1] {
+					index = 1
+				}
+				items = append([]menuItem{{"Go to real location", "", func() {
+					full, err := fs.HostPath(rel)
+					if err != nil {
+						a.error(err)
+						return
+					}
+					info, err := os.Lstat(full)
+					if err != nil {
+						a.error(err)
+						return
+					}
+					dir, name := full, ""
+					if !info.IsDir() {
+						dir, name = filepath.Dir(full), filepath.Base(full)
+					}
+					a.openVolume(index, dir)
+					if target := &a.Panels[index]; target.AI == nil && target.Path == dir && name != "" {
+						target.placeCursor(name)
+					}
+				}}, {}}, items...)
+			}
 		}
 	}
 	items = append(items,

@@ -2,6 +2,7 @@ package aispaces
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +80,8 @@ func (s *Store) startMCP() (*mcpServer, error) {
 
 // mcpSession is what a launch token stands for.
 type mcpSession struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
 	env            *Env
 	agent, session string // agent entry and its native session reference
 	conversation          // what the agent's conversation already holds
@@ -91,14 +94,65 @@ const forgetMethod = "farshmac/forget"
 func (m *mcpServer) register(e *Env, agent, session string) string {
 	token := newID() + newID()
 	m.mu.Lock()
-	m.tokens[token] = &mcpSession{env: e, agent: agent, session: session}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.tokens[token] = &mcpSession{env: e, agent: agent, session: session, ctx: ctx, cancel: cancel}
 	m.mu.Unlock()
 	return token
 }
 func (m *mcpServer) revoke(token string) {
 	m.mu.Lock()
+	if session := m.tokens[token]; session != nil && session.cancel != nil {
+		session.cancel()
+	}
 	delete(m.tokens, token)
 	m.mu.Unlock()
+}
+
+// event takes in what a hook of the agent's CLI reported: the state of its
+// turn, a question to the user, a compacted or cleared conversation.
+func (m *mcpServer) event(session *mcpSession, token string, req rpcRequest) {
+	if !strings.HasPrefix(req.Method, "farshmac/") {
+		return
+	}
+	var told struct{ Session, Source, Kind string }
+	json.Unmarshal(req.Params, &told)
+	s := m.s
+	s.mu.Lock()
+	p := s.running[session.env.ID+":"+session.agent]
+	if p != nil {
+		p.mu.Lock()
+		current := p.run.token == token
+		p.mu.Unlock()
+		if !current {
+			p = nil // an earlier run of the CLI no longer speaks for the console
+		}
+	}
+	// Only a cleared conversation moves to a new session, and only to a value
+	// the CLI could have made: it comes from the agent's side.
+	if a := session.env.agent(session.agent); a != nil && p != nil && req.Method == forgetMethod && told.Source == "clear" && sessionID.MatchString(told.Session) && a.SessionID != told.Session {
+		// A cleared conversation continues under a new session: that is the
+		// one to resume and to report on.
+		a.SessionID = told.Session
+		s.save()
+	}
+	s.mu.Unlock()
+	switch req.Method {
+	case forgetMethod:
+		session.forget("")
+		if told.Source == "clear" && p != nil {
+			p.event("idle")
+		}
+	case "farshmac/busy", "farshmac/idle":
+		if p != nil {
+			p.event(strings.TrimPrefix(req.Method, "farshmac/"))
+		}
+	case "farshmac/notify":
+		if p != nil && told.Kind == "permission_prompt" {
+			p.event("ask")
+		} else if p != nil && told.Kind == "idle_prompt" {
+			p.event("idle")
+		}
+	}
 }
 
 // LogName is the per-Env MCP interaction log, one JSON object per line.
@@ -217,8 +271,12 @@ func (m *mcpServer) serve(conn net.Conn) {
 				entry := logEntry{Method: req.Method, ArgBytes: len(raw)}
 				started := time.Now()
 				if len(req.ID) == 0 {
-					if req.Method == forgetMethod {
-						session.forget("")
+					m.mu.Lock()
+					live := m.tokens[token] != nil
+					m.mu.Unlock()
+					if live && strings.HasPrefix(req.Method, "farshmac/") {
+						json.Unmarshal(req.Params, &entry.Args) // what the CLI's hook reported
+						m.event(session, token, req)
 					}
 					record(entry) // a notification: nothing to answer
 				} else {
@@ -268,9 +326,20 @@ func describe(entry *logEntry, req rpcRequest, result any) {
 		}
 		json.Unmarshal(req.Params, &p)
 		entry.Tool, entry.Args = p.Name, map[string]any{}
+		if p.Name == "env_call" {
+			if name, ok := p.Arguments["name"].(string); ok {
+				entry.Tool = name
+				entry.Args["_entry"] = "env_call"
+				if args, ok := p.Arguments["arguments"].(map[string]any); ok {
+					p.Arguments = args
+				}
+			}
+		}
 		for name, value := range p.Arguments {
 			if s, ok := value.(string); ok {
 				value = shorten(s, 400)
+			} else if data, e := json.Marshal(value); e == nil && len(data) > 800 {
+				value = shorten(string(data), 800)
 			}
 			entry.Args[name] = value
 		}
@@ -304,7 +373,7 @@ func handle(s *Store, session *mcpSession, fs *FS, req rpcRequest) (any, map[str
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": tools}, nil
+		return map[string]any{"tools": compactTools}, nil
 	case "tools/call":
 		var p struct {
 			Name      string         `json:"name"`

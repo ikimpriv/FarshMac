@@ -103,6 +103,20 @@ func (f *FS) real(p string) (string, bool) {
 	return f.private(p), false
 }
 
+// HostPath is for host UI navigation only, never exposed through the Env MCP.
+// Synthetic folders have no single backing location; hidden entries stay hidden.
+func (f *FS) HostPath(p string) (string, error) {
+	p = clean(p)
+	if f.hidden(p) {
+		return "", &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
+	}
+	full, _ := f.real(p)
+	if _, err := os.Lstat(full); err != nil {
+		return "", err
+	}
+	return full, nil
+}
+
 // hidden reports an entry inside a reference that was removed from this Env.
 // The real file stays; this Env and its agents no longer see it.
 func (f *FS) hidden(p string) bool {

@@ -43,12 +43,17 @@ type message struct {
 	Text        string       `json:"text"`
 	Attachments []attachment `json:"attachments,omitempty"`
 	Changed     []string     `json:"changed,omitempty"` // real files the sender changed before it
+	Artifacts   []string     `json:"artifacts,omitempty"`
+	Complexity  string       `json:"complexity,omitempty"`
+	NewTask     bool         `json:"new_task,omitempty"`
 }
 
 // outgoing is what travels with a message besides its text.
 type outgoing struct {
 	attachments []attachment
+	artifacts   []string
 	talk        *conversation // its file changes are reported with the message
+	direct      directive     // task level and context the sender asks for
 }
 
 const (

@@ -75,6 +75,24 @@ func sandboxProfile(scratch string, readable ...string) (string, error) {
 		regexp.QuoteMeta(home),
 		sbQuote(filepath.Join(home, ".codex")),
 		sbQuote(filepath.Join("/private/tmp", "claude-"+uid, project)))
+	// What the CLI reads in every session of the user, sandboxed or not: an
+	// agent that could write there would change the user's own defaults (a
+	// model or effort chosen in its console is saved as the default for new
+	// sessions) or plant instructions, commands and hooks that later run
+	// outside the sandbox.
+	var shared []string
+	// /model can persist a new default in Codex too. A failed save must not
+	// change the user's other sessions; recent CLIs keep it session-local.
+	shared = append(shared, "(literal "+sbQuote(filepath.Join(home, ".codex", "config.toml"))+")")
+	if configHome := os.Getenv("CODEX_HOME"); configHome != "" {
+		shared = append(shared, "(literal "+sbQuote(filepath.Join(realPath(configHome), "config.toml"))+")")
+	}
+	for _, name := range []string{"settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json"} {
+		shared = append(shared, "(literal "+sbQuote(filepath.Join(config, name))+")")
+	}
+	for _, name := range []string{"commands", "agents", "skills", "plugins", "hooks", "output-styles", "rules"} {
+		shared = append(shared, "(subpath "+sbQuote(filepath.Join(config, name))+")")
+	}
 	return fmt.Sprintf(`(version 1)
 (allow default)
 (deny file-read-data
@@ -90,6 +108,7 @@ func sandboxProfile(scratch string, readable ...string) (string, error) {
     (subpath "/dev") (subpath "/private/var/folders") (subpath %s) (subpath %s)
     (regex #"^/private/tmp/claude-[0-9a-f]+-cwd$")
     %s)))
+(deny file-write* %s)
 `,
 		sbQuote(home), sbQuote("/private/tmp/claude-"+uid),
 		sbQuote(scratch), strings.Join(ancestors, " "),
@@ -97,5 +116,5 @@ func sandboxProfile(scratch string, readable ...string) (string, error) {
 		sbQuote("/private/tmp/claude-"+uid), sbQuote(filepath.Join(home, ".local")), sbQuote(filepath.Join(home, "Library", "Keychains")), sbQuote(filepath.Join(home, ".nvm")),
 		strings.Join(extra, " "),
 		sbQuote(scratch), sbQuote(filepath.Join(home, "Library", "Keychains")),
-		own), nil
+		own, strings.Join(shared, " ")), nil
 }

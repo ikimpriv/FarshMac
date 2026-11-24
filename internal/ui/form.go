@@ -13,6 +13,7 @@ type Field struct {
 	Secret          bool
 	PasteDocument   bool // Paste-only multiline data, shown as a summary, never raw text.
 	Combo           bool
+	OnSelect        func(int) // Optional callback after a combo choice, with its original option index.
 	// Options makes a one-line choice (with Toggle set): Value is the selected
 	// option; Space and arrows cycle through them, a click picks one.
 	Options []string
@@ -249,6 +250,13 @@ func (a *App) formKey(m Message) {
 		return
 	}
 	field := &f.Fields[f.Focus]
+	if field.Combo && field.Toggle {
+		// A list-only combo is not a text field or a row of radio buttons.
+		if m.Key == "ArrowLeft" || m.Key == "ArrowRight" {
+			a.formCombo(f, f.Focus)
+		}
+		return
+	}
 	if field.Toggle {
 		if m.Key == " " || m.Key == "ArrowRight" {
 			field.cycle(1)
@@ -746,7 +754,13 @@ func (a *App) formClick(m Message) {
 
 func (a *App) formCombo(parent *Form, index int) {
 	field := &parent.Fields[index]
-	a.choose(field.Label, field.Options, func(i int) { field.Value = field.Options[i]; a.Form = parent })
+	a.choose(field.Label, field.Options, func(i int) {
+		field.Value = field.Options[i]
+		a.Form = parent
+		if field.OnSelect != nil {
+			field.OnSelect(i)
+		}
+	})
 	for i, value := range field.Options {
 		if value == field.Value {
 			a.Form.Focus = i
