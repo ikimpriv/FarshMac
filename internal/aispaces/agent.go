@@ -865,9 +865,8 @@ func (p *Process) finish(err error) {
 	default:
 		p.err = err // before eof: whoever sees the end may read it
 	}
-	p.todo, p.pending, p.eof = nil, 0, true
+	p.todo, p.pending, p.ending = nil, 0, true
 	p.mu.Unlock()
-	p.endOnce.Do(func() { close(p.ended) })
 	if a := p.env.agent(p.name); a != nil && len(left) > 0 {
 		for _, d := range left {
 			a.Inbox = append(a.Inbox, d.text)
@@ -876,6 +875,12 @@ func (p *Process) finish(err error) {
 		s.save()
 	}
 	s.mu.Unlock()
+	// Neither the console's EOF nor the lifecycle signal may precede the
+	// final store write: their consumers can dispose of the store immediately.
+	p.mu.Lock()
+	p.eof = true
+	p.mu.Unlock()
+	p.endOnce.Do(func() { close(p.ended) })
 	select {
 	case p.more <- struct{}{}:
 	default:
