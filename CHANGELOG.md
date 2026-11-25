@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.28.0 — AI Spaces preview
+
+- Add AI Spaces to the panel connection menus, with Spaces and Envs as folders, F7 creation, Shift+F6 renaming, and F8 removal that preserves original source files.
+- Attach local project files through live read/write or read-only references; hide entries per Env and jump to their real location from the context menu.
+- Run retained Claude Code and Codex consoles with Env-scoped MCP access and private scratch storage. Hiding a console keeps the agent running.
+- Add predefined Product, Architect, Coder, and Reviewer / Tester roles, reusable custom prompts, per-agent defaults, and explicit communication/directing permissions.
+- Support model and effort changes through acknowledged CLI commands with resume-based fallback, preserving the console and queued messages.
+- Add bounded batched MCP reads, shared file references, message attachments, immutable review artifacts, isolated workspace checks, reusable browser scenarios, and recorded test evidence.
+- Report observed model/effort and token usage, with Codex approval reviews accounted for separately; document the test6–test10 workflow experiments and their limitations.
+- Fix agent shutdown signaling completion before pending messages were saved, preventing a race with temporary-store cleanup. Add a regression test for delayed persistence.
+
 ## 0.27.0 — Workload restarts and predictable batch operations
 
 - Order the 15 recent connections strictly by last use, newest first regardless of connection type.

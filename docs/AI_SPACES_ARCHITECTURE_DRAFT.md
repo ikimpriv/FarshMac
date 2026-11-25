@@ -3,7 +3,7 @@
 **Status:** Draft for discussion; not an implementation commitment  
 **Date:** 2026-11-20  
 **Scope:** Virtual project environments, overlay filesystems, isolated console agents, MCP, messaging, and FarshMac panels  
-**Implementation status:** Proposed. A proof of concept exists (see “Proof of concept” below); it is not the proposed security profile and nothing here is shipped.
+**Implementation status:** The architecture remains proposed. FarshMac 0.28.0 ships an experimental proof of concept (see “Proof of concept” below and [current workflow notes](AI_SPACES_WORKFLOW.md)); the full proposed architecture and security profile are not implemented.
 
 ## Proof of concept
 

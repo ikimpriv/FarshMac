@@ -9,7 +9,9 @@
 
 A native macOS file manager written in Go, inspired by the keyboard-driven workflow and appearance of [Far Manager](https://www.farmanager.com/).
 
-**Version 0.27.0 · macOS 12+ · Apple Silicon and Intel**
+**Version 0.28.0 · macOS 12+ · Apple Silicon and Intel**
+
+**New: AI Spaces (experimental).** Open **Alt+F1 / Alt+F2 → AI Spaces** to organize project environments and retained Claude Code / Codex consoles. Choose predefined or custom roles, attach local project folders, connect agents through MCP messages, and review recorded test results and token usage. Attached folders are live references: writes change real files; removing an entry from an Env only hides or detaches it. See the [AI Spaces workflow](docs/AI_SPACES_WORKFLOW.md) and [release notes](docs/releases/v0.28.0.md).
 
 **File context menu (F11 / Alt+Enter):** compose a message with attachments in the macOS Mail sharing service, create a ZIP / tar.gz / tar.bz2 archive, or choose an installed application compatible with all selected files. FarshMac does not send email itself. Remote files are staged locally for external applications and retained until the FarshMac window closes.
 
@@ -27,11 +29,11 @@ FarshMac uses a Cocoa window and an offline WebKit/xterm.js interface. It is an 
 
 ## Download
 
-[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.27.0)
+[**Download the latest preview →**](https://github.com/ikimpriv/FarshMac/releases/tag/v0.28.0)
 
 Unzip the universal macOS archive and move **FarshMac.app** to Applications. Apple Silicon and Intel executables are included. The release includes a SHA-256 checksum.
 
-**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.27.0.md) for installation details and known limitations.
+**Early preview:** builds use a persistent self-signed certificate, not Developer ID or notarization. macOS may require per-app approval in **System Settings → Privacy & Security**. Full Disk Access is a separate, optional permission for protected folders. See the [release notes](docs/releases/v0.28.0.md) for installation details and known limitations.
 
 ## Features
 
@@ -46,6 +48,7 @@ Unzip the universal macOS archive and move **FarshMac.app** to Applications. App
 - Trash by default, explicit permanent deletion, cancellable background operations, and copy metadata options.
 - Link-aware local copy and move: relative symbolic links keep pointing at the same object (Smart, the default; As is and Copy contents are also available in the F5/F6 dialog), and hard-linked files copied together stay hard links.
 - Graphical image/PDF quick view and an information panel with macOS disk, memory, and power data.
+- Experimental AI Spaces: project references, role templates, retained agent consoles, scoped MCP tools, inter-agent messaging, recorded checks, and usage reports. Supported agent CLIs are installed and authenticated separately.
 
 ## Build and run
 
