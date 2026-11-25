@@ -20,6 +20,7 @@ const (
 	backendRemote
 	backendKube
 	backendDocker
+	backendAI
 )
 
 // panelCaps says what the panel at its current path can do, so actions ask
@@ -130,6 +131,8 @@ type panelBackend interface {
 
 func (p *Panel) backend() panelBackend {
 	switch {
+	case p.AI != nil:
+		return aiBackend{}
 	case p.Docker != nil:
 		return dockerBackend{}
 	case p.Kube != nil:
@@ -156,7 +159,7 @@ func (p *Panel) endpoint() remotefs.Endpoint { return p.backend().Endpoint(p) }
 // Kubernetes), not in the local file system or an archive on it.
 func (p *Panel) served() bool {
 	k := p.kind()
-	return k == backendRemote || k == backendKube || k == backendDocker
+	return k == backendRemote || k == backendKube || k == backendDocker || k == backendAI
 }
 
 // Key bar rows shared by the sources: Far Manager's local table.

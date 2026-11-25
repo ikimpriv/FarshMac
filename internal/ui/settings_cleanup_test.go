@@ -16,7 +16,7 @@ func TestCleanMenuOrderAndSeparators(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	wantPanel := []string{"Brief", "Medium", "Full", "Wide", "Detailed", "", "Info panel", "Tree panel", "Quick view", "", "Sort modes…", "Panel on/off", "Re-read", "Change volume…", "Docker…", "Kubernetes cluster…", "FTP / SFTP connections…"}
+	wantPanel := []string{"Brief", "Medium", "Full", "Wide", "Detailed", "", "Info panel", "Tree panel", "Quick view", "", "Sort modes…", "Panel on/off", "Re-read", "Change volume…", "AI Spaces", "Docker…", "Kubernetes cluster…", "FTP / SFTP connections…"}
 	for _, index := range []int{0, 4} {
 		var got []string
 		for _, item := range a.menuSections()[index].Items {
@@ -46,7 +46,7 @@ func TestCleanMenuOrderAndSeparators(t *testing.T) {
 			got = append(got, item.Label)
 		}
 	}
-	want := []string{"General settings…", "Panel settings…", "Terminal settings…", "Viewer settings…", "Editor settings…", "Advanced…", "Full Disk Access…", "Save setup", "Keyboard reference"}
+	want := []string{"General settings…", "Panel settings…", "Terminal settings…", "AI Spaces…", "Viewer settings…", "Editor settings…", "Advanced…", "Full Disk Access…", "Save setup", "Keyboard reference"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal(got)
 	}

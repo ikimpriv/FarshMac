@@ -11,7 +11,7 @@ command -v go >/dev/null
 command -v node >/dev/null
 # The normal suite must not read personal shell profiles or contact real servers.
 unset FARSHMAC_KUBE_AUTH_PROBE FARSHMAC_KUBE_AUTH_CONTEXT FARSHMAC_DOCKER_TEST_IMAGE FARSHMAC_DOCKER_CONTEXT
-unset FARSHMAC_PROBE_STARTUP FARSHMAC_PROBE_CUSTOM_PROMPT FARSHMAC_SFTP_CHECK
+unset FARSHMAC_PROBE_STARTUP FARSHMAC_PROBE_CUSTOM_PROMPT FARSHMAC_SFTP_CHECK FARSHMAC_AI_CLAUDE_PROBE
 unformatted=$(gofmt -l cmd internal)
 if [ -n "$unformatted" ]; then
   printf 'Run gofmt on:\n%s\n' "$unformatted" >&2

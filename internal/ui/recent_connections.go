@@ -110,6 +110,7 @@ func (a *App) rememberConnections() {
 }
 func (a *App) connectionMenuItems(index int) []menuItem {
 	items := []menuItem{
+		{"AI Spaces", "", func() { a.openAISpaces(index) }},
 		{"Docker…", "", func() { a.dockerConnections(index) }},
 		{"Kubernetes cluster…", "", func() { a.Active = index; a.kubeConnectionForm(index, kube.Profile{}) }},
 		{"FTP / SFTP connections…", "", func() { a.Active = index; a.networkMenu() }},

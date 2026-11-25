@@ -145,7 +145,7 @@ func (a *App) connectKube(index int, profile kube.Profile) {
 				p.Kube.close()
 			}
 			p.rememberFileView()
-			p.Docker = nil
+			p.Docker, p.AI = nil, nil
 			p.Remote, p.Archive = nil, nil
 			p.Kube = newKubePanel(profile, client, nil, a.Settings)
 			_ = namespaces

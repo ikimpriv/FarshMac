@@ -55,6 +55,7 @@ type Document struct {
 	MatchStart, MatchEnd            int64
 	ViewStart                       int
 	Help                            bool
+	onClose                         func() // Return from a temporary editor after save/discard is resolved.
 
 	SaveStrategy     fsops.SaveStrategy // Predicted when editing starts; a hint, never a ban.
 	saveChecked      bool               // SaveStrategy/saveBlocked are current for this document.
@@ -155,6 +156,7 @@ func (a *App) closeDocument() {
 	a.finishCloseDocument()
 }
 func (a *App) finishCloseDocument() {
+	d := a.Doc
 	if a.Doc != nil && a.Doc.TempDir != "" {
 		defer os.RemoveAll(a.Doc.TempDir)
 	}
@@ -169,6 +171,9 @@ func (a *App) finishCloseDocument() {
 	}
 	a.refresh()
 	a.restoreSearchResults()
+	if d != nil && d.onClose != nil {
+		d.onClose()
+	}
 }
 func (a *App) open(edit bool) {
 	path := a.Panels[a.Active].Current()

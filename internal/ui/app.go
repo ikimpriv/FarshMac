@@ -45,6 +45,7 @@ type Panel struct {
 	Archive                *fsops.ArchiveIndex
 	Kube                   *kubePanel
 	Docker                 *dockerPanel
+	AI                     *aiPanel
 	Async                  bool
 	load                   *panelLoad
 	rollback               *panelRollback
@@ -109,6 +110,12 @@ func (p *Panel) Load(path string) error {
 	}
 	if p.View == "Tree panel" && p.can(capTree) {
 		return p.loadTree(abs)
+	}
+	if p.AI != nil {
+		if p.Async {
+			return p.loadPanel(abs)
+		}
+		return p.loadAI(abs)
 	}
 	if p.Docker != nil {
 		if p.Async {
@@ -348,6 +355,8 @@ type App struct {
 	terminalHistoryState
 	terminalKey     string
 	parkedTerminals map[string]*parkedTerminal
+	aiConsoles      map[string]string // Env ID → terminal key of its last used agent console
+	aiNoticePoll    int
 
 	task             *uiTask
 	Async            bool
@@ -471,6 +480,7 @@ func (a *App) Close() {
 		a.Metrics = nil
 	}
 	a.stopSyntax()
+	a.closeAIConsoles()
 	a.stopForeign()
 	a.Shells.Close()
 	for i := range a.Panels {
@@ -1360,7 +1370,7 @@ func (a *App) runLocalPanelCommand(c shellsession.Command) {
 // running program (ssh, editors, or commands consuming stdin).
 func (a *App) showTerminal() {
 	a.Shells.PanelChanged(a.panelShellContext())
-	if a.showRemoteTerminal() || a.showContainerTerminal() || a.showDockerTerminal() {
+	if a.showAITerminal() || a.showRemoteTerminal() || a.showContainerTerminal() || a.showDockerTerminal() {
 		return
 	}
 	a.activateTerminal("local")
@@ -1544,6 +1554,7 @@ func (a *App) Poll() Update {
 
 	a.pollTraffic()
 	a.pollCompactMetrics()
+	a.pollAINotices()
 	a.pollAllTerminals()
 	a.pollTask()
 	a.pollSyntax()

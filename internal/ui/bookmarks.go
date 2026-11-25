@@ -214,7 +214,7 @@ func (a *App) goFolderBookmark(b bookmark) {
 	if previous.Kube != nil && previous.Kube != a.Panels[1-a.Active].Kube {
 		previous.Kube.stopWatches()
 	}
-	p.Docker = nil
+	p.Docker, p.AI = nil, nil
 	p.Remote = nil
 	p.RemoteLocalPath = ""
 	p.Archive = nil

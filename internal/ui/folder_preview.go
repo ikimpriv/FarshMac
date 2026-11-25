@@ -82,7 +82,7 @@ func (a *App) updateFolderPreview(p *Panel) bool {
 		return false
 	}
 	endpoint := p.endpoint()
-	if (p.Kube != nil || p.Docker != nil) && endpoint.Opener == nil {
+	if (p.Kube != nil || p.Docker != nil || p.AI != nil) && endpoint.Opener == nil {
 		return false
 	}
 	root := p.Current()

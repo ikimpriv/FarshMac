@@ -38,6 +38,9 @@ type pendingFileAction struct {
 }
 
 func (p *Panel) fileContextActions() bool {
+	if p.AI != nil {
+		return p.can(capEdit)
+	}
 	if p.Docker != nil {
 		return p.can(capEdit)
 	}

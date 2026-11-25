@@ -33,6 +33,9 @@ func (a *App) panelContextMenu() {
 	}
 	multiFiles := p.fileContextActions() && len(p.Selected()) > 1
 	items := []menuItem{}
+	if p.AI != nil {
+		items = append(items, a.aiContextItems(p)...)
+	}
 	if p.Docker != nil {
 		items = append(items, a.dockerContextItems(p)...)
 		if !multiFiles && len(dockerMetricSelection(p)) > 0 {
